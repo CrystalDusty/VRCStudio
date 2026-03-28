@@ -1,0 +1,119 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.2);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(148, 163, 184, 0.35);
+  }
+
+  input, textarea, select {
+    user-select: text;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-surface-900/80 backdrop-blur-xl border border-surface-700/50 rounded-xl;
+  }
+
+  .glass-panel-solid {
+    @apply bg-surface-900 border border-surface-700/50 rounded-xl;
+  }
+
+  .btn-primary {
+    @apply px-4 py-2 bg-accent-600 hover:bg-accent-500 text-white rounded-lg font-medium
+           transition-all duration-150 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply px-4 py-2 bg-surface-700 hover:bg-surface-600 text-surface-200 rounded-lg font-medium
+           transition-all duration-150 active:scale-[0.98];
+  }
+
+  .btn-ghost {
+    @apply px-3 py-1.5 hover:bg-surface-800 text-surface-300 hover:text-white rounded-lg
+           transition-all duration-150;
+  }
+
+  .btn-danger {
+    @apply px-4 py-2 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded-lg font-medium
+           transition-all duration-150 active:scale-[0.98];
+  }
+
+  .input-field {
+    @apply w-full px-3 py-2 bg-surface-800 border border-surface-700 rounded-lg text-white
+           placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-accent-500/50
+           focus:border-accent-500 transition-all duration-150;
+  }
+
+  .sidebar-link {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-surface-400
+           hover:text-white hover:bg-surface-800/60 transition-all duration-150 text-sm font-medium;
+  }
+
+  .sidebar-link.active {
+    @apply text-white bg-accent-600/15 text-accent-400;
+  }
+
+  .status-dot {
+    @apply w-2.5 h-2.5 rounded-full ring-2 ring-surface-900;
+  }
+
+  .card-hover {
+    @apply transition-all duration-200 hover:bg-surface-800/60 hover:border-surface-600/60;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .tooltip {
+    @apply absolute z-50 px-2 py-1 text-xs bg-surface-800 border border-surface-700
+           rounded-md shadow-lg pointer-events-none whitespace-nowrap;
+  }
+
+  .tab-active {
+    @apply text-white border-b-2 border-accent-500;
+  }
+
+  .tab-inactive {
+    @apply text-surface-400 hover:text-surface-200 border-b-2 border-transparent;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-accent-400 to-blue-400;
+  }
+
+  .animate-in {
+    animation: fadeIn 0.2s ease-out, slideUp 0.25s ease-out;
+  }
+}

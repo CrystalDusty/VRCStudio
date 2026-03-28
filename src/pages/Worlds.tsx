@@ -1,0 +1,204 @@
+import { useState, useEffect } from 'react';
+import { Globe, TrendingUp, Clock, Star, Search, Users, Heart, ArrowLeft, ExternalLink } from 'lucide-react';
+import { useWorldStore } from '../stores/worldStore';
+import SearchInput from '../components/common/SearchInput';
+import WorldCard from '../components/common/WorldCard';
+import EmptyState from '../components/common/EmptyState';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import type { VRCWorld } from '../types/vrchat';
+
+type WorldTab = 'search' | 'active' | 'recent' | 'favorites';
+
+export default function WorldsPage() {
+  const {
+    searchResults, activeWorlds, recentWorlds, favoriteWorlds,
+    isLoading, searchQuery,
+    searchWorlds, fetchActiveWorlds, fetchRecentWorlds, fetchFavoriteWorlds,
+    setSearchQuery, getWorld,
+  } = useWorldStore();
+
+  const [tab, setTab] = useState<WorldTab>('active');
+  const [selectedWorld, setSelectedWorld] = useState<VRCWorld | null>(null);
+  const [searchInput, setSearchInput] = useState(searchQuery);
+
+  useEffect(() => {
+    fetchActiveWorlds();
+    fetchRecentWorlds();
+    fetchFavoriteWorlds();
+  }, []);
+
+  const handleSearch = () => {
+    if (searchInput.trim()) {
+      setTab('search');
+      searchWorlds(searchInput.trim());
+    }
+  };
+
+  const worldList = tab === 'search' ? searchResults
+    : tab === 'active' ? activeWorlds
+    : tab === 'recent' ? recentWorlds
+    : favoriteWorlds;
+
+  const openWorldDetail = async (world: VRCWorld) => {
+    try {
+      const detailed = await getWorld(world.id);
+      setSelectedWorld(detailed);
+    } catch {
+      setSelectedWorld(world);
+    }
+  };
+
+  if (selectedWorld) {
+    return (
+      <div className="max-w-4xl mx-auto animate-fade-in">
+        <button onClick={() => setSelectedWorld(null)} className="btn-ghost flex items-center gap-1 mb-4 -ml-2">
+          <ArrowLeft size={16} /> Back to Worlds
+        </button>
+
+        <div className="glass-panel-solid overflow-hidden">
+          <div className="relative aspect-video max-h-72">
+            <img
+              src={selectedWorld.imageUrl}
+              alt=""
+              className="w-full h-full object-cover"
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-surface-900 to-transparent" />
+          </div>
+
+          <div className="p-6 -mt-16 relative">
+            <h1 className="text-2xl font-bold mb-1">{selectedWorld.name}</h1>
+            <p className="text-surface-400 text-sm">by {selectedWorld.authorName}</p>
+
+            <div className="flex items-center gap-4 mt-4">
+              <StatPill icon={Users} value={selectedWorld.occupants} label="Online" />
+              <StatPill icon={Heart} value={selectedWorld.favorites} label="Favorites" />
+              <StatPill icon={Globe} value={selectedWorld.visits} label="Visits" />
+              <StatPill icon={Users} value={selectedWorld.capacity} label="Capacity" />
+            </div>
+
+            {selectedWorld.description && (
+              <div className="mt-6">
+                <h3 className="text-sm font-semibold text-surface-300 mb-2">Description</h3>
+                <p className="text-sm text-surface-400 whitespace-pre-wrap leading-relaxed">
+                  {selectedWorld.description}
+                </p>
+              </div>
+            )}
+
+            {selectedWorld.tags && selectedWorld.tags.length > 0 && (
+              <div className="mt-4">
+                <h3 className="text-sm font-semibold text-surface-300 mb-2">Tags</h3>
+                <div className="flex flex-wrap gap-1.5">
+                  {selectedWorld.tags
+                    .filter(t => !t.startsWith('system_') && !t.startsWith('admin_'))
+                    .map(tag => (
+                      <span key={tag} className="badge bg-surface-800 text-surface-400">
+                        {tag.replace('author_tag_', '')}
+                      </span>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {selectedWorld.instances && selectedWorld.instances.length > 0 && (
+              <div className="mt-6">
+                <h3 className="text-sm font-semibold text-surface-300 mb-2">
+                  Active Instances ({selectedWorld.instances.length})
+                </h3>
+                <div className="grid grid-cols-2 gap-2">
+                  {selectedWorld.instances.map(([id, count]) => (
+                    <div key={id} className="glass-panel p-3 flex items-center justify-between">
+                      <span className="text-sm font-mono truncate">{id}</span>
+                      <span className="text-xs text-surface-400 flex items-center gap-1">
+                        <Users size={12} /> {count}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="mt-4 text-xs text-surface-600">
+              Created: {new Date(selectedWorld.created_at).toLocaleDateString()} &middot;
+              Updated: {new Date(selectedWorld.updated_at).toLocaleDateString()} &middot;
+              Version: {selectedWorld.version}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-6xl mx-auto space-y-4 animate-fade-in">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Worlds</h1>
+      </div>
+
+      {/* Search */}
+      <div className="flex gap-2">
+        <SearchInput
+          value={searchInput}
+          onChange={setSearchInput}
+          placeholder="Search worlds..."
+          className="flex-1 max-w-md"
+        />
+        <button onClick={handleSearch} className="btn-primary text-sm">
+          Search
+        </button>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 border-b border-surface-800 pb-px">
+        {[
+          { key: 'active' as WorldTab, icon: TrendingUp, label: 'Popular' },
+          { key: 'recent' as WorldTab, icon: Clock, label: 'Recent' },
+          { key: 'favorites' as WorldTab, icon: Star, label: 'Favorites' },
+          ...(searchResults.length > 0 ? [{ key: 'search' as WorldTab, icon: Search, label: 'Search Results' }] : []),
+        ].map(({ key, icon: Icon, label }) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              tab === key ? 'tab-active' : 'tab-inactive'
+            }`}
+          >
+            <Icon size={14} />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* World Grid */}
+      {isLoading ? (
+        <LoadingSpinner className="py-16" />
+      ) : worldList.length === 0 ? (
+        <EmptyState
+          icon={Globe}
+          title={tab === 'search' ? 'No worlds found' : 'No worlds yet'}
+          description={tab === 'search' ? 'Try different search terms' : 'Worlds will appear once loaded'}
+        />
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {worldList.map(world => (
+            <WorldCard
+              key={world.id}
+              world={world}
+              onClick={() => openWorldDetail(world)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatPill({ icon: Icon, value, label }: { icon: typeof Globe; value: number; label: string }) {
+  return (
+    <div className="flex items-center gap-1.5 text-sm text-surface-400">
+      <Icon size={14} />
+      <span className="font-semibold text-white">{value.toLocaleString()}</span>
+      <span className="text-xs">{label}</span>
+    </div>
+  );
+}
