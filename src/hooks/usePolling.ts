@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { useFriendStore } from '../stores/friendStore';
 import { useSettingsStore } from '../stores/settingsStore';
+import vrchatWS from '../api/websocket';
 
 export function usePolling() {
   const { isLoggedIn } = useAuthStore();
@@ -11,13 +12,19 @@ export function usePolling() {
   const offlineIntervalRef = useRef<ReturnType<typeof setInterval>>();
 
   useEffect(() => {
-    if (!isLoggedIn) return;
+    if (!isLoggedIn) {
+      vrchatWS.disconnect();
+      return;
+    }
+
+    // Connect WebSocket for real-time events
+    vrchatWS.connect();
 
     // Initial fetch
     fetchOnlineFriends();
     fetchOfflineFriends();
 
-    // Set up polling
+    // Polling as fallback / supplement to WebSocket
     friendsIntervalRef.current = setInterval(
       fetchOnlineFriends,
       settings.polling.friendsInterval * 1000
@@ -25,10 +32,11 @@ export function usePolling() {
 
     offlineIntervalRef.current = setInterval(
       fetchOfflineFriends,
-      300_000 // Refresh offline friends every 5 min
+      300_000
     );
 
     return () => {
+      vrchatWS.disconnect();
       if (friendsIntervalRef.current) clearInterval(friendsIntervalRef.current);
       if (offlineIntervalRef.current) clearInterval(offlineIntervalRef.current);
     };

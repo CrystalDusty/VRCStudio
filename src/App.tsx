@@ -6,11 +6,14 @@ import AppLayout from './components/Layout/AppLayout';
 import LoginPage from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Friends from './pages/Friends';
+import FriendLog from './pages/FriendLog';
 import Worlds from './pages/Worlds';
 import Avatars from './pages/Avatars';
+import Groups from './pages/Groups';
 import Favorites from './pages/Favorites';
 import Notifications from './pages/Notifications';
 import Settings from './pages/Settings';
+import SearchPage from './pages/Search';
 import LoadingSpinner from './components/common/LoadingSpinner';
 
 export default function App() {
@@ -39,9 +42,12 @@ export default function App() {
     <Routes>
       <Route element={<AppLayout />}>
         <Route path="/" element={<Dashboard />} />
+        <Route path="/search" element={<SearchPage />} />
         <Route path="/friends" element={<Friends />} />
+        <Route path="/friend-log" element={<FriendLog />} />
         <Route path="/worlds" element={<Worlds />} />
         <Route path="/avatars" element={<Avatars />} />
+        <Route path="/groups" element={<Groups />} />
         <Route path="/favorites" element={<Favorites />} />
         <Route path="/notifications" element={<Notifications />} />
         <Route path="/settings" element={<Settings />} />
