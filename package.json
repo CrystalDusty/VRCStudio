@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "VRC Studio — A professional VRChat companion application",
   "type": "module",
-  "main": "dist-electron/main.js",
+  "main": "dist-electron/main.cjs",
   "author": "VRC Studio Team",
   "license": "MIT",
   "scripts": {

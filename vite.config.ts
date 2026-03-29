@@ -25,7 +25,7 @@ export default defineConfig(({ command }) => {
                     rollupOptions: {
                       external: ['electron', 'discord-rpc', 'path', 'fs', 'url'],
                       output: {
-                        entryFileNames: '[name].js',
+                        entryFileNames: '[name].cjs',
                       },
                     },
                   },
@@ -46,7 +46,7 @@ export default defineConfig(({ command }) => {
                     rollupOptions: {
                       external: ['electron'],
                       output: {
-                        entryFileNames: '[name].js',
+                        entryFileNames: '[name].cjs',
                       },
                     },
                   },
