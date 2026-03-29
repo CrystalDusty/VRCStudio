@@ -1,19 +1,11 @@
 import { NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard,
-  Users,
-  Globe,
-  Shirt,
-  Star,
-  Settings,
-  LogOut,
-  Bell,
-  Search,
-  History,
-  UsersRound,
+  LayoutDashboard, Users, Globe, Shirt, Star, Settings,
+  LogOut, Bell, Search, History, UsersRound, FileText, Camera,
 } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useFriendStore } from '../../stores/friendStore';
+import { useThemeStore } from '../../stores/themeStore';
 import StatusPresetPanel from '../StatusPresetPanel';
 import api from '../../api/vrchat';
 
@@ -27,55 +19,66 @@ const navItems = [
   { to: '/groups', icon: UsersRound, label: 'Groups' },
   { to: '/favorites', icon: Star, label: 'Favorites' },
   { to: '/notifications', icon: Bell, label: 'Notifications' },
+  { to: '/game-log', icon: FileText, label: 'Game Log' },
+  { to: '/screenshots', icon: Camera, label: 'Screenshots' },
 ];
+
+const statusDotColors: Record<string, string> = {
+  'join me': 'bg-status-joinme',
+  'active': 'bg-status-online',
+  'ask me': 'bg-status-askme',
+  'busy': 'bg-status-busy',
+  'offline': 'bg-status-offline',
+};
 
 export default function Sidebar() {
   const { user, logout, refreshUser } = useAuthStore();
   const { onlineFriends } = useFriendStore();
+  const { theme } = useThemeStore();
 
   const avatarUrl = user?.profilePicOverride || user?.currentAvatarThumbnailImageUrl;
 
-  const statusColorMap: Record<string, string> = {
-    'join me': 'bg-status-joinme',
-    'active': 'bg-status-online',
-    'ask me': 'bg-status-askme',
-    'busy': 'bg-status-busy',
-    'offline': 'bg-status-offline',
-  };
-
   const handleApplyPreset = async (status: string, statusDescription: string) => {
+    if (!user?.id) return;
     try {
       await fetch(
-        `https://api.vrchat.cloud/api/1/users/${user?.id}?apiKey=JlE5Jldo5Jibn0215Oi0JXqlu4w`,
+        `https://api.vrchat.cloud/api/1/users/${user.id}?apiKey=JlE5Jldo5Jibn0215Oi0JXqlu4w`,
         {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
             'User-Agent': 'VRCStudio/1.0.0',
-            'Cookie': `auth=${api.getAuthCookies().auth}${api.getAuthCookies().twoFactorAuth ? `; twoFactorAuth=${api.getAuthCookies().twoFactorAuth}` : ''}`,
+            Cookie: `auth=${api.getAuthCookies().auth}${
+              api.getAuthCookies().twoFactorAuth
+                ? `; twoFactorAuth=${api.getAuthCookies().twoFactorAuth}`
+                : ''
+            }`,
           },
           body: JSON.stringify({ status, statusDescription }),
         }
       );
-      refreshUser();
+      await refreshUser();
     } catch {}
   };
 
+  const sidebarW = theme.sidebarWidth === 'compact' ? 'w-52' : theme.sidebarWidth === 'wide' ? 'w-72' : 'w-60';
+
   return (
-    <aside className="w-60 bg-surface-900/50 border-r border-surface-800/50 flex flex-col h-full">
-      {/* User profile summary */}
+    <aside className={`${sidebarW} bg-surface-900/50 border-r border-surface-800/50 flex flex-col h-full transition-all`}>
+      {/* User card */}
       <div className="p-4 border-b border-surface-800/50">
         <div className="flex items-center gap-3">
-          <div className="relative">
+          <div className="relative flex-shrink-0">
             <img
               src={avatarUrl}
               alt=""
               className="w-10 h-10 rounded-full object-cover bg-surface-800"
-              onError={(e) => {
-                (e.target as HTMLImageElement).src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect fill="%231e293b" width="40" height="40" rx="20"/></svg>';
+              onError={e => {
+                (e.target as HTMLImageElement).src =
+                  'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect fill="%231e293b" width="40" height="40" rx="20"/></svg>';
               }}
             />
-            <div className={`absolute -bottom-0.5 -right-0.5 status-dot ${statusColorMap[user?.status || 'offline']}`} />
+            <div className={`absolute -bottom-0.5 -right-0.5 status-dot ${statusDotColors[user?.status || 'offline']}`} />
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-sm font-semibold truncate">{user?.displayName}</div>
@@ -86,7 +89,7 @@ export default function Sidebar() {
         </div>
       </div>
 
-      {/* Status Presets */}
+      {/* Status presets */}
       <div className="px-3 py-3 border-b border-surface-800/50">
         <StatusPresetPanel onApply={handleApplyPreset} />
       </div>
@@ -97,15 +100,13 @@ export default function Sidebar() {
           <NavLink
             key={to}
             to={to}
-            className={({ isActive }) =>
-              `sidebar-link ${isActive ? 'active' : ''}`
-            }
             end={to === '/'}
+            className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
           >
-            <Icon size={18} />
-            <span>{label}</span>
+            <Icon size={17} />
+            <span className="truncate">{label}</span>
             {label === 'Friends' && onlineFriends.length > 0 && (
-              <span className="ml-auto text-xs bg-accent-600/20 text-accent-400 px-1.5 py-0.5 rounded-full">
+              <span className="ml-auto text-xs bg-accent-600/20 text-accent-400 px-1.5 py-0.5 rounded-full flex-shrink-0">
                 {onlineFriends.length}
               </span>
             )}
@@ -113,19 +114,17 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      {/* Bottom actions */}
+      {/* Bottom */}
       <div className="p-2 border-t border-surface-800/50 space-y-0.5">
         <NavLink
           to="/settings"
-          className={({ isActive }) =>
-            `sidebar-link ${isActive ? 'active' : ''}`
-          }
+          className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
         >
-          <Settings size={18} />
+          <Settings size={17} />
           <span>Settings</span>
         </NavLink>
         <button onClick={logout} className="sidebar-link w-full text-red-400 hover:text-red-300">
-          <LogOut size={18} />
+          <LogOut size={17} />
           <span>Sign Out</span>
         </button>
       </div>

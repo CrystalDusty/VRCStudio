@@ -1,10 +1,26 @@
 /// <reference types="vite/client" />
 
+interface ElectronAPI {
+  minimize: () => Promise<void>;
+  maximize: () => Promise<void>;
+  close: () => Promise<void>;
+  isMaximized: () => Promise<boolean>;
+  openExternal: (url: string) => Promise<void>;
+  readFile: (path: string) => Promise<{ success: boolean; content?: string; error?: string }>;
+  listDir: (path: string) => Promise<{ success: boolean; entries?: Array<{ name: string; isDirectory: boolean; path: string }>; error?: string }>;
+  getVRChatLogPath: () => Promise<string>;
+  getVRChatScreenshotPath: () => Promise<string>;
+  sendNotification: (opts: { title: string; body: string; icon?: string }) => Promise<void>;
+  discordInit: (clientId: string) => Promise<void>;
+  discordDisconnect: () => Promise<void>;
+  discordSetActivity: (activity: any) => Promise<void>;
+  discordIsConnected: () => Promise<boolean>;
+  setAutoLaunch: (enabled: boolean) => Promise<void>;
+  getAutoLaunch: () => Promise<boolean>;
+  getVersion: () => Promise<string>;
+  getPlatform: () => Promise<string>;
+}
+
 interface Window {
-  electronAPI?: {
-    minimize: () => Promise<void>;
-    maximize: () => Promise<void>;
-    close: () => Promise<void>;
-    openExternal: (url: string) => Promise<void>;
-  };
+  electronAPI?: ElectronAPI;
 }
