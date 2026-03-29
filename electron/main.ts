@@ -76,11 +76,11 @@ function createTray() {
 
 // ─── Discord RPC ─────────────────────────────────────────────────────────────
 
-function initDiscordRPC(clientId: string) {
+async function initDiscordRPC(clientId: string) {
   try {
-    // Dynamic require so it's optional — won't crash if discord-rpc isn't installed
-    const RPC = require('discord-rpc');
-    discordRPC = new RPC.Client({ transport: 'ipc' });
+    // Dynamic import so it's optional — won't crash if discord-rpc isn't installed
+    const { Client } = await import('discord-rpc' as string);
+    discordRPC = new Client({ transport: 'ipc' });
 
     discordRPC.on('ready', () => {
       rpcConnected = true;

@@ -8,8 +8,9 @@
   "license": "MIT",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && electron-builder",
-    "build:web": "tsc && vite build",
+    "dev:web": "ELECTRON=false vite",
+    "build": "vite build && electron-builder",
+    "build:web": "ELECTRON=false vite build",
     "preview": "vite preview",
     "electron:dev": "vite build && electron ."
   },
