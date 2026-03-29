@@ -18,8 +18,15 @@ export default defineConfig(({ command }) => {
                 vite: {
                   build: {
                     outDir: 'dist-electron',
+                    lib: {
+                      entry: 'electron/main.ts',
+                      formats: ['cjs'],
+                    },
                     rollupOptions: {
-                      external: ['electron', 'discord-rpc'],
+                      external: ['electron', 'discord-rpc', 'path', 'fs', 'url'],
+                      output: {
+                        entryFileNames: '[name].js',
+                      },
                     },
                   },
                 },
@@ -32,8 +39,15 @@ export default defineConfig(({ command }) => {
                 vite: {
                   build: {
                     outDir: 'dist-electron',
+                    lib: {
+                      entry: 'electron/preload.ts',
+                      formats: ['cjs'],
+                    },
                     rollupOptions: {
                       external: ['electron'],
+                      output: {
+                        entryFileNames: '[name].js',
+                      },
                     },
                   },
                 },
