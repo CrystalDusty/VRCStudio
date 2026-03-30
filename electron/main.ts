@@ -5,7 +5,6 @@ import {
 import path from 'path';
 import fs from 'fs';
 import https from 'https';
-import http from 'http';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -27,6 +26,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      webSecurity: false,
     },
     show: false,
   });

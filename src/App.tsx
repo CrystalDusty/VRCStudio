@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, Component, ErrorInfo, ReactNode } from 'react';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
 import { useThemeStore } from './stores/themeStore';
@@ -22,12 +22,75 @@ import GameLog from './pages/GameLog';
 import Screenshots from './pages/Screenshots';
 import LoadingSpinner from './components/common/LoadingSpinner';
 
+// Error boundary to catch React rendering errors and show them instead of a blank screen
+class ErrorBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('[VRC Studio] React error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{
+          height: '100vh', display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          background: '#020617', color: '#e2e8f0', fontFamily: 'Inter, system-ui, sans-serif',
+          padding: '2rem', textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+            Something went wrong
+          </div>
+          <div style={{
+            fontSize: '0.8rem', color: '#94a3b8', maxWidth: '500px',
+            marginBottom: '1rem',
+          }}>
+            {this.state.error?.message}
+          </div>
+          <pre style={{
+            fontSize: '0.7rem', color: '#64748b', maxWidth: '600px',
+            overflow: 'auto', textAlign: 'left', padding: '1rem',
+            background: '#0f172a', borderRadius: '0.5rem', maxHeight: '200px',
+            width: '100%',
+          }}>
+            {this.state.error?.stack}
+          </pre>
+          <button
+            onClick={() => {
+              localStorage.clear();
+              window.location.reload();
+            }}
+            style={{
+              marginTop: '1rem', padding: '0.5rem 1.5rem',
+              background: '#2563eb', color: '#fff', border: 'none',
+              borderRadius: '0.5rem', cursor: 'pointer', fontSize: '0.85rem',
+            }}
+          >
+            Clear data & reload
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function AppShell() {
   const navigate = useNavigate();
   useDiscordRPC();
 
   useEffect(() => {
-    // Global keyboard shortcuts
     const unregister = keyboardManager.registerAll([
       { key: '1', ctrl: true, shift: false, alt: false, description: 'Go to Dashboard', handler: () => navigate('/') },
       { key: '2', ctrl: true, shift: false, alt: false, description: 'Go to Friends', handler: () => navigate('/friends') },
@@ -64,7 +127,6 @@ export default function App() {
   const { isLoggedIn, isLoading, restoreSession } = useAuthStore();
   const { applyTheme } = useThemeStore();
 
-  // Apply saved theme on mount
   useEffect(() => {
     applyTheme();
     requestNotificationPermission();
@@ -83,8 +145,16 @@ export default function App() {
   }
 
   if (!isLoggedIn) {
-    return <LoginPage />;
+    return (
+      <ErrorBoundary>
+        <LoginPage />
+      </ErrorBoundary>
+    );
   }
 
-  return <AppShell />;
+  return (
+    <ErrorBoundary>
+      <AppShell />
+    </ErrorBoundary>
+  );
 }

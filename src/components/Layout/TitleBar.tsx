@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Minus, Square, X, Copy } from 'lucide-react';
-import { Shield } from 'lucide-react';
+import { Minus, Square, X, Copy, Shield } from 'lucide-react';
 
 export default function TitleBar() {
   const isElectron = !!window.electronAPI;

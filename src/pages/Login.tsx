@@ -7,7 +7,6 @@ export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [tfaCode, setTfaCode] = useState('');
   const [tfaDigits, setTfaDigits] = useState<string[]>(['', '', '', '', '', '']);
   const digitRefs = useRef<(HTMLInputElement | null)[]>([]);
 
