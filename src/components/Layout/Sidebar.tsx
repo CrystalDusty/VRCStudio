@@ -52,7 +52,6 @@ export default function Sidebar() {
   const { onlineFriends } = useFriendStore();
   const { theme } = useThemeStore();
   const [showPresets, setShowPresets] = useState(false);
-  const location = useLocation();
 
   const avatarUrl = user?.profilePicOverride || user?.currentAvatarThumbnailImageUrl;
 
