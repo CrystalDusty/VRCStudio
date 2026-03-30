@@ -20,19 +20,8 @@ export default function GroupsPage() {
     setIsLoading(true);
     try {
       if (user?.id) {
-        const res = await fetch(
-          `https://api.vrchat.cloud/api/1/users/${user.id}/groups?apiKey=JlE5Jldo5Jibn0215Oi0JXqlu4w`,
-          {
-            headers: {
-              'User-Agent': 'VRCStudio/1.0.0',
-              'Cookie': `auth=${api.getAuthCookies().auth}${api.getAuthCookies().twoFactorAuth ? `; twoFactorAuth=${api.getAuthCookies().twoFactorAuth}` : ''}`,
-            },
-          }
-        );
-        if (res.ok) {
-          const data = await res.json();
-          setGroups(Array.isArray(data) ? data : []);
-        }
+        const data = await api.getUserGroups(user.id);
+        setGroups(Array.isArray(data) ? data : []);
       }
     } catch {}
     setIsLoading(false);

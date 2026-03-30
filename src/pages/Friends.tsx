@@ -43,15 +43,7 @@ function useDetailPanel() {
     try {
       const [detail, mutualsRes] = await Promise.allSettled([
         api.getUser(u.id),
-        fetch(
-          `https://api.vrchat.cloud/api/1/users/${u.id}/mutuals/friends?apiKey=JlE5Jldo5Jibn0215Oi0JXqlu4w`,
-          {
-            headers: {
-              'User-Agent': 'VRCStudio/1.0.0',
-              Cookie: `auth=${api.getAuthCookies().auth}`,
-            },
-          }
-        ).then(r => r.ok ? r.json() : []),
+        api.getMutualFriends(u.id),
       ]);
       if (detail.status === 'fulfilled') setFullUser(detail.value);
       if (mutualsRes.status === 'fulfilled') setMutuals(Array.isArray(mutualsRes.value) ? mutualsRes.value : []);

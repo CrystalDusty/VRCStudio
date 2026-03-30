@@ -4,6 +4,8 @@ import {
 } from 'electron';
 import path from 'path';
 import fs from 'fs';
+import https from 'https';
+import http from 'http';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -220,6 +222,91 @@ ipcMain.handle('autoLaunch:get', () => app.getLoginItemSettings().openAtLogin);
 // App info
 ipcMain.handle('app:getVersion', () => app.getVersion());
 ipcMain.handle('app:getPlatform', () => process.platform);
+
+// ─── VRChat API Proxy ────────────────────────────────────────────────────────
+// Proxies API requests through the main process so we can read set-cookie
+// headers, which are blocked by Chromium's fetch in the renderer.
+
+ipcMain.handle('vrchat:request', async (_e, opts: {
+  method: string;
+  path: string;
+  headers?: Record<string, string>;
+  body?: string;
+  cookies?: Record<string, string>;
+}) => {
+  return new Promise((resolve) => {
+    const url = new URL(`https://api.vrchat.cloud${opts.path}`);
+
+    const cookieParts: string[] = [];
+    if (opts.cookies) {
+      for (const [k, v] of Object.entries(opts.cookies)) {
+        if (v) cookieParts.push(`${k}=${v}`);
+      }
+    }
+
+    const reqHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'User-Agent': 'VRCStudio/1.0.0',
+      ...(opts.headers || {}),
+    };
+    if (cookieParts.length > 0) {
+      reqHeaders['Cookie'] = cookieParts.join('; ');
+    }
+
+    const req = https.request(
+      {
+        hostname: url.hostname,
+        port: 443,
+        path: url.pathname + url.search,
+        method: opts.method || 'GET',
+        headers: reqHeaders,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => {
+          const bodyStr = Buffer.concat(chunks).toString('utf-8');
+
+          // Extract cookies from set-cookie headers
+          const setCookieHeaders = res.headers['set-cookie'] || [];
+          const responseCookies: Record<string, string> = {};
+          for (const sc of setCookieHeaders) {
+            const authMatch = sc.match(/^auth=([^;]+)/);
+            if (authMatch) responseCookies['auth'] = authMatch[1];
+            const tfaMatch = sc.match(/^twoFactorAuth=([^;]+)/);
+            if (tfaMatch) responseCookies['twoFactorAuth'] = tfaMatch[1];
+          }
+
+          let json: any = null;
+          try {
+            json = JSON.parse(bodyStr);
+          } catch {}
+
+          resolve({
+            ok: res.statusCode! >= 200 && res.statusCode! < 300,
+            status: res.statusCode,
+            data: json,
+            cookies: responseCookies,
+          });
+        });
+      }
+    );
+
+    req.on('error', (err) => {
+      resolve({
+        ok: false,
+        status: 0,
+        data: { error: { message: err.message } },
+        cookies: {},
+      });
+    });
+
+    if (opts.body) {
+      req.write(opts.body);
+    }
+    req.end();
+  });
+});
 
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 

@@ -13,11 +13,13 @@
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
     overflow: hidden;
     user-select: none;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 5px;
+    height: 5px;
   }
 
   ::-webkit-scrollbar-track {
@@ -25,12 +27,12 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: rgba(148, 163, 184, 0.2);
-    border-radius: 3px;
+    background: rgba(148, 163, 184, 0.15);
+    border-radius: 10px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(148, 163, 184, 0.35);
+    background: rgba(148, 163, 184, 0.3);
   }
 
   input, textarea, select {
@@ -40,46 +42,47 @@
 
 @layer components {
   .glass-panel {
-    @apply bg-surface-900/80 backdrop-blur-xl border border-surface-700/50 rounded-xl;
+    @apply bg-surface-900/70 backdrop-blur-xl border border-surface-800/40 rounded-xl;
   }
 
   .glass-panel-solid {
-    @apply bg-surface-900 border border-surface-700/50 rounded-xl;
+    @apply bg-surface-900/90 border border-surface-800/40 rounded-xl;
   }
 
   .btn-primary {
     @apply px-4 py-2 bg-accent-600 hover:bg-accent-500 text-white rounded-lg font-medium
-           transition-all duration-150 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed;
+           transition-all duration-150 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed
+           shadow-sm shadow-accent-600/20;
   }
 
   .btn-secondary {
-    @apply px-4 py-2 bg-surface-700 hover:bg-surface-600 text-surface-200 rounded-lg font-medium
-           transition-all duration-150 active:scale-[0.98];
+    @apply px-4 py-2 bg-surface-800 hover:bg-surface-700 text-surface-200 rounded-lg font-medium
+           transition-all duration-150 active:scale-[0.98] border border-surface-700/50;
   }
 
   .btn-ghost {
-    @apply px-3 py-1.5 hover:bg-surface-800 text-surface-300 hover:text-white rounded-lg
+    @apply px-3 py-1.5 hover:bg-surface-800/80 text-surface-400 hover:text-surface-200 rounded-lg
            transition-all duration-150;
   }
 
   .btn-danger {
-    @apply px-4 py-2 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded-lg font-medium
-           transition-all duration-150 active:scale-[0.98];
+    @apply px-4 py-2 bg-red-600/15 hover:bg-red-600/25 text-red-400 rounded-lg font-medium
+           transition-all duration-150 active:scale-[0.98] border border-red-500/20;
   }
 
   .input-field {
-    @apply w-full px-3 py-2 bg-surface-800 border border-surface-700 rounded-lg text-white
-           placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-accent-500/50
-           focus:border-accent-500 transition-all duration-150;
+    @apply w-full px-3 py-2 bg-surface-800/80 border border-surface-700/50 rounded-lg text-white
+           placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-accent-500/40
+           focus:border-accent-500/60 transition-all duration-150 text-sm;
   }
 
   .sidebar-link {
-    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-surface-400
-           hover:text-white hover:bg-surface-800/60 transition-all duration-150 text-sm font-medium;
+    @apply flex items-center gap-2.5 px-3 py-2 rounded-lg text-surface-400
+           hover:text-surface-200 hover:bg-surface-800/50 transition-all duration-100 text-[13px] font-medium;
   }
 
   .sidebar-link.active {
-    @apply text-white bg-accent-600/15 text-accent-400;
+    @apply text-accent-400 bg-accent-600/10 border-l-2 border-accent-500;
   }
 
   .status-dot {
@@ -87,7 +90,7 @@
   }
 
   .card-hover {
-    @apply transition-all duration-200 hover:bg-surface-800/60 hover:border-surface-600/60;
+    @apply transition-all duration-200 hover:bg-surface-800/50 hover:border-surface-700/60;
   }
 
   .badge {
@@ -106,6 +109,18 @@
   .tab-inactive {
     @apply text-surface-400 hover:text-surface-200 border-b-2 border-transparent;
   }
+
+  .section-heading {
+    @apply text-lg font-semibold text-surface-100;
+  }
+
+  .section-subheading {
+    @apply text-sm text-surface-400;
+  }
+
+  .stat-card {
+    @apply glass-panel-solid p-4 flex items-center gap-4 transition-all duration-200 hover:border-surface-700/60;
+  }
 }
 
 @layer utilities {
@@ -116,4 +131,19 @@
   .animate-in {
     animation: fadeIn 0.2s ease-out, slideUp 0.25s ease-out;
   }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: translateX(0); }
 }

@@ -33,4 +33,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // App info
   getVersion: () => ipcRenderer.invoke('app:getVersion'),
   getPlatform: () => ipcRenderer.invoke('app:getPlatform'),
+
+  // VRChat API proxy
+  vrchatRequest: (opts: {
+    method: string;
+    path: string;
+    headers?: Record<string, string>;
+    body?: string;
+    cookies?: Record<string, string>;
+  }) => ipcRenderer.invoke('vrchat:request', opts),
 });

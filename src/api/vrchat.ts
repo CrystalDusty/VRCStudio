@@ -16,6 +16,10 @@ class VRChatAPI {
   private authCookie: string = '';
   private twoFactorAuth: string = '';
 
+  private get isElectron(): boolean {
+    return !!window.electronAPI?.vrchatRequest;
+  }
+
   private get headers(): Record<string, string> {
     const h: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -30,7 +34,52 @@ class VRChatAPI {
   }
 
   private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
-    const url = `${API_BASE}${path}${path.includes('?') ? '&' : '?'}apiKey=${API_KEY}`;
+    const separator = path.includes('?') ? '&' : '?';
+    const fullPath = `${path}${separator}apiKey=${API_KEY}`;
+
+    if (this.isElectron) {
+      return this.electronRequest<T>(fullPath, options);
+    }
+    return this.browserRequest<T>(fullPath, options);
+  }
+
+  private async electronRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+    const cookies: Record<string, string> = {};
+    if (this.authCookie) cookies['auth'] = this.authCookie;
+    if (this.twoFactorAuth) cookies['twoFactorAuth'] = this.twoFactorAuth;
+
+    const extraHeaders: Record<string, string> = {};
+    if (options.headers) {
+      const h = options.headers as Record<string, string>;
+      for (const [k, v] of Object.entries(h)) {
+        if (k.toLowerCase() !== 'content-type' && k.toLowerCase() !== 'user-agent') {
+          extraHeaders[k] = v;
+        }
+      }
+    }
+
+    const res = await window.electronAPI!.vrchatRequest({
+      method: (options.method || 'GET').toUpperCase(),
+      path: `/api/1${path}`,
+      headers: Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
+      body: options.body as string | undefined,
+      cookies,
+    });
+
+    // Capture cookies from the response
+    if (res.cookies.auth) this.authCookie = res.cookies.auth;
+    if (res.cookies.twoFactorAuth) this.twoFactorAuth = res.cookies.twoFactorAuth;
+
+    if (!res.ok) {
+      const msg = res.data?.error?.message || `API request failed: ${res.status}`;
+      throw new APIError(msg, res.status, res.data);
+    }
+
+    return res.data as T;
+  }
+
+  private async browserRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+    const url = `${API_BASE}${path}`;
     const res = await fetch(url, {
       ...options,
       headers: { ...this.headers, ...options.headers as Record<string, string> },
@@ -303,6 +352,27 @@ class VRChatAPI {
         instanceId: `${worldId}:${instanceId}`,
         ...(message ? { message } : {}),
       }),
+    });
+  }
+
+  // --- Mutual Friends ---
+
+  async getMutualFriends(userId: string): Promise<VRCUser[]> {
+    return this.request<VRCUser[]>(`/users/${userId}/mutuals/friends`);
+  }
+
+  // --- Groups ---
+
+  async getUserGroups(userId: string): Promise<any[]> {
+    return this.request<any[]>(`/users/${userId}/groups`);
+  }
+
+  // --- Status update (used by sidebar preset) ---
+
+  async updateStatus(userId: string, status: string, statusDescription: string): Promise<void> {
+    await this.request(`/users/${userId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ status, statusDescription }),
     });
   }
 }

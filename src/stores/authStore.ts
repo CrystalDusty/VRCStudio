@@ -51,10 +51,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   login: async (username, password) => {
     set({ isLoading: true, error: null, needs2FA: false });
     try {
-      const user = await api.login(username, password);
+      const result = await api.login(username, password);
+      const resultAny = result as any;
 
-      if (user.tags?.includes('system_twoFactorAuthEnabled') || (user as any).requiresTwoFactorAuth) {
-        const method = user.tags?.includes('system_twoFactorAuthEnabledTotp') ? 'totp' : 'emailotp';
+      // VRChat returns { requiresTwoFactorAuth: ["totp", "emailOtp"] } when 2FA is needed
+      if (resultAny.requiresTwoFactorAuth && Array.isArray(resultAny.requiresTwoFactorAuth)) {
+        const methods: string[] = resultAny.requiresTwoFactorAuth;
+        const method = methods.includes('totp') ? 'totp' : 'emailotp';
+        const cookies = api.getAuthCookies();
+        saveAuth(cookies.auth, cookies.twoFactorAuth);
+        set({ needs2FA: true, twoFactorMethod: method, isLoading: false });
+        return;
+      }
+
+      // Also check tags for 2FA (fallback)
+      if (result.tags?.includes('system_twoFactorAuthEnabled')) {
+        const method = result.tags.includes('system_twoFactorAuthEnabledTotp') ? 'totp' : 'emailotp';
         const cookies = api.getAuthCookies();
         saveAuth(cookies.auth, cookies.twoFactorAuth);
         set({ needs2FA: true, twoFactorMethod: method, isLoading: false });
@@ -63,7 +75,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       const cookies = api.getAuthCookies();
       saveAuth(cookies.auth, cookies.twoFactorAuth);
-      set({ user, isLoggedIn: true, isLoading: false, needs2FA: false });
+      set({ user: result, isLoggedIn: true, isLoading: false, needs2FA: false });
     } catch (err) {
       const msg = err instanceof APIError
         ? err.message

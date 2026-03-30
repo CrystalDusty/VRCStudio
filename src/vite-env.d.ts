@@ -19,6 +19,18 @@ interface ElectronAPI {
   getAutoLaunch: () => Promise<boolean>;
   getVersion: () => Promise<string>;
   getPlatform: () => Promise<string>;
+  vrchatRequest: (opts: {
+    method: string;
+    path: string;
+    headers?: Record<string, string>;
+    body?: string;
+    cookies?: Record<string, string>;
+  }) => Promise<{
+    ok: boolean;
+    status: number;
+    data: any;
+    cookies: Record<string, string>;
+  }>;
 }
 
 interface Window {
