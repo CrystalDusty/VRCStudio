@@ -2,6 +2,7 @@ import { useEffect, Component, ErrorInfo, ReactNode } from 'react';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
 import { useThemeStore } from './stores/themeStore';
+import { useSettingsStore } from './stores/settingsStore';
 import { usePolling } from './hooks/usePolling';
 import { useDiscordRPC } from './hooks/useDiscordRPC';
 import { requestNotificationPermission } from './utils/notifications';
@@ -131,6 +132,9 @@ export default function App() {
     applyTheme();
     requestNotificationPermission();
     restoreSession();
+    // Sync minimizeToTray setting to Electron main process
+    const { settings } = useSettingsStore.getState();
+    window.electronAPI?.setMinimizeToTray(settings.general.minimizeToTray);
   }, []);
 
   usePolling();

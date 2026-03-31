@@ -144,15 +144,15 @@ export default function FriendsPage() {
   return (
     <div className={`max-w-5xl mx-auto space-y-4 animate-fade-in ${detail.user ? 'mr-80' : ''}`}>
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Friends</h1>
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-surface-400">
-            {onlineFriends.length} online / {onlineFriends.length + offlineFriends.length} total
-          </span>
-          <button onClick={fetchAllFriends} disabled={isLoading} className="btn-ghost text-xs flex items-center gap-1">
-            <RefreshCw size={13} className={isLoading ? 'animate-spin' : ''} /> Refresh
-          </button>
+        <div>
+          <h1 className="text-xl font-semibold text-surface-100">Friends</h1>
+          <p className="text-sm text-surface-500 mt-0.5">
+            {onlineFriends.length} online, {offlineFriends.length} offline — {onlineFriends.length + offlineFriends.length} total
+          </p>
         </div>
+        <button onClick={fetchAllFriends} disabled={isLoading} className="btn-secondary text-xs flex items-center gap-1.5">
+          <RefreshCw size={13} className={isLoading ? 'animate-spin' : ''} /> Refresh
+        </button>
       </div>
 
       {/* Tabs */}

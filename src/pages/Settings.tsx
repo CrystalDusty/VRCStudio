@@ -98,28 +98,33 @@ export default function SettingsPage() {
 
   return (
     <div className="max-w-5xl mx-auto animate-fade-in">
-      <h1 className="text-2xl font-bold mb-6">Settings</h1>
+      <div className="mb-6">
+        <h1 className="text-xl font-semibold text-surface-100">Settings</h1>
+        <p className="text-sm text-surface-500 mt-0.5">Configure your VRC Studio experience</p>
+      </div>
 
       <div className="flex gap-6">
         {/* Left nav */}
-        <nav className="w-48 flex-shrink-0 space-y-0.5">
-          {sections.map(({ key, label, icon: Icon }) => (
-            <button
-              key={key}
-              onClick={() => setActive(key)}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
-                active === key
-                  ? 'bg-accent-600/15 text-accent-400'
-                  : 'text-surface-400 hover:text-white hover:bg-surface-800/60'
-              }`}
-            >
-              <Icon size={15} />
-              {label}
-            </button>
-          ))}
-          <div className="pt-4 border-t border-surface-800 mt-2">
+        <nav className="w-48 flex-shrink-0">
+          <div className="glass-panel-solid p-2 space-y-0.5">
+            {sections.map(({ key, label, icon: Icon }) => (
+              <button
+                key={key}
+                onClick={() => setActive(key)}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
+                  active === key
+                    ? 'bg-accent-600/15 text-accent-400'
+                    : 'text-surface-400 hover:text-surface-200 hover:bg-surface-800/60'
+                }`}
+              >
+                <Icon size={15} />
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="mt-3">
             <button onClick={resetSettings} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors">
-              <RotateCcw size={15} /> Reset All
+              <RotateCcw size={15} /> Reset All Settings
             </button>
           </div>
         </nav>
@@ -307,6 +312,25 @@ export default function SettingsPage() {
                 />
               </div>
 
+              <div>
+                <label className="block text-sm font-medium mb-2">Sidebar Width</label>
+                <div className="flex gap-2">
+                  {(['compact', 'normal', 'wide'] as const).map(width => (
+                    <button
+                      key={width}
+                      onClick={() => setSidebarWidth(width)}
+                      className={`px-4 py-1.5 rounded-lg text-sm border transition-colors capitalize ${
+                        theme.sidebarWidth === width
+                          ? 'border-accent-500 bg-accent-500/15 text-accent-400'
+                          : 'border-surface-700 bg-surface-800 text-surface-400 hover:border-surface-600'
+                      }`}
+                    >
+                      {width}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <button onClick={resetTheme} className="btn-secondary text-sm w-fit">
                 Reset to Default Theme
               </button>
@@ -366,7 +390,10 @@ export default function SettingsPage() {
                 label="Minimize to Tray"
                 description="Send to system tray instead of closing when you click X"
                 checked={settings.general.minimizeToTray}
-                onChange={v => updateGeneral({ minimizeToTray: v })}
+                onChange={v => {
+                  updateGeneral({ minimizeToTray: v });
+                  window.electronAPI?.setMinimizeToTray(v);
+                }}
               />
               <Toggle
                 label="Launch on System Startup"

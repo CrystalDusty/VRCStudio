@@ -10,6 +10,8 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let discordRPC: any = null;
 let rpcConnected = false;
+let minimizeToTray = true;
+let isQuitting = false;
 
 // ─── Window ──────────────────────────────────────────────────────────────────
 
@@ -41,7 +43,7 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => mainWindow?.show());
 
   mainWindow.on('close', (e) => {
-    if (tray) {
+    if (!isQuitting && minimizeToTray && tray) {
       e.preventDefault();
       mainWindow?.hide();
     }
@@ -64,6 +66,7 @@ function createTray() {
     {
       label: 'Quit',
       click: () => {
+        isQuitting = true;
         tray?.destroy();
         tray = null;
         disconnectDiscordRPC();
@@ -80,7 +83,6 @@ function createTray() {
 
 async function initDiscordRPC(clientId: string) {
   try {
-    // Dynamic import so it's optional — won't crash if discord-rpc isn't installed
     const { Client } = await import('discord-rpc' as string);
     discordRPC = new Client({ transport: 'ipc' });
 
@@ -140,6 +142,16 @@ ipcMain.handle('window:maximize', () => {
 });
 ipcMain.handle('window:close', () => mainWindow?.close());
 ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized() ?? false);
+ipcMain.handle('window:quit', () => {
+  isQuitting = true;
+  disconnectDiscordRPC();
+  app.quit();
+});
+
+// Settings sync from renderer
+ipcMain.handle('settings:setMinimizeToTray', (_e, value: boolean) => {
+  minimizeToTray = value;
+});
 
 // Shell
 ipcMain.handle('shell:openExternal', (_e, url: string) => shell.openExternal(url));
@@ -224,8 +236,6 @@ ipcMain.handle('app:getVersion', () => app.getVersion());
 ipcMain.handle('app:getPlatform', () => process.platform);
 
 // ─── VRChat API Proxy ────────────────────────────────────────────────────────
-// Proxies API requests through the main process so we can read set-cookie
-// headers, which are blocked by Chromium's fetch in the renderer.
 
 ipcMain.handle('vrchat:request', async (_e, opts: {
   method: string;
@@ -267,7 +277,6 @@ ipcMain.handle('vrchat:request', async (_e, opts: {
         res.on('end', () => {
           const bodyStr = Buffer.concat(chunks).toString('utf-8');
 
-          // Extract cookies from set-cookie headers
           const setCookieHeaders = res.headers['set-cookie'] || [];
           const responseCookies: Record<string, string> = {};
           for (const sc of setCookieHeaders) {
@@ -327,5 +336,6 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
+  isQuitting = true;
   disconnectDiscordRPC();
 });

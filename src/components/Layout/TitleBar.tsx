@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Minus, Square, X, Copy, Shield } from 'lucide-react';
+import { Minus, Square, X, Copy, Shield, Wifi, WifiOff } from 'lucide-react';
+import vrchatWS from '../../api/websocket';
 
 export default function TitleBar() {
   const isElectron = !!window.electronAPI;
   const [isMaximized, setIsMaximized] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
 
   useEffect(() => {
     if (!isElectron) return;
@@ -15,6 +17,13 @@ export default function TitleBar() {
     const interval = setInterval(check, 500);
     return () => clearInterval(interval);
   }, [isElectron]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setWsConnected(vrchatWS.getStatus());
+    }, 2000);
+    return () => clearInterval(interval);
+  }, []);
 
   if (!isElectron) return null;
 
@@ -28,6 +37,13 @@ export default function TitleBar() {
         <span className="text-xs font-semibold text-surface-400 tracking-wide">
           VRC Studio
         </span>
+        <div className="ml-2 flex items-center gap-1" title={wsConnected ? 'WebSocket connected' : 'WebSocket disconnected'}>
+          {wsConnected ? (
+            <Wifi size={10} className="text-green-500" />
+          ) : (
+            <WifiOff size={10} className="text-surface-600" />
+          )}
+        </div>
       </div>
       <div className="flex" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
         <button
