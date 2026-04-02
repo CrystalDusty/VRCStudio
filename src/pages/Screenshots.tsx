@@ -1,7 +1,8 @@
 import { useState, useRef, useCallback } from 'react';
-import { Camera, Upload, FolderOpen, X, ExternalLink, Globe, Calendar } from 'lucide-react';
+import { Camera, Upload, FolderOpen, X, Globe, Calendar, Printer, Download, Type } from 'lucide-react';
 import { format } from 'date-fns';
 import EmptyState from '../components/common/EmptyState';
+import { useAuthStore } from '../stores/authStore';
 
 interface ScreenshotEntry {
   id: string;
@@ -27,9 +28,371 @@ function saveMeta(meta: Record<string, Partial<ScreenshotEntry>>) {
   localStorage.setItem(SCREENSHOTS_KEY, JSON.stringify(meta));
 }
 
+// --- Photo Print Creator ---
+
+interface PrintSettings {
+  showUsername: boolean;
+  showDate: boolean;
+  showWorldName: boolean;
+  showCustomText: boolean;
+  customText: string;
+  position: 'bottom-left' | 'bottom-right' | 'top-left' | 'top-right';
+  style: 'classic' | 'polaroid' | 'minimal' | 'strip';
+  fontSize: number;
+}
+
+const defaultPrintSettings: PrintSettings = {
+  showUsername: true,
+  showDate: true,
+  showWorldName: true,
+  showCustomText: false,
+  customText: '',
+  position: 'bottom-left',
+  style: 'classic',
+  fontSize: 24,
+};
+
+function PhotoPrintCreator({
+  screenshot,
+  onClose,
+}: {
+  screenshot: ScreenshotEntry;
+  onClose: () => void;
+}) {
+  const { user } = useAuthStore();
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [settings, setSettings] = useState<PrintSettings>(defaultPrintSettings);
+  const [previewUrl, setPreviewUrl] = useState<string>('');
+  const [rendering, setRendering] = useState(false);
+
+  const renderPrint = useCallback(async () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    setRendering(true);
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.src = screenshot.src;
+
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject();
+    });
+
+    const ctx = canvas.getContext('2d')!;
+
+    if (settings.style === 'polaroid') {
+      const padding = 40;
+      const bottomPadding = 120;
+      canvas.width = img.width + padding * 2;
+      canvas.height = img.height + padding + bottomPadding;
+
+      // White polaroid border
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Shadow effect
+      ctx.shadowColor = 'rgba(0,0,0,0.15)';
+      ctx.shadowBlur = 20;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 5;
+      ctx.drawImage(img, padding, padding, img.width, img.height);
+      ctx.shadowColor = 'transparent';
+
+      // Text on polaroid bottom
+      ctx.fillStyle = '#333333';
+      ctx.font = `${settings.fontSize}px 'Segoe UI', sans-serif`;
+      const lines: string[] = [];
+      if (settings.showUsername && user?.displayName) lines.push(user.displayName);
+      if (settings.showWorldName && screenshot.worldName) lines.push(screenshot.worldName);
+      if (settings.showDate) lines.push(format(screenshot.takenAt, 'MMM d, yyyy'));
+      if (settings.showCustomText && settings.customText) lines.push(settings.customText);
+
+      let ty = img.height + padding + 40;
+      for (const line of lines) {
+        ctx.fillText(line, padding + 10, ty);
+        ty += settings.fontSize + 8;
+      }
+    } else if (settings.style === 'strip') {
+      const stripH = 60;
+      canvas.width = img.width;
+      canvas.height = img.height + stripH;
+      ctx.drawImage(img, 0, 0);
+
+      // Dark strip at bottom
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+      ctx.fillRect(0, img.height, img.width, stripH);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `${settings.fontSize - 4}px 'Segoe UI', sans-serif`;
+
+      const parts: string[] = [];
+      if (settings.showUsername && user?.displayName) parts.push(user.displayName);
+      if (settings.showWorldName && screenshot.worldName) parts.push(screenshot.worldName);
+      if (settings.showDate) parts.push(format(screenshot.takenAt, 'MMM d, yyyy HH:mm'));
+      if (settings.showCustomText && settings.customText) parts.push(settings.customText);
+
+      const text = parts.join('  •  ');
+      ctx.fillText(text, 20, img.height + 38);
+    } else if (settings.style === 'minimal') {
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+
+      const parts: string[] = [];
+      if (settings.showDate) parts.push(format(screenshot.takenAt, 'yyyy.MM.dd'));
+      if (settings.showUsername && user?.displayName) parts.push(user.displayName);
+      if (settings.showCustomText && settings.customText) parts.push(settings.customText);
+      const text = parts.join(' | ');
+
+      ctx.font = `${settings.fontSize - 6}px monospace`;
+      const metrics = ctx.measureText(text);
+      const pad = 8;
+
+      let tx: number, ty: number;
+      if (settings.position === 'bottom-right') {
+        tx = img.width - metrics.width - pad - 12;
+        ty = img.height - pad - 8;
+      } else if (settings.position === 'top-left') {
+        tx = pad + 12;
+        ty = settings.fontSize + pad;
+      } else if (settings.position === 'top-right') {
+        tx = img.width - metrics.width - pad - 12;
+        ty = settings.fontSize + pad;
+      } else {
+        tx = pad + 12;
+        ty = img.height - pad - 8;
+      }
+
+      ctx.fillStyle = 'rgba(0,0,0,0.4)';
+      ctx.fillRect(tx - 6, ty - settings.fontSize + 2, metrics.width + 12, settings.fontSize + 8);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(text, tx, ty);
+    } else {
+      // Classic: overlay on the image
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+
+      const lines: string[] = [];
+      if (settings.showUsername && user?.displayName) lines.push(user.displayName);
+      if (settings.showWorldName && screenshot.worldName) lines.push(`📍 ${screenshot.worldName}`);
+      if (settings.showDate) lines.push(format(screenshot.takenAt, 'MMM d, yyyy  HH:mm'));
+      if (settings.showCustomText && settings.customText) lines.push(settings.customText);
+
+      if (lines.length > 0) {
+        ctx.font = `bold ${settings.fontSize}px 'Segoe UI', sans-serif`;
+        const maxW = Math.max(...lines.map(l => ctx.measureText(l).width));
+        const blockH = lines.length * (settings.fontSize + 10) + 20;
+        const pad = 16;
+
+        let bx: number, by: number;
+        if (settings.position === 'bottom-right') {
+          bx = img.width - maxW - pad * 2 - 20;
+          by = img.height - blockH - 20;
+        } else if (settings.position === 'top-left') {
+          bx = 20;
+          by = 20;
+        } else if (settings.position === 'top-right') {
+          bx = img.width - maxW - pad * 2 - 20;
+          by = 20;
+        } else {
+          bx = 20;
+          by = img.height - blockH - 20;
+        }
+
+        // Background
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        const radius = 12;
+        ctx.beginPath();
+        ctx.moveTo(bx + radius, by);
+        ctx.lineTo(bx + maxW + pad * 2 - radius, by);
+        ctx.quadraticCurveTo(bx + maxW + pad * 2, by, bx + maxW + pad * 2, by + radius);
+        ctx.lineTo(bx + maxW + pad * 2, by + blockH - radius);
+        ctx.quadraticCurveTo(bx + maxW + pad * 2, by + blockH, bx + maxW + pad * 2 - radius, by + blockH);
+        ctx.lineTo(bx + radius, by + blockH);
+        ctx.quadraticCurveTo(bx, by + blockH, bx, by + blockH - radius);
+        ctx.lineTo(bx, by + radius);
+        ctx.quadraticCurveTo(bx, by, bx + radius, by);
+        ctx.closePath();
+        ctx.fill();
+
+        // Text
+        ctx.fillStyle = '#ffffff';
+        ctx.font = `bold ${settings.fontSize}px 'Segoe UI', sans-serif`;
+        let ty = by + pad + settings.fontSize;
+        for (let i = 0; i < lines.length; i++) {
+          if (i > 0) {
+            ctx.font = `${settings.fontSize - 4}px 'Segoe UI', sans-serif`;
+            ctx.fillStyle = 'rgba(255,255,255,0.85)';
+          }
+          ctx.fillText(lines[i], bx + pad, ty);
+          ty += settings.fontSize + 10;
+        }
+      }
+    }
+
+    setPreviewUrl(canvas.toDataURL('image/png'));
+    setRendering(false);
+  }, [screenshot, settings, user]);
+
+  // Auto-render on settings change
+  useState(() => {
+    setTimeout(renderPrint, 100);
+  });
+
+  const handleDownload = () => {
+    if (!previewUrl) return;
+    const a = document.createElement('a');
+    a.href = previewUrl;
+    a.download = `VRCStudio_Print_${screenshot.name}`;
+    a.click();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex items-center justify-center" onClick={onClose}>
+      <div className="relative max-w-6xl w-full mx-4 flex gap-4 max-h-[90vh]" onClick={e => e.stopPropagation()}>
+        {/* Preview */}
+        <div className="flex-1 flex items-center justify-center overflow-hidden">
+          <canvas ref={canvasRef} className="hidden" />
+          {previewUrl ? (
+            <img src={previewUrl} alt="Print preview" className="max-w-full max-h-[85vh] rounded-xl shadow-2xl" />
+          ) : (
+            <div className="text-surface-500 text-sm">Generating preview...</div>
+          )}
+        </div>
+
+        {/* Settings panel */}
+        <div className="w-72 flex-shrink-0 glass-panel p-4 space-y-4 overflow-y-auto max-h-[90vh]">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold flex items-center gap-1.5">
+              <Printer size={14} /> Photo Print Creator
+            </h3>
+            <button onClick={onClose} className="btn-ghost p-1"><X size={14} /></button>
+          </div>
+
+          {/* Style */}
+          <div>
+            <label className="text-xs text-surface-500 block mb-1.5">Style</label>
+            <div className="grid grid-cols-2 gap-1.5">
+              {(['classic', 'polaroid', 'strip', 'minimal'] as const).map(style => (
+                <button
+                  key={style}
+                  onClick={() => setSettings(s => ({ ...s, style }))}
+                  className={`px-2 py-1.5 rounded text-xs font-medium transition-colors ${
+                    settings.style === style
+                      ? 'bg-accent-600 text-white'
+                      : 'bg-surface-800 text-surface-400 hover:bg-surface-700'
+                  }`}
+                >
+                  {style.charAt(0).toUpperCase() + style.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Position */}
+          {settings.style !== 'polaroid' && settings.style !== 'strip' && (
+            <div>
+              <label className="text-xs text-surface-500 block mb-1.5">Position</label>
+              <div className="grid grid-cols-2 gap-1.5">
+                {([
+                  { key: 'bottom-left' as const, label: '↙ Bottom Left' },
+                  { key: 'bottom-right' as const, label: '↘ Bottom Right' },
+                  { key: 'top-left' as const, label: '↖ Top Left' },
+                  { key: 'top-right' as const, label: '↗ Top Right' },
+                ]).map(({ key, label }) => (
+                  <button
+                    key={key}
+                    onClick={() => setSettings(s => ({ ...s, position: key }))}
+                    className={`px-2 py-1.5 rounded text-xs font-medium transition-colors ${
+                      settings.position === key
+                        ? 'bg-accent-600 text-white'
+                        : 'bg-surface-800 text-surface-400 hover:bg-surface-700'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Toggle options */}
+          <div className="space-y-2">
+            {[
+              { key: 'showUsername' as const, label: 'Show Username' },
+              { key: 'showDate' as const, label: 'Show Date' },
+              { key: 'showWorldName' as const, label: 'Show World Name' },
+              { key: 'showCustomText' as const, label: 'Custom Text' },
+            ].map(({ key, label }) => (
+              <label key={key} className="flex items-center gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settings[key]}
+                  onChange={e => setSettings(s => ({ ...s, [key]: e.target.checked }))}
+                  className="rounded bg-surface-800 border-surface-600 text-accent-500 focus:ring-accent-500"
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+
+          {/* Custom text input */}
+          {settings.showCustomText && (
+            <input
+              type="text"
+              value={settings.customText}
+              onChange={e => setSettings(s => ({ ...s, customText: e.target.value }))}
+              placeholder="Enter custom text..."
+              className="input-field text-xs"
+            />
+          )}
+
+          {/* Font size */}
+          <div>
+            <label className="text-xs text-surface-500 block mb-1.5">
+              Font Size: {settings.fontSize}px
+            </label>
+            <input
+              type="range"
+              min={14}
+              max={48}
+              value={settings.fontSize}
+              onChange={e => setSettings(s => ({ ...s, fontSize: Number(e.target.value) }))}
+              className="w-full accent-accent-500"
+            />
+          </div>
+
+          {/* Actions */}
+          <div className="space-y-2 pt-2 border-t border-surface-800">
+            <button
+              onClick={renderPrint}
+              disabled={rendering}
+              className="btn-secondary text-xs w-full flex items-center justify-center gap-1.5"
+            >
+              <Type size={12} /> {rendering ? 'Rendering...' : 'Update Preview'}
+            </button>
+            <button
+              onClick={handleDownload}
+              disabled={!previewUrl}
+              className="btn-primary text-xs w-full flex items-center justify-center gap-1.5"
+            >
+              <Download size={12} /> Download Print
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Main Screenshots Page ---
+
 export default function ScreenshotsPage() {
   const [screenshots, setScreenshots] = useState<ScreenshotEntry[]>([]);
   const [selected, setSelected] = useState<ScreenshotEntry | null>(null);
+  const [printTarget, setPrintTarget] = useState<ScreenshotEntry | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [editingNote, setEditingNote] = useState('');
   const [editingWorld, setEditingWorld] = useState('');
@@ -114,7 +477,7 @@ export default function ScreenshotsPage() {
         <div>
           <h1 className="text-2xl font-bold">Screenshots</h1>
           <p className="text-sm text-surface-400 mt-0.5">
-            Load your VRChat screenshots folder to browse and annotate them
+            Load your VRChat screenshots to browse, annotate, and create photo prints
           </p>
         </div>
         <div className="flex gap-2">
@@ -178,12 +541,21 @@ export default function ScreenshotsPage() {
                         {ss.worldName}
                       </div>
                     )}
-                    <button
-                      onClick={() => removeScreenshot(ss.id)}
-                      className="absolute top-1 right-1 w-5 h-5 bg-black/60 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                    >
-                      <X size={10} className="text-white" />
-                    </button>
+                    <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setPrintTarget(ss); }}
+                        className="w-5 h-5 bg-black/60 rounded-full flex items-center justify-center hover:bg-accent-600/80 transition-colors"
+                        title="Create Photo Print"
+                      >
+                        <Printer size={10} className="text-white" />
+                      </button>
+                      <button
+                        onClick={() => removeScreenshot(ss.id)}
+                        className="w-5 h-5 bg-black/60 rounded-full flex items-center justify-center hover:bg-red-600/80 transition-colors"
+                      >
+                        <X size={10} className="text-white" />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -193,7 +565,7 @@ export default function ScreenshotsPage() {
       )}
 
       {/* Lightbox */}
-      {selected && (
+      {selected && !printTarget && (
         <div
           className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex items-center justify-center"
           onClick={() => { setSelected(null); setIsEditing(false); }}
@@ -256,12 +628,27 @@ export default function ScreenshotsPage() {
                 </>
               )}
 
+              <button
+                onClick={() => setPrintTarget(selected)}
+                className="btn-primary text-xs w-full flex items-center justify-center gap-1.5"
+              >
+                <Printer size={12} /> Create Print
+              </button>
+
               <button onClick={() => { setSelected(null); setIsEditing(false); }} className="btn-ghost text-xs w-full">
                 Close
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* Photo Print Creator */}
+      {printTarget && (
+        <PhotoPrintCreator
+          screenshot={printTarget}
+          onClose={() => setPrintTarget(null)}
+        />
       )}
     </div>
   );

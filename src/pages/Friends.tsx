@@ -13,6 +13,7 @@ import LoadingSpinner from '../components/common/LoadingSpinner';
 import InstanceModal from '../components/InstanceModal';
 import type { VRCUser, UserStatus, VRCWorld } from '../types/vrchat';
 import api from '../api/vrchat';
+import { getBestAvatarUrl } from '../utils/avatar';
 
 type FriendTab = 'online' | 'offline' | 'all' | 'gps';
 type SortBy = 'name' | 'status';
@@ -205,7 +206,7 @@ export default function FriendsPage() {
               </div>
               <div className="flex -space-x-2">
                 {onlineFriends.filter(f => f.location === 'private').slice(0, 6).map(f => (
-                  <UserAvatar key={f.id} src={f.currentAvatarThumbnailImageUrl} status={f.status} size="sm"
+                  <UserAvatar key={f.id} src={getBestAvatarUrl(f)} status={f.status} size="sm"
                     className="ring-2 ring-surface-900" />
                 ))}
               </div>
@@ -250,7 +251,7 @@ export default function FriendsPage() {
                         onClick={() => detail.open(f)}
                         className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-surface-800/60 transition-colors text-left"
                       >
-                        <UserAvatar src={f.currentAvatarThumbnailImageUrl} status={f.status} size="sm" />
+                        <UserAvatar src={getBestAvatarUrl(f)} status={f.status} size="sm" />
                         <span className="text-xs font-medium">{f.displayName}</span>
                       </button>
                     ))}
@@ -279,7 +280,7 @@ export default function FriendsPage() {
                     detail.user?.id === friend.id ? 'border-accent-500/30' : ''
                   }`}
                 >
-                  <UserAvatar src={friend.currentAvatarThumbnailImageUrl} status={friend.status} size="md" />
+                  <UserAvatar src={getBestAvatarUrl(friend)} status={friend.status} size="md" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-sm">{friend.displayName}</span>
@@ -328,7 +329,7 @@ export default function FriendsPage() {
             <div className="text-center">
               <div className="relative inline-block">
                 <img
-                  src={(detail.fullUser || detail.user).profilePicOverride || (detail.fullUser || detail.user).currentAvatarThumbnailImageUrl}
+                  src={getBestAvatarUrl(detail.fullUser || detail.user)}
                   alt=""
                   className="w-24 h-24 rounded-full mx-auto object-cover bg-surface-800"
                 />
@@ -394,7 +395,7 @@ export default function FriendsPage() {
                   <div className="flex flex-wrap gap-2">
                     {detail.mutuals.slice(0, 8).map(m => (
                       <button key={m.id} onClick={() => detail.open(m)} className="flex items-center gap-1.5 text-xs hover:text-white transition-colors">
-                        <UserAvatar src={m.currentAvatarThumbnailImageUrl} status={m.status} size="sm" />
+                        <UserAvatar src={getBestAvatarUrl(m)} status={m.status} size="sm" />
                         <span className="text-surface-400 truncate max-w-[80px]">{m.displayName}</span>
                       </button>
                     ))}

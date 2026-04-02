@@ -6,6 +6,7 @@ import { useWorldStore } from '../stores/worldStore';
 import EmptyState from '../components/common/EmptyState';
 import UserAvatar from '../components/common/UserAvatar';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import { getBestAvatarUrl } from '../utils/avatar';
 
 type FavTab = 'friends' | 'worlds' | 'avatars';
 
@@ -56,7 +57,7 @@ export default function FavoritesPage() {
                     <div key={fav.id} className="glass-panel-solid p-3 flex items-center gap-3">
                       {friend ? (
                         <>
-                          <UserAvatar src={friend.currentAvatarThumbnailImageUrl} status={friend.status} size="md" />
+                          <UserAvatar src={getBestAvatarUrl(friend)} status={friend.status} size="md" />
                           <div className="flex-1 min-w-0">
                             <div className="text-sm font-medium truncate">{friend.displayName}</div>
                             <div className="text-xs text-surface-500">{friend.statusDescription || friend.status}</div>

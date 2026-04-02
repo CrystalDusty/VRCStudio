@@ -7,6 +7,7 @@ import WorldCard from '../components/common/WorldCard';
 import EmptyState from '../components/common/EmptyState';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import type { VRCUser, VRCWorld, VRCAvatar } from '../types/vrchat';
+import { getBestAvatarUrl } from '../utils/avatar';
 
 type SearchCategory = 'users' | 'worlds' | 'avatars';
 
@@ -153,7 +154,7 @@ export default function SearchPage() {
           {category === 'users' && userResults.map(user => (
             <div key={user.id} className="glass-panel-solid p-3 flex items-center gap-3 card-hover">
               <UserAvatar
-                src={user.currentAvatarThumbnailImageUrl}
+                src={getBestAvatarUrl(user)}
                 status={user.status}
                 size="md"
               />

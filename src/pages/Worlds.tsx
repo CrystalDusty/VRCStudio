@@ -8,6 +8,7 @@ import EmptyState from '../components/common/EmptyState';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import InstanceModal from '../components/InstanceModal';
 import type { VRCWorld } from '../types/vrchat';
+import { getBestAvatarUrl } from '../utils/avatar';
 
 type WorldTab = 'search' | 'active' | 'recent' | 'favorites';
 
@@ -95,7 +96,7 @@ export default function WorldsPage() {
                 <div className="flex flex-wrap gap-2">
                   {friends.map(f => (
                     <div key={f.id} className="flex items-center gap-2 glass-panel px-3 py-1.5 rounded-full">
-                      <img src={f.currentAvatarThumbnailImageUrl} alt="" className="w-5 h-5 rounded-full object-cover" />
+                      <img src={getBestAvatarUrl(f)} alt="" className="w-5 h-5 rounded-full object-cover" />
                       <span className="text-xs font-medium">{f.displayName}</span>
                       <button
                         onClick={() => {

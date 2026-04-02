@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   Users,
   Globe,
@@ -9,13 +10,19 @@ import {
   Wifi,
   WifiOff,
   TrendingUp,
+  History,
+  Send,
+  RotateCcw,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { useAuthStore } from '../stores/authStore';
 import { useFriendStore } from '../stores/friendStore';
 import { useFeedStore } from '../stores/feedStore';
+import { useInstanceHistoryStore } from '../stores/instanceHistoryStore';
 import UserAvatar from '../components/common/UserAvatar';
+import api from '../api/vrchat';
 import type { FeedEvent, UserStatus } from '../types/vrchat';
+import { getBestAvatarUrl } from '../utils/avatar';
 
 const eventIcons: Record<FeedEvent['type'], typeof Activity> = {
   friend_online: UserPlus,
@@ -64,6 +71,21 @@ export default function Dashboard() {
   const { user } = useAuthStore();
   const { onlineFriends, offlineFriends } = useFriendStore();
   const { events } = useFeedStore();
+  const { history } = useInstanceHistoryStore();
+  const [rejoining, setRejoining] = useState<string | null>(null);
+  const [rejoined, setRejoined] = useState<Set<string>>(new Set());
+
+  const handleRejoin = async (worldId: string, instanceId: string) => {
+    const key = `${worldId}:${instanceId}`;
+    setRejoining(key);
+    try {
+      await api.selfInvite(worldId, instanceId);
+      setRejoined(prev => new Set(prev).add(key));
+    } catch {}
+    setRejoining(null);
+  };
+
+  const recentInstances = history.slice(0, 8);
 
   const statusGroups: Record<string, typeof onlineFriends> = {
     'join me': [],
@@ -145,6 +167,64 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Recent Instances / Rejoin */}
+      {recentInstances.length > 0 && (
+        <div className="glass-panel-solid overflow-hidden">
+          <div className="px-4 py-3 border-b border-surface-800/40 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-surface-300 flex items-center gap-2">
+              <History size={14} />
+              Recent Instances
+            </h2>
+            <span className="text-xs text-surface-600">Rejoin private worlds</span>
+          </div>
+          <div className="divide-y divide-surface-800/30 max-h-64 overflow-y-auto">
+            {recentInstances.map(inst => {
+              const key = `${inst.worldId}:${inst.instanceId}`;
+              const isRejoining = rejoining === key;
+              const hasRejoined = rejoined.has(key);
+              const isPrivate = inst.instanceType !== 'public';
+              return (
+                <div key={inst.id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-surface-800/30 transition-colors">
+                  {inst.worldImage ? (
+                    <img src={inst.worldImage} alt="" className="w-10 h-7 rounded object-cover flex-shrink-0 bg-surface-800" />
+                  ) : (
+                    <div className="w-10 h-7 rounded bg-surface-800 flex items-center justify-center flex-shrink-0">
+                      <Globe size={12} className="text-surface-600" />
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[13px] font-medium truncate text-surface-200">{inst.worldName}</div>
+                    <div className="text-[11px] text-surface-500 flex items-center gap-1.5">
+                      <span className={`capitalize ${isPrivate ? 'text-amber-400/70' : ''}`}>{inst.instanceType}</span>
+                      <span>&middot;</span>
+                      <span>{formatDistanceToNow(inst.joinedAt, { addSuffix: true })}</span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleRejoin(inst.worldId, inst.instanceId)}
+                    disabled={isRejoining || hasRejoined}
+                    className={`text-xs px-2.5 py-1 rounded-md flex items-center gap-1 flex-shrink-0 transition-colors ${
+                      hasRejoined
+                        ? 'bg-green-500/15 text-green-400'
+                        : 'bg-accent-600/15 text-accent-400 hover:bg-accent-600/25'
+                    }`}
+                    title={isPrivate ? 'Rejoin this private instance' : 'Join this instance'}
+                  >
+                    {hasRejoined ? (
+                      <>Sent!</>
+                    ) : isRejoining ? (
+                      <>Joining...</>
+                    ) : (
+                      <><RotateCcw size={11} /> Rejoin</>
+                    )}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Activity Feed */}
         <div className="lg:col-span-2 glass-panel-solid overflow-hidden">
@@ -214,7 +294,7 @@ export default function Dashboard() {
                   className="flex items-center gap-2.5 px-4 py-2 hover:bg-surface-800/30 transition-colors"
                 >
                   <UserAvatar
-                    src={friend.currentAvatarThumbnailImageUrl}
+                    src={getBestAvatarUrl(friend)}
                     status={friend.status}
                     size="sm"
                   />

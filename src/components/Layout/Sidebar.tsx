@@ -10,6 +10,7 @@ import { useFriendStore } from '../../stores/friendStore';
 import { useThemeStore } from '../../stores/themeStore';
 import StatusPresetPanel from '../StatusPresetPanel';
 import api from '../../api/vrchat';
+import { getBestAvatarUrl } from '../../utils/avatar';
 
 const mainNavItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -53,7 +54,7 @@ export default function Sidebar() {
   const { theme } = useThemeStore();
   const [showPresets, setShowPresets] = useState(false);
 
-  const avatarUrl = user?.profilePicOverride || user?.currentAvatarThumbnailImageUrl;
+  const avatarUrl = user ? getBestAvatarUrl(user) : '';
 
   const handleApplyPreset = async (status: string, statusDescription: string) => {
     if (!user?.id) return;
