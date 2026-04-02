@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Globe, Shirt, Star, Settings,
   LogOut, Bell, Search, History, UsersRound, FileText, Camera,
-  ChevronDown,
+  ChevronDown, Flame, BarChart3, CalendarPlus, FolderHeart,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useAuthStore } from '../../stores/authStore';
@@ -24,10 +24,14 @@ const browseNavItems = [
   { to: '/avatars', icon: Shirt, label: 'Avatars' },
   { to: '/groups', icon: UsersRound, label: 'Groups' },
   { to: '/favorites', icon: Star, label: 'Favorites' },
+  { to: '/collections', icon: FolderHeart, label: 'Collections' },
   { to: '/notifications', icon: Bell, label: 'Notifications' },
 ];
 
 const toolsNavItems = [
+  { to: '/activity', icon: Flame, label: 'Activity Map' },
+  { to: '/friend-analytics', icon: BarChart3, label: 'Analytics' },
+  { to: '/events', icon: CalendarPlus, label: 'Events' },
   { to: '/game-log', icon: FileText, label: 'Game Log' },
   { to: '/screenshots', icon: Camera, label: 'Screenshots' },
 ];

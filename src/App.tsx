@@ -21,6 +21,10 @@ import Settings from './pages/Settings';
 import SearchPage from './pages/Search';
 import GameLog from './pages/GameLog';
 import Screenshots from './pages/Screenshots';
+import ActivityHeatmap from './pages/ActivityHeatmap';
+import FriendAnalytics from './pages/FriendAnalytics';
+import EventPlanner from './pages/EventPlanner';
+import WorldCollections from './pages/WorldCollections';
 import LoadingSpinner from './components/common/LoadingSpinner';
 
 // Error boundary to catch React rendering errors and show them instead of a blank screen
@@ -117,6 +121,10 @@ function AppShell() {
         <Route path="/notifications" element={<Notifications />} />
         <Route path="/game-log" element={<GameLog />} />
         <Route path="/screenshots" element={<Screenshots />} />
+        <Route path="/activity" element={<ActivityHeatmap />} />
+        <Route path="/friend-analytics" element={<FriendAnalytics />} />
+        <Route path="/events" element={<EventPlanner />} />
+        <Route path="/collections" element={<WorldCollections />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
