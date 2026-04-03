@@ -402,8 +402,23 @@ export default function ScreenshotsPage() {
   const [brightness, setBrightness] = useState(100);
   const [contrast, setContrast] = useState(100);
   const [saturation, setSaturation] = useState(100);
+  const [hueRotate, setHueRotate] = useState(0);
+  const [blur, setBlur] = useState(0);
+  const [filterPreset, setFilterPreset] = useState<'none' | 'grayscale' | 'sepia' | 'cool' | 'warm' | 'vintage' | 'noir' | 'neon' | 'vibrant' | 'soft'>('none');
   const fileRef = useRef<HTMLInputElement>(null);
   const photoEditCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  const filterPresets: Record<string, { brightness: number; contrast: number; saturation: number; hueRotate: number }> = {
+    grayscale: { brightness: 100, contrast: 110, saturation: 0, hueRotate: 0 },
+    sepia: { brightness: 100, contrast: 110, saturation: 30, hueRotate: -10 },
+    cool: { brightness: 95, contrast: 105, saturation: 110, hueRotate: -20 },
+    warm: { brightness: 110, contrast: 95, saturation: 120, hueRotate: 15 },
+    vintage: { brightness: 105, contrast: 90, saturation: 80, hueRotate: -5 },
+    noir: { brightness: 80, contrast: 130, saturation: 0, hueRotate: 0 },
+    neon: { brightness: 110, contrast: 120, saturation: 150, hueRotate: 0 },
+    vibrant: { brightness: 100, contrast: 115, saturation: 140, hueRotate: 0 },
+    soft: { brightness: 110, contrast: 85, saturation: 90, hueRotate: 0 },
+  };
 
   const processFiles = useCallback(async (files: FileList | File[]) => {
     const arr = Array.from(files);
@@ -583,7 +598,7 @@ export default function ScreenshotsPage() {
                 alt=""
                 className="w-full rounded-xl shadow-2xl"
                 style={{
-                  filter: `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%)`,
+                  filter: `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%) hue-rotate(${hueRotate}deg) blur(${blur}px)`,
                   transition: 'filter 0.1s ease-out',
                 }}
               />
@@ -650,38 +665,111 @@ export default function ScreenshotsPage() {
 
               {isPhotoEditing && (
                 <div className="space-y-2 bg-surface-800/30 p-3 rounded">
-                  <div>
-                    <label className="text-[10px] text-surface-500 block mb-1">Brightness: {brightness}%</label>
-                    <input
-                      type="range"
-                      min={0}
-                      max={200}
-                      value={brightness}
-                      onChange={e => setBrightness(Number(e.target.value))}
-                      className="w-full text-xs"
-                    />
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] text-surface-500 block font-semibold">Filter Presets</label>
+                    <div className="grid grid-cols-3 gap-1">
+                      {['none', 'grayscale', 'sepia', 'cool', 'warm', 'vintage', 'noir', 'neon', 'vibrant', 'soft'].map(preset => (
+                        <button
+                          key={preset}
+                          onClick={() => {
+                            setFilterPreset(preset as any);
+                            if (preset === 'none') {
+                              setBrightness(100);
+                              setContrast(100);
+                              setSaturation(100);
+                              setHueRotate(0);
+                            } else {
+                              const p = filterPresets[preset];
+                              setBrightness(p.brightness);
+                              setContrast(p.contrast);
+                              setSaturation(p.saturation);
+                              setHueRotate(p.hueRotate);
+                            }
+                          }}
+                          className={`px-2 py-1 text-[10px] rounded font-medium transition-all ${
+                            filterPreset === preset
+                              ? 'bg-blue-500/80 text-white'
+                              : 'bg-surface-700 text-surface-300 hover:bg-surface-600'
+                          }`}
+                        >
+                          {preset.charAt(0).toUpperCase() + preset.slice(1)}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                  <div>
-                    <label className="text-[10px] text-surface-500 block mb-1">Contrast: {contrast}%</label>
-                    <input
-                      type="range"
-                      min={0}
-                      max={200}
-                      value={contrast}
-                      onChange={e => setContrast(Number(e.target.value))}
-                      className="w-full text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-surface-500 block mb-1">Saturation: {saturation}%</label>
-                    <input
-                      type="range"
-                      min={0}
-                      max={200}
-                      value={saturation}
-                      onChange={e => setSaturation(Number(e.target.value))}
-                      className="w-full text-xs"
-                    />
+
+                  <div className="border-t border-surface-700/50 pt-2 space-y-1.5">
+                    <label className="text-[10px] text-surface-500 block font-semibold">Manual Adjustments</label>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Brightness: {brightness}%</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={200}
+                        value={brightness}
+                        onChange={e => {
+                          setBrightness(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Contrast: {contrast}%</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={200}
+                        value={contrast}
+                        onChange={e => {
+                          setContrast(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Saturation: {saturation}%</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={200}
+                        value={saturation}
+                        onChange={e => {
+                          setSaturation(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Hue Shift: {hueRotate}°</label>
+                      <input
+                        type="range"
+                        min={-180}
+                        max={180}
+                        value={hueRotate}
+                        onChange={e => {
+                          setHueRotate(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Blur: {blur}px</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={10}
+                        value={blur}
+                        onChange={e => {
+                          setBlur(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
                   </div>
                 </div>
               )}
