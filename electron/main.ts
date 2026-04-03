@@ -219,8 +219,18 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
   console.log(`[Download] Starting download from: ${url}`);
 
   const bundleDir = path.join(app.getPath('userData'), 'AvatarBundles', avatarId);
-  if (!fs.existsSync(bundleDir)) {
-    fs.mkdirSync(bundleDir, { recursive: true });
+  console.log(`[Download] Bundle directory: ${bundleDir}`);
+
+  // Ensure directory exists with robust error handling
+  try {
+    if (!fs.existsSync(bundleDir)) {
+      fs.mkdirSync(bundleDir, { recursive: true });
+      console.log(`[Download] Created directory: ${bundleDir}`);
+    }
+  } catch (mkdirError) {
+    const errorMsg = mkdirError instanceof Error ? mkdirError.message : 'Unknown error';
+    console.error(`[Download] Failed to create directory: ${errorMsg}`);
+    throw new Error(`Cannot create bundle directory: ${errorMsg}`);
   }
 
   // Extract filename more intelligently
@@ -249,7 +259,17 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
   console.log(`[Download] Target path: ${bundlePath}`);
 
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(bundlePath);
+    let file: fs.WriteStream;
+
+    // Attempt to create write stream with error handling
+    try {
+      file = fs.createWriteStream(bundlePath);
+    } catch (streamError) {
+      const errorMsg = streamError instanceof Error ? streamError.message : 'Unknown error';
+      console.error(`[Download] Failed to create write stream: ${errorMsg}`);
+      reject(new Error(`Cannot write to bundle file: ${errorMsg}`));
+      return;
+    }
     const request = https.get(url, { timeout: 30000 }, (response) => {
       console.log(`[Download] Response status: ${response.statusCode}`);
       console.log(`[Download] Content-Type: ${response.headers['content-type']}`);
@@ -308,8 +328,10 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
 
       file.on('error', (err) => {
         console.error(`[Download] File write error: ${err.message}`);
+        console.error(`[Download] File write error code: ${(err as any).code}`);
+        console.error(`[Download] File write error errno: ${(err as any).errno}`);
         fs.unlink(bundlePath, () => {}); // Delete the file on error
-        reject(err);
+        reject(new Error(`File write error (${(err as any).code}): ${err.message}`));
       });
     });
 
