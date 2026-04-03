@@ -268,14 +268,31 @@ ipcMain.handle('fs:extractBundle', async (_e, sourcePath: string, avatarId: stri
   }
 
   try {
+    // Validate file exists and is readable
+    if (!fs.existsSync(sourcePath)) {
+      throw new Error(`Bundle file not found at ${sourcePath}`);
+    }
+
+    const stats = fs.statSync(sourcePath);
+    if (stats.size === 0) {
+      throw new Error('Downloaded bundle file is empty. The download may have failed.');
+    }
+
     // Dynamically import adm-zip (ESM)
     const AdmZip = await import('adm-zip').then(m => m.default);
-    const zip = new AdmZip(sourcePath);
+
+    let zip;
+    try {
+      zip = new AdmZip(sourcePath);
+    } catch (zipError) {
+      throw new Error(`Invalid bundle format: ${zipError instanceof Error ? zipError.message : 'Not a valid ZIP file'}. The file may be corrupted or incomplete.`);
+    }
 
     const extractDir = path.join(app.getPath('userData'), 'AvatarBundles', avatarId, 'extracted');
-    if (!fs.existsSync(extractDir)) {
-      fs.mkdirSync(extractDir, { recursive: true });
+    if (fs.existsSync(extractDir)) {
+      fs.rmSync(extractDir, { recursive: true, force: true });
     }
+    fs.mkdirSync(extractDir, { recursive: true });
 
     zip.extractAllTo(extractDir, true);
 

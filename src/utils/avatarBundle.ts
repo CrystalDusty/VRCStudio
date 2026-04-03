@@ -22,9 +22,18 @@ export async function downloadAvatarBundle(
   }
 
   try {
-    // For now, we would need to construct the download URL from VRChat API
-    // In a real implementation, this would use the package's asset URL
-    const bundleUrl = `https://api.vrchat.cloud/file/file_${selectedPackageId}/file`;
+    // Find the selected package to get its download URL
+    const selectedPackage = avatar.unityPackages?.find(p => p.id === selectedPackageId);
+    if (!selectedPackage) {
+      return {
+        success: false,
+        error: 'Selected package not found',
+      };
+    }
+
+    // Use the package's direct download URL if available, otherwise construct it
+    const bundleUrl = selectedPackage.unityPackageUrl ||
+                      `https://api.vrchat.cloud/file/file_${selectedPackageId}/file`;
 
     const electronAPI = (window as any).electronAPI;
 
