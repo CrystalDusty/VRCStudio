@@ -2,7 +2,7 @@
  * Statistics calculation utilities for the insights dashboard
  */
 
-import type { InstanceHistoryEntry } from '../types/vrchat';
+import type { InstanceHistoryEntry } from '../stores/instanceHistoryStore';
 import { differenceInDays, differenceInHours, startOfDay, startOfWeek, startOfMonth, endOfDay } from 'date-fns';
 
 export interface SessionStats {
