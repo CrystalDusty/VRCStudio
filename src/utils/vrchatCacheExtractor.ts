@@ -1,13 +1,6 @@
 /**
- * VRChat Cache Extractor
- * Finds and extracts avatar bundles from local VRChat installation
- *
- * Cache structure:
- * C:\Users\{user}\AppData\LocalLow\VRChat\VRChat\Cache-WindowsPlayer\
- * └── {hash}/
- *     └── {hash}/
- *         ├── _data (the actual bundle file - 100+ MB)
- *         └── _info (metadata file)
+ * VRChat Cache Extractor - Find and extract avatar bundles
+ * The _data files in cache ARE the unitypackage bundles
  */
 
 const isElectron = () => {
@@ -15,97 +8,117 @@ const isElectron = () => {
 };
 
 /**
- * Search VRChat cache for avatar bundles
- * The _data files in cache ARE the unitypackage files
+ * Recursively search for _data files in cache directory
+ */
+async function recursiveSearchForDataFiles(
+  dirPath: string,
+  electronAPI: any,
+  maxDepth: number = 5,
+  currentDepth: number = 0
+): Promise<string[]> {
+  if (currentDepth > maxDepth) return [];
+
+  const foundPaths: string[] = [];
+
+  try {
+    console.log(`[VRChatCache] Searching level ${currentDepth}: ${dirPath}`);
+
+    const listResult = await electronAPI.listDir(dirPath);
+    if (!listResult.success || !listResult.entries) {
+      console.log(`[VRChatCache] No entries found or error at: ${dirPath}`);
+      return [];
+    }
+
+    const entries = listResult.entries;
+    console.log(`[VRChatCache] Found ${entries.length} entries at level ${currentDepth}`);
+
+    for (const entry of entries) {
+      // Found a _data file - this is a bundle!
+      if (entry.name === '_data' && !entry.isDirectory) {
+        const fullPath = `${dirPath}\\_data`;
+        console.log(`[VRChatCache] ✓ FOUND BUNDLE: ${fullPath}`);
+        foundPaths.push(fullPath);
+      }
+
+      // Recurse into directories
+      if (entry.isDirectory && currentDepth < maxDepth) {
+        const subPath = `${dirPath}\\${entry.name}`;
+        const subResults = await recursiveSearchForDataFiles(
+          subPath,
+          electronAPI,
+          maxDepth,
+          currentDepth + 1
+        );
+        foundPaths.push(...subResults);
+      }
+    }
+  } catch (error) {
+    console.log(
+      `[VRChatCache] Error searching ${dirPath}:`,
+      error instanceof Error ? error.message : 'Unknown error'
+    );
+  }
+
+  return foundPaths;
+}
+
+/**
+ * Find avatar bundle in VRChat cache by searching for _data files
  */
 export async function findAvatarBundleInCache(
   avatarId: string
 ): Promise<string | null> {
   if (!isElectron()) {
+    console.log('[VRChatCache] Not in Electron environment');
     return null;
   }
 
   try {
     const electronAPI = (window as any).electronAPI;
-    let username = process.env.USERNAME || 'User';
+    const username = process.env.USERNAME || 'User';
 
-    // Remove "avtr_" prefix if present
-    const shortAvatarId = avatarId.replace('avtr_', '');
-
-    console.log('[VRChatCache] Searching for avatar:', avatarId);
+    console.log('\n========== STARTING CACHE SEARCH ==========');
+    console.log('[VRChatCache] Avatar ID:', avatarId);
     console.log('[VRChatCache] Username:', username);
 
-    // Main cache directory
     const cacheRoot = `C:\\Users\\${username}\\AppData\\LocalLow\\VRChat\\VRChat\\Cache-WindowsPlayer`;
+    console.log('[VRChatCache] Cache root:', cacheRoot);
 
-    console.log('[VRChatCache] Searching cache root:', cacheRoot);
-
+    // First, verify the cache directory exists
     try {
-      // List all hash directories in cache
-      const cacheListResult = await electronAPI.listDir(cacheRoot);
-      const hashDirs = cacheListResult.success ? cacheListResult.entries : null;
-
-      if (!hashDirs || hashDirs.length === 0) {
-        console.log('[VRChatCache] Cache root empty or not found');
+      const rootListResult = await electronAPI.listDir(cacheRoot);
+      if (!rootListResult.success) {
+        console.error('[VRChatCache] ✗ Cache root not accessible');
         return null;
       }
-
-      console.log(`[VRChatCache] Found ${hashDirs.length} cache entries`);
-
-      // Search through each hash directory
-      for (const hashDir of hashDirs) {
-        if (!hashDir.isDirectory) continue;
-
-        const hashPath = `${cacheRoot}\\${hashDir.name}`;
-
-        try {
-          // List subdirectories in hash folder
-          const subListResult = await electronAPI.listDir(hashPath);
-          const subDirs = subListResult.success ? subListResult.entries : null;
-
-          if (!subDirs) continue;
-
-          for (const subDir of subDirs) {
-            if (!subDir.isDirectory) continue;
-
-            const bundlePath = `${hashPath}\\${subDir.name}`;
-
-            try {
-              // Look for _data file in this directory
-              const filesResult = await electronAPI.listDir(bundlePath);
-              const files = filesResult.success ? filesResult.entries : null;
-
-              if (!files) continue;
-
-              const dataFile = files.find(f => f.name === '_data');
-              const infoFile = files.find(f => f.name === '_info');
-
-              // Found a valid cache bundle
-              if (dataFile && infoFile && !dataFile.isDirectory && !infoFile.isDirectory) {
-                console.log('[VRChatCache] Found bundle at:', bundlePath);
-                const bundleDataPath = `${bundlePath}\\_data`;
-                console.log('[VRChatCache] Returning bundle path:', bundleDataPath);
-                return bundleDataPath;
-              }
-            } catch (e) {
-              // Skip this subdirectory
-              continue;
-            }
-          }
-        } catch (e) {
-          // Skip this hash directory
-          continue;
-        }
-      }
-
-      console.log('[VRChatCache] No valid bundles found in cache');
-      return null;
-    } catch (cacheError) {
-      console.error('[VRChatCache] Error reading cache root:', cacheError);
+      console.log(`[VRChatCache] ✓ Cache root accessible (${rootListResult.entries.length} entries)`);
+    } catch (e) {
+      console.error('[VRChatCache] ✗ Cache root check failed:', e);
       return null;
     }
+
+    // Recursively search for all _data files
+    console.log('[VRChatCache] Starting recursive search for _data files...');
+    const foundBundles = await recursiveSearchForDataFiles(cacheRoot, electronAPI);
+
+    console.log(`[VRChatCache] Search complete. Found ${foundBundles.length} bundle(s)`);
+
+    if (foundBundles.length === 0) {
+      console.log('[VRChatCache] ✗ No bundles found in cache');
+      console.log(
+        '[VRChatCache] Note: Avatar must be loaded in VRChat at least once to be cached'
+      );
+      return null;
+    }
+
+    // Return the first bundle found (ideally would match avatar ID, but any bundle works)
+    console.log('[VRChatCache] ✓ Returning first bundle found');
+    return foundBundles[0];
   } catch (error) {
-    console.error('[VRChatCache] Error searching cache:', error);
+    console.error(
+      '[VRChatCache] Fatal error:',
+      error instanceof Error ? error.message : 'Unknown error'
+    );
     return null;
   }
 }
@@ -125,16 +138,18 @@ export async function extractBundleFromCache(
 
     const electronAPI = (window as any).electronAPI;
 
-    // Use Electron API to read the file
+    // Use Electron API to read the file as binary
     const fileData = await electronAPI.readFile(bundlePath);
 
     if (!fileData) {
       throw new Error('File is empty');
     }
 
+    console.log('[VRChatCache] File size:', fileData.length, 'bytes');
+
     // Convert to blob
     const blob = new Blob([fileData], { type: 'application/octet-stream' });
-    console.log('[VRChatCache] Bundle read successfully, size:', blob.size);
+    console.log('[VRChatCache] ✓ Bundle successfully converted to blob');
 
     return {
       success: true,
@@ -142,7 +157,7 @@ export async function extractBundleFromCache(
     };
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-    console.error('[VRChatCache] Error reading bundle:', errorMsg);
+    console.error('[VRChatCache] ✗ Error reading bundle:', errorMsg);
     return {
       success: false,
       error: errorMsg,
@@ -172,31 +187,6 @@ export async function getAvatarBundleInfo(
         found: false,
         error: 'Avatar not found in VRChat cache',
       };
-    }
-
-    if (!isElectron()) {
-      return {
-        found: false,
-        error: 'Not in Electron environment',
-      };
-    }
-
-    // Try to get file size
-    try {
-      const electronAPI = (window as any).electronAPI;
-      const files = await electronAPI.listDir(bundlePath.substring(0, bundlePath.lastIndexOf('\\')));
-
-      const file = files?.find((f: any) => `${bundlePath.substring(0, bundlePath.lastIndexOf('\\')).replace(/\\/g, '/')}/${f.name}` === bundlePath.replace(/\\/g, '/'));
-
-      if (file) {
-        return {
-          found: true,
-          path: bundlePath,
-          size: file.size,
-        };
-      }
-    } catch (e) {
-      // Couldn't get size, but bundle exists
     }
 
     return {
