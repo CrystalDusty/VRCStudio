@@ -1,9 +1,10 @@
 import {
-  app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog, net,
+  app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog,
   nativeImage, Notification, nativeTheme,
 } from 'electron';
 import path from 'path';
 import fs from 'fs';
+import https from 'https';
 import tar from 'tar';
 
 let mainWindow: BrowserWindow | null = null;
@@ -272,15 +273,7 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
       return;
     }
 
-    // Use Electron's net module which respects cookies and session
-    console.log(`[Download] Using Electron net module for authenticated download`);
-    const request = net.request({
-      url,
-      method: 'GET',
-      timeout: 30000,
-    });
-
-    request.on('response', (response) => {
+    const request = https.get(url, { timeout: 30000 }, (response) => {
       console.log(`[Download] Response status: ${response.statusCode}`);
       console.log(`[Download] Content-Type: ${response.headers['content-type']}`);
 
