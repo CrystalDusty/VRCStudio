@@ -207,21 +207,11 @@ export async function downloadBundleWithFallback(
   }
   console.log('[BundleDownload] ✗ Manual selection failed:', manualResult.error);
 
-  // Method 3: API download
-  console.log('[BundleDownload] Method 3: Attempting API download...');
-  onMethodAttempt?.('downloading via authenticated API');
-  const apiResult = await downloadViaAuthenticatedAPI(packageUrl, avatar.id, onProgress);
-  if (apiResult.success && apiResult.path) {
-    console.log('[BundleDownload] ✓ Success via API');
-    return { ...apiResult, method: 'api' };
-  }
-  console.log('[BundleDownload] ✗ API failed:', apiResult.error);
-
   // All methods failed
-  console.log('[BundleDownload] ✗ All download methods failed');
+  console.log('[BundleDownload] ✗ Both download methods failed');
   return {
     success: false,
-    error: 'Could not download bundle. Tried: cache, manual file, API. All failed.',
+    error: 'Bundle not found in VRChat cache. Please download the avatar bundle manually from vrchat.com and select it using the file picker.',
     method: 'none',
   };
 }
