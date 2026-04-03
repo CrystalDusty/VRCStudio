@@ -8,6 +8,7 @@ import { useFriendStore } from '../stores/friendStore';
 import { useFeedStore } from '../stores/feedStore';
 import { useInstanceHistoryStore } from '../stores/instanceHistoryStore';
 import UserAvatar from '../components/common/UserAvatar';
+import FriendEventDetail from '../components/FriendEventDetail';
 import EmptyState from '../components/common/EmptyState';
 import { getBestAvatarUrl } from '../utils/avatar';
 import type { VRCUser } from '../types/vrchat';
@@ -27,6 +28,7 @@ export default function FriendAnalyticsPage() {
   const { history } = useInstanceHistoryStore();
   const [expandedSection, setExpandedSection] = useState<string | null>('top-friends');
   const [sortBy, setSortBy] = useState<'events' | 'online' | 'recent'>('events');
+  const [selectedFriendId, setSelectedFriendId] = useState<string | null>(null);
 
   const allFriends = useMemo(() => [...onlineFriends, ...offlineFriends], [onlineFriends, offlineFriends]);
   const friendMap = useMemo(() => {
@@ -242,7 +244,11 @@ export default function FriendAnalyticsPage() {
                   const barWidth = (stat.eventCount / maxEvents) * 100;
 
                   return (
-                    <div key={stat.user.id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-surface-800/20 transition-colors">
+                    <button
+                      key={stat.user.id}
+                      onClick={() => setSelectedFriendId(stat.user.id)}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-surface-800/30 transition-colors text-left border-b border-surface-800/10 last:border-0"
+                    >
                       <span className="text-xs text-surface-600 w-5 text-right tabular-nums font-semibold">
                         {i + 1}
                       </span>
@@ -283,7 +289,7 @@ export default function FriendAnalyticsPage() {
                           {formatDistanceToNow(stat.lastSeen, { addSuffix: true })}
                         </div>
                       )}
-                    </div>
+                    </button>
                   );
                 })}
               </div>
@@ -408,6 +414,15 @@ export default function FriendAnalyticsPage() {
               })}
           </div>
         </div>
+      )}
+
+      {/* Friend Event Detail Panel */}
+      {selectedFriendId && (
+        <FriendEventDetail
+          friend={allFriends.find(f => f.id === selectedFriendId)!}
+          events={events}
+          onClose={() => setSelectedFriendId(null)}
+        />
       )}
     </div>
   );

@@ -1,8 +1,10 @@
 import { useState, useRef, useCallback } from 'react';
-import { Camera, Upload, FolderOpen, X, Globe, Calendar, Printer, Download, Type } from 'lucide-react';
+import { Camera, Upload, FolderOpen, X, Globe, Calendar, Printer, Download, Type, Paintbrush, Undo, Redo, RotateCcw, Palette } from 'lucide-react';
 import { format } from 'date-fns';
 import EmptyState from '../components/common/EmptyState';
 import { useAuthStore } from '../stores/authStore';
+import { PRESET_FILTERS, applyAdjustments, applyFilters, drawBorder, type CanvasEditState } from '../utils/canvasFilters';
+import { PRESET_THEMES, getThemeNames, applyThemeToCanvas, getFontString, type PrintTheme } from '../utils/printThemes';
 
 interface ScreenshotEntry {
   id: string;
@@ -64,6 +66,9 @@ function PhotoPrintCreator({
   const [settings, setSettings] = useState<PrintSettings>(defaultPrintSettings);
   const [previewUrl, setPreviewUrl] = useState<string>('');
   const [rendering, setRendering] = useState(false);
+  const [selectedTheme, setSelectedTheme] = useState<string>('classic');
+  const [customizing, setCustomizing] = useState(false);
+  const [currentTheme, setCurrentTheme] = useState<PrintTheme>(PRESET_THEMES.classic);
 
   const renderPrint = useCallback(async () => {
     const canvas = canvasRef.current;
@@ -271,9 +276,119 @@ function PhotoPrintCreator({
             <button onClick={onClose} className="btn-ghost p-1"><X size={14} /></button>
           </div>
 
-          {/* Style */}
+          {/* Theme Selection */}
           <div>
-            <label className="text-xs text-surface-500 block mb-1.5">Style</label>
+            <label className="text-xs text-surface-500 block mb-1.5">Preset Themes</label>
+            <div className="grid grid-cols-2 gap-1.5">
+              {getThemeNames().map(({ id, name }) => (
+                <button
+                  key={id}
+                  onClick={() => {
+                    setSelectedTheme(id);
+                    setCurrentTheme(PRESET_THEMES[id]);
+                    setCustomizing(false);
+                  }}
+                  className={`px-2 py-1.5 rounded text-xs font-medium transition-colors ${
+                    selectedTheme === id && !customizing
+                      ? 'bg-accent-600 text-white'
+                      : 'bg-surface-800 text-surface-400 hover:bg-surface-700'
+                  }`}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Customize Theme */}
+          <div>
+            <button
+              onClick={() => setCustomizing(!customizing)}
+              className="w-full btn-secondary text-xs flex items-center justify-center gap-1.5"
+            >
+              <Palette size={12} /> {customizing ? 'Done Customizing' : 'Customize Theme'}
+            </button>
+          </div>
+
+          {customizing && (
+            <div className="space-y-2">
+              <div>
+                <label className="text-xs text-surface-500 block mb-1">Background Color</label>
+                <input
+                  type="color"
+                  value={currentTheme.backgroundColor === 'transparent' ? '#000000' : currentTheme.backgroundColor}
+                  onChange={e => setCurrentTheme(t => ({ ...t, backgroundColor: e.target.value }))}
+                  className="w-full h-6 rounded cursor-pointer"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-surface-500 block mb-1">Border Width</label>
+                <input
+                  type="range"
+                  min={0}
+                  max={10}
+                  value={currentTheme.borderWidth}
+                  onChange={e => setCurrentTheme(t => ({ ...t, borderWidth: Number(e.target.value) }))}
+                  className="w-full accent-accent-500"
+                />
+                <div className="text-[10px] text-surface-600 mt-0.5">{currentTheme.borderWidth}px</div>
+              </div>
+
+              <div>
+                <label className="text-xs text-surface-500 block mb-1">Border Color</label>
+                <input
+                  type="color"
+                  value={currentTheme.borderColor}
+                  onChange={e => setCurrentTheme(t => ({ ...t, borderColor: e.target.value }))}
+                  className="w-full h-6 rounded cursor-pointer"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-surface-500 block mb-1">Border Radius</label>
+                <input
+                  type="range"
+                  min={0}
+                  max={20}
+                  value={currentTheme.borderRadius}
+                  onChange={e => setCurrentTheme(t => ({ ...t, borderRadius: Number(e.target.value) }))}
+                  className="w-full accent-accent-500"
+                />
+                <div className="text-[10px] text-surface-600 mt-0.5">{currentTheme.borderRadius}px</div>
+              </div>
+
+              <div>
+                <label className="text-xs text-surface-500 block mb-1">Text Color</label>
+                <input
+                  type="color"
+                  value={currentTheme.usernameStyle.color}
+                  onChange={e => setCurrentTheme(t => ({
+                    ...t,
+                    usernameStyle: { ...t.usernameStyle, color: e.target.value },
+                  }))}
+                  className="w-full h-6 rounded cursor-pointer"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-surface-500 block mb-1">Padding</label>
+                <input
+                  type="range"
+                  min={0}
+                  max={40}
+                  value={currentTheme.padding}
+                  onChange={e => setCurrentTheme(t => ({ ...t, padding: Number(e.target.value) }))}
+                  className="w-full accent-accent-500"
+                />
+                <div className="text-[10px] text-surface-600 mt-0.5">{currentTheme.padding}px</div>
+              </div>
+            </div>
+          )}
+
+          {/* Original Style */}
+          <div>
+            <label className="text-xs text-surface-500 block mb-1.5">Original Layout</label>
             <div className="grid grid-cols-2 gap-1.5">
               {(['classic', 'polaroid', 'strip', 'minimal'] as const).map(style => (
                 <button
@@ -398,6 +513,15 @@ export default function ScreenshotsPage() {
   const [editingWorld, setEditingWorld] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const [meta, setMeta] = useState(loadMeta());
+  const [isPhotoEditing, setIsPhotoEditing] = useState(false);
+  const [editState, setEditState] = useState<CanvasEditState>({
+    brightness: 100,
+    contrast: 100,
+    saturation: 100,
+    filters: { grayscale: 0, sepia: 0, blur: 0, temperature: 0 },
+    borderStyle: { width: 0, color: '#ffffff', style: 'solid', radius: 0 },
+  });
+  const photoCanvasRef = useRef<HTMLCanvasElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const processFiles = useCallback(async (files: FileList | File[]) => {
@@ -568,17 +692,42 @@ export default function ScreenshotsPage() {
       {selected && !printTarget && (
         <div
           className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex items-center justify-center"
-          onClick={() => { setSelected(null); setIsEditing(false); }}
+          onClick={() => { setSelected(null); setIsEditing(false); setIsPhotoEditing(false); }}
         >
-          <div className="relative max-w-5xl w-full mx-4 flex gap-4 items-start" onClick={e => e.stopPropagation()}>
-            {/* Image */}
-            <div className="flex-1">
-              <img src={selected.src} alt="" className="w-full rounded-xl shadow-2xl" />
+          <div className="relative max-w-6xl w-full mx-4 flex gap-4 items-start max-h-[90vh]" onClick={e => e.stopPropagation()}>
+            {/* Image / Editor */}
+            <div className="flex-1 flex items-center justify-center overflow-auto">
+              {isPhotoEditing ? (
+                <div className="flex flex-col gap-3 w-full">
+                  <canvas ref={photoCanvasRef} className="w-full rounded-xl shadow-2xl" />
+                  <div className="flex gap-2 justify-center">
+                    <button className="btn-secondary text-xs flex items-center gap-1">
+                      <Undo size={12} /> Undo
+                    </button>
+                    <button className="btn-secondary text-xs flex items-center gap-1">
+                      <Redo size={12} /> Redo
+                    </button>
+                    <button
+                      onClick={() => setIsPhotoEditing(false)}
+                      className="btn-primary text-xs flex items-center gap-1"
+                    >
+                      Done Editing
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <img src={selected.src} alt="" className="w-full rounded-xl shadow-2xl" />
+              )}
             </div>
 
             {/* Info panel */}
-            <div className="w-64 flex-shrink-0 glass-panel p-4 space-y-3">
-              <h3 className="text-sm font-semibold truncate">{selected.name}</h3>
+            <div className="w-72 flex-shrink-0 glass-panel p-4 space-y-3 overflow-y-auto max-h-full">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold truncate flex-1">{selected.name}</h3>
+                <button onClick={() => { setSelected(null); setIsEditing(false); setIsPhotoEditing(false); }} className="btn-ghost p-1">
+                  <X size={14} />
+                </button>
+              </div>
               <div className="text-xs text-surface-400 space-y-1">
                 <div className="flex items-center gap-1.5">
                   <Calendar size={12} />
@@ -587,7 +736,83 @@ export default function ScreenshotsPage() {
                 <div>{(selected.size / 1024).toFixed(0)} KB</div>
               </div>
 
-              {isEditing ? (
+              {isPhotoEditing ? (
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs text-surface-500 block mb-1.5">Brightness</label>
+                    <input
+                      type="range"
+                      min={0}
+                      max={200}
+                      value={editState.brightness}
+                      onChange={e => setEditState(prev => ({ ...prev, brightness: Number(e.target.value) }))}
+                      className="w-full accent-accent-500 text-xs"
+                    />
+                    <div className="text-[10px] text-surface-600 mt-1">{editState.brightness}%</div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-surface-500 block mb-1.5">Contrast</label>
+                    <input
+                      type="range"
+                      min={0}
+                      max={200}
+                      value={editState.contrast}
+                      onChange={e => setEditState(prev => ({ ...prev, contrast: Number(e.target.value) }))}
+                      className="w-full accent-accent-500 text-xs"
+                    />
+                    <div className="text-[10px] text-surface-600 mt-1">{editState.contrast}%</div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-surface-500 block mb-1.5">Saturation</label>
+                    <input
+                      type="range"
+                      min={0}
+                      max={200}
+                      value={editState.saturation}
+                      onChange={e => setEditState(prev => ({ ...prev, saturation: Number(e.target.value) }))}
+                      className="w-full accent-accent-500 text-xs"
+                    />
+                    <div className="text-[10px] text-surface-600 mt-1">{editState.saturation}%</div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-surface-500 block mb-1.5">Filters</label>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {Object.entries(PRESET_FILTERS).map(([key, filter]) => (
+                        <button
+                          key={key}
+                          onClick={() => setEditState(prev => ({
+                            ...prev,
+                            filters: filter.state,
+                          }))}
+                          className="px-2 py-1 rounded text-[10px] font-medium bg-surface-800 text-surface-400 hover:bg-surface-700 transition-colors"
+                          title={filter.name}
+                        >
+                          {filter.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-surface-500 block mb-1.5">Border</label>
+                    <input
+                      type="range"
+                      min={0}
+                      max={20}
+                      value={editState.borderStyle.width}
+                      onChange={e => setEditState(prev => ({
+                        ...prev,
+                        borderStyle: { ...prev.borderStyle, width: Number(e.target.value) },
+                      }))}
+                      className="w-full accent-accent-500 text-xs"
+                    />
+                    <div className="text-[10px] text-surface-600 mt-1">{editState.borderStyle.width}px</div>
+                  </div>
+                </div>
+              ) : isEditing ? (
                 <div className="space-y-2">
                   <input
                     type="text"
@@ -625,19 +850,24 @@ export default function ScreenshotsPage() {
                   <button onClick={() => openEdit(selected)} className="btn-secondary text-xs w-full">
                     {selected.worldName || selected.notes ? 'Edit Info' : 'Add World / Notes'}
                   </button>
+
+                  <button
+                    onClick={() => setIsPhotoEditing(true)}
+                    className="btn-secondary text-xs w-full flex items-center justify-center gap-1.5"
+                  >
+                    <Paintbrush size={12} /> Photo Editor
+                  </button>
                 </>
               )}
 
-              <button
-                onClick={() => setPrintTarget(selected)}
-                className="btn-primary text-xs w-full flex items-center justify-center gap-1.5"
-              >
-                <Printer size={12} /> Create Print
-              </button>
-
-              <button onClick={() => { setSelected(null); setIsEditing(false); }} className="btn-ghost text-xs w-full">
-                Close
-              </button>
+              {!isPhotoEditing && (
+                <button
+                  onClick={() => setPrintTarget(selected)}
+                  className="btn-primary text-xs w-full flex items-center justify-center gap-1.5"
+                >
+                  <Printer size={12} /> Create Print
+                </button>
+              )}
             </div>
           </div>
         </div>
