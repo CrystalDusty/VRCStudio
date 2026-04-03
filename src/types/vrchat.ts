@@ -79,6 +79,7 @@ export interface VRCUnityPackage {
   unitySortNumber: number;
   assetVersion: number;
   created_at: string;
+  unityPackageUrl?: string;
 }
 
 export interface VRCAvatar {

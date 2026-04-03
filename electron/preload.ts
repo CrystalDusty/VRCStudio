@@ -20,6 +20,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getVRChatLogPath: () => ipcRenderer.invoke('fs:getVRChatLogPath'),
   getVRChatScreenshotPath: () => ipcRenderer.invoke('fs:getVRChatScreenshotPath'),
 
+  // Avatar bundles
+  getAvatarBundlePath: () => ipcRenderer.invoke('fs:getAvatarBundlePath'),
+  downloadFile: (url: string, avatarId: string, onProgress?: (current: number, total: number) => void) => {
+    if (onProgress) {
+      ipcRenderer.on('fs:downloadFile:progress', (_event, current: number, total: number) => {
+        onProgress(current, total);
+      });
+    }
+    return ipcRenderer.invoke('fs:downloadFile', url, avatarId);
+  },
+  extractBundle: (sourcePath: string, avatarId: string) => ipcRenderer.invoke('fs:extractBundle', sourcePath, avatarId),
+  openBundleFolder: (folderPath: string) => ipcRenderer.invoke('fs:openBundleFolder', folderPath),
+  deleteBundleData: (avatarId: string) => ipcRenderer.invoke('fs:deleteBundleData', avatarId),
+
   // Notifications
   sendNotification: (opts: { title: string; body: string; icon?: string }) =>
     ipcRenderer.invoke('notification:send', opts),
