@@ -30,7 +30,7 @@ function saveMeta(meta: Record<string, Partial<ScreenshotEntry>>) {
 
 // --- Photo Print Creator ---
 
-type BorderType = 'none' | 'simple' | 'thick' | 'shadow' | 'neon' | 'grunge' | 'pixel' | 'hearts' | 'stars' | 'glitch' | 'fire' | 'rainbow';
+type BorderType = 'none' | 'simple' | 'thick' | 'shadow' | 'neon' | 'grunge' | 'pixel' | 'hearts' | 'stars' | 'glitch' | 'fire' | 'rainbow' | 'metallic' | 'soft-glow' | 'film-strip' | 'neon-tube' | 'hologram' | 'retro-pixel' | 'watercolor' | 'chain-link';
 
 interface PrintSettings {
   showUsername: boolean;
@@ -42,6 +42,8 @@ interface PrintSettings {
   style: 'classic' | 'polaroid' | 'minimal' | 'strip';
   fontSize: number;
   border: BorderType;
+  printSize: 'fit' | '2048' | '1024' | 'custom';
+  customPrintSize?: { width: number; height: number };
 }
 
 const defaultPrintSettings: PrintSettings = {
@@ -54,6 +56,7 @@ const defaultPrintSettings: PrintSettings = {
   style: 'classic',
   fontSize: 24,
   border: 'none',
+  printSize: 'fit',
 };
 
 function drawBorder(ctx: CanvasRenderingContext2D, w: number, h: number, border: BorderType) {
@@ -200,6 +203,127 @@ function drawBorder(ctx: CanvasRenderingContext2D, w: number, h: number, border:
       const offset = i * bw + bw / 2;
       ctx.strokeRect(offset, offset, w - offset * 2, h - offset * 2);
     }
+  } else if (border === 'metallic') {
+    // Chrome/steel gradient with beveled edges
+    const grad = ctx.createLinearGradient(0, 0, w, h);
+    grad.addColorStop(0, '#e0e0e0');
+    grad.addColorStop(0.5, '#ffffff');
+    grad.addColorStop(1, '#888888');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, 10);
+    ctx.fillRect(0, h - 10, w, 10);
+    ctx.fillRect(0, 10, 10, h - 20);
+    ctx.fillRect(w - 10, 10, 10, h - 20);
+    ctx.strokeStyle = '#333333';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(4, 4, w - 8, h - 8);
+  } else if (border === 'soft-glow') {
+    // Radial gradient glow from edges
+    ctx.fillStyle = 'rgba(255, 200, 100, 0.1)';
+    for (let i = 40; i > 0; i -= 5) {
+      ctx.globalAlpha = (40 - i) / 40 * 0.4;
+      ctx.fillRect(i, i, w - i * 2, h - i * 2);
+    }
+    ctx.globalAlpha = 1;
+  } else if (border === 'film-strip') {
+    // Movie filmstrip perforations
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#333333';
+    ctx.fillRect(20, 20, w - 40, h - 40);
+    ctx.fillStyle = '#000000';
+    const perfSize = 12;
+    const perfSpacing = 30;
+    for (let y = 40; y < h - 40; y += perfSpacing) {
+      ctx.fillRect(10, y, perfSize, perfSize);
+      ctx.fillRect(w - 10 - perfSize, y, perfSize, perfSize);
+    }
+  } else if (border === 'neon-tube') {
+    // Thicker neon glow with multiple layers
+    ctx.shadowColor = '#00ffff';
+    ctx.shadowBlur = 20;
+    ctx.strokeStyle = '#00ffff';
+    ctx.lineWidth = 6;
+    ctx.strokeRect(8, 8, w - 16, h - 16);
+    ctx.shadowColor = '#ff00ff';
+    ctx.shadowBlur = 25;
+    ctx.strokeStyle = '#ff00ff';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(14, 14, w - 28, h - 28);
+    ctx.shadowBlur = 0;
+  } else if (border === 'hologram') {
+    // Sci-fi hologram with color shift and scan lines
+    const hgrad = ctx.createLinearGradient(0, 0, w, h);
+    hgrad.addColorStop(0, 'rgba(0, 255, 200, 0.6)');
+    hgrad.addColorStop(0.5, 'rgba(100, 200, 255, 0.4)');
+    hgrad.addColorStop(1, 'rgba(200, 100, 255, 0.6)');
+    ctx.strokeStyle = hgrad;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(10, 10, w - 20, h - 20);
+    ctx.strokeStyle = 'rgba(0, 255, 200, 0.3)';
+    for (let y = 10; y < h; y += 8) {
+      ctx.fillRect(10, y, w - 20, 1);
+    }
+  } else if (border === 'retro-pixel') {
+    // Larger pixel blocks for 8-bit retro look
+    ctx.fillStyle = '#ff1493';
+    const pxSize = 16;
+    const colors = ['#ff1493', '#00ffff', '#ffff00', '#00ff00', '#ff6600', '#9933ff'];
+    let colorIdx = 0;
+    for (let x = 0; x < w; x += pxSize) {
+      ctx.fillStyle = colors[colorIdx % colors.length];
+      ctx.fillRect(x, 0, pxSize, pxSize);
+      ctx.fillRect(x, h - pxSize, pxSize, pxSize);
+      colorIdx++;
+    }
+    colorIdx = 0;
+    for (let y = pxSize; y < h - pxSize; y += pxSize) {
+      ctx.fillStyle = colors[colorIdx % colors.length];
+      ctx.fillRect(0, y, pxSize, pxSize);
+      ctx.fillRect(w - pxSize, y, pxSize, pxSize);
+      colorIdx++;
+    }
+  } else if (border === 'watercolor') {
+    // Organic watercolor brush strokes
+    ctx.fillStyle = 'rgba(100, 150, 200, 0.4)';
+    for (let i = 0; i < 15; i++) {
+      const x = Math.random() * w;
+      const y = Math.random() * (h * 0.2);
+      const size = 20 + Math.random() * 40;
+      ctx.beginPath();
+      ctx.arc(x, y, size, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillRect(x, h - y - size, size, size);
+    }
+    ctx.fillStyle = 'rgba(150, 100, 150, 0.3)';
+    for (let x = 0; x < w; x += 60) {
+      ctx.fillRect(x, 0, 40, 15);
+      ctx.fillRect(x, h - 15, 40, 15);
+    }
+  } else if (border === 'chain-link') {
+    // Decorative linked circles pattern
+    ctx.strokeStyle = '#d4af37';
+    ctx.lineWidth = 3;
+    const linkSize = 25;
+    const linkSpacing = 45;
+    // Top and bottom chains
+    for (let x = 25; x < w; x += linkSpacing) {
+      ctx.beginPath();
+      ctx.arc(x, 20, linkSize / 2, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x, h - 20, linkSize / 2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // Left and right chains
+    for (let y = 50; y < h - 50; y += linkSpacing) {
+      ctx.beginPath();
+      ctx.arc(20, y, linkSize / 2, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(w - 20, y, linkSize / 2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
 
   ctx.restore();
@@ -218,6 +342,24 @@ function PhotoPrintCreator({
   const [previewUrl, setPreviewUrl] = useState<string>('');
   const [rendering, setRendering] = useState(false);
 
+  // Helper to calculate target canvas size based on print settings
+  const getTargetCanvasSize = (imgWidth: number, imgHeight: number): { w: number; h: number; scale: number } => {
+    if (settings.printSize === '2048') {
+      const maxDim = 2048;
+      const scale = Math.min(maxDim / imgWidth, maxDim / imgHeight);
+      return { w: 2048, h: 2048, scale };
+    } else if (settings.printSize === '1024') {
+      const maxDim = 1024;
+      const scale = Math.min(maxDim / imgWidth, maxDim / imgHeight);
+      return { w: 1024, h: 1024, scale };
+    } else if (settings.printSize === 'custom' && settings.customPrintSize) {
+      const scale = Math.min(settings.customPrintSize.width / imgWidth, settings.customPrintSize.height / imgHeight);
+      return { w: settings.customPrintSize.width, h: settings.customPrintSize.height, scale };
+    }
+    // 'fit' mode: calculate based on style
+    return { w: 0, h: 0, scale: 1 };
+  };
+
   const renderPrint = useCallback(async () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -233,7 +375,36 @@ function PhotoPrintCreator({
     });
 
     const ctx = canvas.getContext('2d')!;
+    const targetSize = getTargetCanvasSize(img.width, img.height);
+    const isFixedSize = settings.printSize !== 'fit';
 
+    if (isFixedSize) {
+      // Fixed size mode: center image in canvas
+      canvas.width = targetSize.w;
+      canvas.height = targetSize.h;
+
+      const scaledImgWidth = img.width * targetSize.scale;
+      const scaledImgHeight = img.height * targetSize.scale;
+      const offsetX = (canvas.width - scaledImgWidth) / 2;
+      const offsetY = (canvas.height - scaledImgHeight) / 2;
+
+      // Draw background
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Draw scaled image
+      ctx.drawImage(img, offsetX, offsetY, scaledImgWidth, scaledImgHeight);
+
+      // Draw border on fixed canvas
+      drawBorder(ctx, canvas.width, canvas.height, settings.border);
+
+      // TODO: Add text overlay for fixed size
+      setPreviewUrl(canvas.toDataURL('image/png'));
+      setRendering(false);
+      return;
+    }
+
+    // Original fit mode for different styles
     if (settings.style === 'polaroid') {
       const padding = 40;
       const bottomPadding = 120;
@@ -520,21 +691,65 @@ function PhotoPrintCreator({
             />
           </div>
 
-          {/* Border */}
+          {/* Print Size */}
           <div>
-            <label className="text-xs text-surface-500 block mb-1.5">Border</label>
-            <div className="grid grid-cols-3 gap-1">
-              {(['none', 'simple', 'thick', 'shadow', 'neon', 'grunge', 'pixel', 'hearts', 'stars', 'glitch', 'fire', 'rainbow'] as const).map(border => (
+            <label className="text-xs text-surface-500 block mb-1.5">Print Size</label>
+            <div className="grid grid-cols-2 gap-1">
+              {([
+                { key: 'fit' as const, label: 'Fit to Image' },
+                { key: '2048' as const, label: '2048x2048' },
+                { key: '1024' as const, label: '1024x1024' },
+                { key: 'custom' as const, label: 'Custom' },
+              ]).map(({ key, label }) => (
                 <button
-                  key={border}
-                  onClick={() => setSettings(s => ({ ...s, border }))}
-                  className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${
-                    settings.border === border
+                  key={key}
+                  onClick={() => setSettings(s => ({ ...s, printSize: key }))}
+                  className={`px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${
+                    settings.printSize === key
                       ? 'bg-accent-600 text-white'
                       : 'bg-surface-800 text-surface-400 hover:bg-surface-700'
                   }`}
                 >
-                  {border.charAt(0).toUpperCase() + border.slice(1)}
+                  {label}
+                </button>
+              ))}
+            </div>
+            {settings.printSize === 'custom' && (
+              <div className="mt-2 grid grid-cols-2 gap-1.5">
+                <input
+                  type="number"
+                  placeholder="Width"
+                  defaultValue={settings.customPrintSize?.width || 2048}
+                  onChange={e => setSettings(s => ({ ...s, customPrintSize: { width: Number(e.target.value), height: s.customPrintSize?.height || 2048 } }))}
+                  className="input-field text-xs"
+                />
+                <input
+                  type="number"
+                  placeholder="Height"
+                  defaultValue={settings.customPrintSize?.height || 2048}
+                  onChange={e => setSettings(s => ({ ...s, customPrintSize: { width: s.customPrintSize?.width || 2048, height: Number(e.target.value) } }))}
+                  className="input-field text-xs"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Border */}
+          <div>
+            <label className="text-xs text-surface-500 block mb-1.5">Border</label>
+            <div className="grid grid-cols-4 gap-1">
+              {(['none', 'simple', 'thick', 'shadow', 'neon', 'grunge', 'pixel', 'hearts', 'stars', 'glitch', 'fire', 'rainbow', 'metallic', 'soft-glow', 'film-strip', 'neon-tube', 'hologram', 'retro-pixel', 'watercolor', 'chain-link'] as const).map(border => (
+                <button
+                  key={border}
+                  onClick={() => setSettings(s => ({ ...s, border }))}
+                  className={`px-2 py-1 rounded text-[9px] font-medium transition-colors ${
+                    settings.border === border
+                      ? 'bg-accent-600 text-white'
+                      : 'bg-surface-800 text-surface-400 hover:bg-surface-700'
+                  }`}
+                  title={border}
+                >
+                  {border.replace('-', ' ').split(' ').map((w, i) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ').substring(0, 8)}
                 </button>
               ))}
             </div>
