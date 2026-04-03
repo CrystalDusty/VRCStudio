@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import api, { APIError } from '../api/vrchat';
+import { savePersistentData, loadPersistentData } from '../utils/persistentStorage';
 import type { VRCCurrentUser } from '../types/vrchat';
 
 interface AuthState {
@@ -19,6 +20,7 @@ interface AuthState {
 }
 
 const STORAGE_KEY = 'vrcstudio_auth';
+const PERSISTENT_USER_KEY = 'current_user'; // Survives app updates
 
 function saveAuth(auth: string, tfa?: string) {
   try {
@@ -38,6 +40,20 @@ function loadAuth(): { auth: string; tfa?: string } | null {
 
 function clearStoredAuth() {
   localStorage.removeItem(STORAGE_KEY);
+}
+
+// Save user to persistent storage (survives app updates)
+async function persistUser(user: VRCCurrentUser | null) {
+  if (user) {
+    await savePersistentData(PERSISTENT_USER_KEY, user);
+  } else {
+    await savePersistentData(PERSISTENT_USER_KEY, null);
+  }
+}
+
+// Load user from persistent storage
+async function loadPersistedUser(): Promise<VRCCurrentUser | null> {
+  return loadPersistentData(PERSISTENT_USER_KEY);
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -75,6 +91,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       const cookies = api.getAuthCookies();
       saveAuth(cookies.auth, cookies.twoFactorAuth);
+      persistUser(result); // Save to persistent storage
       set({ user: result, isLoggedIn: true, isLoading: false, needs2FA: false });
     } catch (err) {
       const msg = err instanceof APIError
@@ -92,6 +109,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const user = await api.getCurrentUser();
       const cookies = api.getAuthCookies();
       saveAuth(cookies.auth, cookies.twoFactorAuth);
+      persistUser(user); // Save to persistent storage
       set({ user, isLoggedIn: true, isLoading: false, needs2FA: false });
     } catch (err) {
       const msg = err instanceof APIError ? err.message : 'Invalid 2FA code.';
@@ -101,7 +119,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   restoreSession: async () => {
     const stored = loadAuth();
-    if (!stored?.auth) return;
+    if (!stored?.auth) {
+      // Try to load from persistent storage as fallback
+      const persistedUser = await loadPersistedUser();
+      if (persistedUser) {
+        set({ user: persistedUser, isLoggedIn: true });
+      }
+      return;
+    }
 
     set({ isLoading: true });
     api.setAuth(stored.auth, stored.tfa);
@@ -110,6 +135,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const user = await api.getCurrentUser();
       const cookies = api.getAuthCookies();
       saveAuth(cookies.auth, cookies.twoFactorAuth);
+      persistUser(user); // Save to persistent storage
       set({ user, isLoggedIn: true, isLoading: false });
     } catch {
       clearStoredAuth();
@@ -121,6 +147,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   refreshUser: async () => {
     try {
       const user = await api.getCurrentUser();
+      persistUser(user); // Update persistent storage
       set({ user });
     } catch {}
   },
@@ -131,6 +158,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch {} finally {
       clearStoredAuth();
       api.clearAuth();
+      persistUser(null); // Clear from persistent storage
       set({ user: null, isLoggedIn: false, needs2FA: false, error: null });
     }
   },

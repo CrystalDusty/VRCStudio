@@ -23,6 +23,7 @@ import UserAvatar from '../components/common/UserAvatar';
 import api from '../api/vrchat';
 import type { FeedEvent, UserStatus } from '../types/vrchat';
 import { getBestAvatarUrl } from '../utils/avatar';
+import WorldAnalyticsPanel from '../components/WorldAnalyticsPanel';
 
 const eventIcons: Record<FeedEvent['type'], typeof Activity> = {
   friend_online: UserPlus,
@@ -314,6 +315,18 @@ export default function Dashboard() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* World Analytics */}
+      <div className="glass-panel-solid p-4">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-surface-300 flex items-center gap-2">
+            <Globe size={14} />
+            World Activity
+          </h2>
+          <span className="text-xs text-surface-600">Auto-tracked</span>
+        </div>
+        <WorldAnalyticsPanel limit={8} />
       </div>
     </div>
   );

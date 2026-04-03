@@ -11,6 +11,7 @@ import { useThemeStore } from '../../stores/themeStore';
 import StatusPresetPanel from '../StatusPresetPanel';
 import api from '../../api/vrchat';
 import { getBestAvatarUrl } from '../../utils/avatar';
+import { hasVRCPlus } from '../../utils/avatarImage';
 
 const mainNavItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -112,7 +113,14 @@ export default function Sidebar() {
             <div className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ring-2 ring-surface-900 ${statusDotColors[user?.status || 'offline']}`} />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-semibold truncate text-surface-100">{user?.displayName}</div>
+            <div className="flex items-center gap-1">
+              <div className="text-sm font-semibold truncate text-surface-100">{user?.displayName}</div>
+              {hasVRCPlus(user) && (
+                <span className="flex-shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400 whitespace-nowrap">
+                  VRC+
+                </span>
+              )}
+            </div>
             <div className="text-[11px] text-surface-500 truncate">
               {statusLabels[user?.status || 'offline']}
             </div>
