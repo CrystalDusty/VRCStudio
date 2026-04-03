@@ -60,42 +60,48 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
       return;
     }
 
+    // Skip authentication attempts - go straight to file picker which actually works
     setIsDownloading(true);
     setError(null);
     setDownloadProgress(0);
 
-    // Get the package URL
-    const selectedPackage = avatar.unityPackages?.find(p => p.id === selectedPackageId);
-    const packageUrl = selectedPackage?.unityPackageUrl ||
-      `https://api.vrchat.cloud/file/file_${selectedPackageId}/file`;
+    console.log('[AvatarPreview] Using file picker for bundle download');
 
-    // Use the fallback method which tries: cache, authenticated, file picker
-    const result = await downloadBundleWithFallback(
-      avatar,
-      packageUrl,
-      selectedPackageId,
-      (current, total) => {
-        setDownloadProgress(Math.round((current / total) * 100));
-      },
-      (method) => {
-        console.log(`[AvatarPreview] Attempting: ${method}`);
+    // Open file picker for user to select manually downloaded bundle
+    try {
+      const result = await (window as any).electronAPI.openFileDialog({
+        title: `Select ${avatar.name} Avatar Bundle`,
+        message: 'Select the .unitypackage file you downloaded from vrchat.com',
+        filters: [
+          { name: 'Unity Packages', extensions: ['unitypackage'] },
+          { name: 'ZIP Archives', extensions: ['zip'] },
+          { name: 'All Files', extensions: ['*'] },
+        ],
+      });
+
+      if (result.canceled) {
+        setIsDownloading(false);
+        return;
       }
-    );
 
-    if (result.success && result.path) {
+      // User selected a file
+      const bundlePath = result.filePaths[0];
+      console.log('[AvatarPreview] User selected:', bundlePath);
+
       // Extract the bundle
       setIsExtracting(true);
-      const extractResult = await extractAvatarBundle(result.path, avatar.id);
+      const extractResult = await extractAvatarBundle(bundlePath, avatar.id);
 
       if (extractResult.success && extractResult.extractedPath) {
         // Get bundle info for store
+        const selectedPackage = avatar.unityPackages?.find(p => p.id === selectedPackageId);
         if (selectedPackage) {
           addBundleToStore(
             avatar.id,
             avatar.name,
             selectedPackage.platform,
-            result.path,
-            0, // We don't have the file size readily available
+            bundlePath,
+            0,
             selectedPackage.unityVersion,
             selectedPackageId
           );
@@ -103,14 +109,15 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
         setExtractedPath(extractResult.extractedPath);
         setIsExtracted(true);
         setError(null);
-        console.log(`[AvatarPreview] Successfully downloaded and extracted via ${result.method}`);
+        console.log(`[AvatarPreview] Successfully extracted`);
       } else {
         setError(extractResult.error || 'Failed to extract bundle');
       }
 
       setIsExtracting(false);
-    } else {
-      setError(result.error || 'Failed to download bundle via any method');
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      setError(`Failed to select file: ${errorMsg}`);
     }
 
     setIsDownloading(false);
