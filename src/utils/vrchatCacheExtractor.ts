@@ -138,18 +138,29 @@ export async function extractBundleFromCache(
 
     const electronAPI = (window as any).electronAPI;
 
-    // Use Electron API to read the file as binary
-    const fileData = await electronAPI.readFile(bundlePath);
+    // Use Electron API to read the file as binary (returned as base64)
+    const readResult = await electronAPI.readFile(bundlePath);
 
-    if (!fileData) {
+    if (!readResult.success) {
+      throw new Error(readResult.error || 'Failed to read file');
+    }
+
+    if (!readResult.content) {
       throw new Error('File is empty');
     }
 
-    console.log('[VRChatCache] File size:', fileData.length, 'bytes');
+    console.log('[VRChatCache] File read successfully, size:', readResult.size, 'bytes');
 
-    // Convert to blob
-    const blob = new Blob([fileData], { type: 'application/octet-stream' });
-    console.log('[VRChatCache] ✓ Bundle successfully converted to blob');
+    // Convert base64 back to binary
+    const binaryString = atob(readResult.content);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+
+    // Create blob from binary data
+    const blob = new Blob([bytes], { type: 'application/octet-stream' });
+    console.log('[VRChatCache] ✓ Bundle successfully converted to blob, size:', blob.size);
 
     return {
       success: true,

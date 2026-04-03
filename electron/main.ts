@@ -160,7 +160,11 @@ ipcMain.handle('shell:openExternal', (_e, url: string) => shell.openExternal(url
 // File system
 ipcMain.handle('fs:readFile', async (_e, filePath: string) => {
   try {
-    return { success: true, content: fs.readFileSync(filePath, 'utf-8') };
+    // Read as binary data (Buffer), then convert to base64 for transfer
+    const buffer = fs.readFileSync(filePath);
+    const base64Data = buffer.toString('base64');
+    console.log(`[ReadFile] Read ${buffer.length} bytes from ${filePath}`);
+    return { success: true, content: base64Data, size: buffer.length };
   } catch (err: any) {
     return { success: false, error: err.message };
   }
