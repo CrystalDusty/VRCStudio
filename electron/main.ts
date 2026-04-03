@@ -216,6 +216,8 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
     throw new Error('Avatar downloads only supported on Windows');
   }
 
+  console.log(`[Download] Starting download from: ${url}`);
+
   const bundleDir = path.join(app.getPath('userData'), 'AvatarBundles', avatarId);
   if (!fs.existsSync(bundleDir)) {
     fs.mkdirSync(bundleDir, { recursive: true });
@@ -227,8 +229,39 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(bundlePath);
     const request = https.get(url, { timeout: 30000 }, (response) => {
+      console.log(`[Download] Response status: ${response.statusCode}`);
+      console.log(`[Download] Content-Type: ${response.headers['content-type']}`);
+
+      // Check for HTTP errors
+      if (response.statusCode && response.statusCode >= 400) {
+        fs.unlink(bundlePath, () => {});
+        reject(new Error(`HTTP ${response.statusCode}: ${response.statusMessage}`));
+        return;
+      }
+
+      // Check for JSON error responses (API errors)
+      const contentType = response.headers['content-type'] || '';
+      if (contentType.includes('application/json')) {
+        let errorData = '';
+        response.on('data', (chunk) => {
+          errorData += chunk.toString();
+        });
+        response.on('end', () => {
+          fs.unlink(bundlePath, () => {});
+          try {
+            const error = JSON.parse(errorData);
+            reject(new Error(`API Error: ${error.error || error.message || JSON.stringify(error)}`));
+          } catch {
+            reject(new Error(`API returned JSON instead of file: ${errorData.substring(0, 200)}`));
+          }
+        });
+        return;
+      }
+
       const totalSize = parseInt(response.headers['content-length'] || '0', 10);
       let downloadedSize = 0;
+
+      console.log(`[Download] Total size: ${totalSize} bytes`);
 
       response.on('data', (chunk) => {
         downloadedSize += chunk.length;
@@ -241,24 +274,34 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
 
       file.on('finish', () => {
         file.close();
+        console.log(`[Download] Completed. File size: ${downloadedSize} bytes`);
+
+        // Verify file isn't too small (likely an error)
+        if (downloadedSize < 1000) {
+          console.warn(`[Download] File is very small (${downloadedSize} bytes), may be an error response`);
+        }
+
         resolve(bundlePath);
       });
 
       file.on('error', (err) => {
+        console.error(`[Download] File write error: ${err.message}`);
         fs.unlink(bundlePath, () => {}); // Delete the file on error
         reject(err);
       });
     });
 
     request.on('error', (err) => {
+      console.error(`[Download] Request error: ${err.message}`);
       fs.unlink(bundlePath, () => {}); // Delete the file on error
       reject(err);
     });
 
     request.on('timeout', () => {
+      console.error('[Download] Request timeout');
       request.destroy();
       fs.unlink(bundlePath, () => {}); // Delete the file on timeout
-      reject(new Error('Download timeout'));
+      reject(new Error('Download timeout - file is too large or server is slow'));
     });
   });
 });
