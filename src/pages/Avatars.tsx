@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Shirt, Search, Star, ArrowLeft, Heart } from 'lucide-react';
+import { Shirt, Search, Star, ArrowLeft, Heart, AlertCircle } from 'lucide-react';
 import api from '../api/vrchat';
 import SearchInput from '../components/common/SearchInput';
 import EmptyState from '../components/common/EmptyState';
@@ -14,6 +14,8 @@ export default function AvatarsPage() {
   const [ownAvatars, setOwnAvatars] = useState<VRCAvatar[]>([]);
   const [searchResults, setSearchResults] = useState<VRCAvatar[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [favoriteError, setFavoriteError] = useState<string | null>(null);
+  const [ownError, setOwnError] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState('');
   const [selected, setSelected] = useState<VRCAvatar | null>(null);
   const [switching, setSwitching] = useState(false);
@@ -25,6 +27,7 @@ export default function AvatarsPage() {
 
   const loadFavoriteAvatars = async () => {
     setIsLoading(true);
+    setFavoriteError(null);
     try {
       const favorites = await api.getFavorites('avatar', 100);
       // Resolve each favorite to full avatar data
@@ -33,15 +36,22 @@ export default function AvatarsPage() {
       );
       const results = await Promise.all(avatarPromises);
       setFavoriteAvatars(results.filter((a): a is VRCAvatar => a !== null));
-    } catch {}
+    } catch (error) {
+      setFavoriteError('Failed to load favorite avatars');
+      console.error('Error loading favorites:', error);
+    }
     setIsLoading(false);
   };
 
   const loadOwnAvatars = async () => {
+    setOwnError(null);
     try {
       const avatars = await api.getOwnAvatars();
       setOwnAvatars(avatars);
-    } catch {}
+    } catch (error) {
+      setOwnError('Failed to load uploaded avatars');
+      console.error('Error loading own avatars:', error);
+    }
   };
 
   const handleSearch = async () => {
@@ -144,6 +154,24 @@ export default function AvatarsPage() {
 
       {isLoading ? (
         <LoadingSpinner className="py-16" />
+      ) : (favoriteError && tab === 'favorites') || (ownError && tab === 'own') ? (
+        <div className="flex flex-col items-center justify-center py-12 gap-4">
+          <AlertCircle size={32} className="text-red-400/60" />
+          <div className="text-center">
+            <h2 className="text-lg font-semibold text-surface-100">
+              {tab === 'favorites' ? 'Failed to load favorites' : 'Failed to load uploads'}
+            </h2>
+            <p className="text-sm text-surface-400 mt-1">
+              {tab === 'favorites' ? favoriteError : ownError}
+            </p>
+          </div>
+          <button
+            onClick={tab === 'favorites' ? loadFavoriteAvatars : loadOwnAvatars}
+            className="btn-secondary text-sm"
+          >
+            Retry
+          </button>
+        </div>
       ) : avatars.length === 0 ? (
         <EmptyState
           icon={tab === 'search' ? Search : tab === 'favorites' ? Heart : Shirt}
