@@ -24,7 +24,7 @@ import Screenshots from './pages/Screenshots';
 import ActivityHeatmap from './pages/ActivityHeatmap';
 import FriendAnalytics from './pages/FriendAnalytics';
 import EventPlanner from './pages/EventPlanner';
-import WorldCollections from './pages/WorldCollections';
+import StatisticsInsights from './pages/StatisticsInsights';
 import LoadingSpinner from './components/common/LoadingSpinner';
 
 // Error boundary to catch React rendering errors and show them instead of a blank screen
@@ -124,7 +124,7 @@ function AppShell() {
         <Route path="/activity" element={<ActivityHeatmap />} />
         <Route path="/friend-analytics" element={<FriendAnalytics />} />
         <Route path="/events" element={<EventPlanner />} />
-        <Route path="/collections" element={<WorldCollections />} />
+        <Route path="/statistics" element={<StatisticsInsights />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

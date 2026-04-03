@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { UsersRound, ArrowLeft, Shield, Hash, Calendar } from 'lucide-react';
+import { UsersRound, ArrowLeft, Shield, Hash, Calendar, AlertCircle, RotateCw } from 'lucide-react';
 import api from '../api/vrchat';
 import { useAuthStore } from '../stores/authStore';
 import EmptyState from '../components/common/EmptyState';
@@ -11,6 +11,7 @@ export default function GroupsPage() {
   const [groups, setGroups] = useState<VRCGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedGroup, setSelectedGroup] = useState<VRCGroup | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     loadGroups();
@@ -18,12 +19,20 @@ export default function GroupsPage() {
 
   const loadGroups = async () => {
     setIsLoading(true);
+    setError(null);
     try {
-      if (user?.id) {
-        const data = await api.getUserGroups(user.id);
-        setGroups(Array.isArray(data) ? data : []);
+      if (!user?.id) {
+        setError('User not authenticated');
+        setIsLoading(false);
+        return;
       }
-    } catch {}
+      const data = await api.getUserGroups(user.id);
+      setGroups(Array.isArray(data) ? data : []);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to load groups';
+      setError(errorMessage);
+      console.error('Failed to load groups:', err);
+    }
     setIsLoading(false);
   };
 
@@ -94,6 +103,23 @@ export default function GroupsPage() {
   return (
     <div className="max-w-5xl mx-auto space-y-4 animate-fade-in">
       <h1 className="text-2xl font-bold">Groups</h1>
+
+      {error && (
+        <div className="glass-panel-solid border border-rose-500/30 bg-rose-500/10 p-4 rounded-lg flex items-start gap-3">
+          <AlertCircle size={20} className="text-rose-500 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-rose-400">Error loading groups</p>
+            <p className="text-xs text-rose-400/80 mt-1">{error}</p>
+          </div>
+          <button
+            onClick={loadGroups}
+            disabled={isLoading}
+            className="btn-secondary text-xs flex items-center gap-1 flex-shrink-0"
+          >
+            <RotateCw size={14} /> Retry
+          </button>
+        </div>
+      )}
 
       {isLoading ? (
         <LoadingSpinner className="py-16" />
