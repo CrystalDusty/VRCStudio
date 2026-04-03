@@ -180,9 +180,13 @@ export async function downloadViaAuthenticatedAPI(
 /**
  * Master function: Try all methods in fallback order
  */
+/**
+ * Master function: Try all methods in fallback order
+ */
 export async function downloadBundleWithFallback(
   avatar: VRCAvatar,
   packageUrl: string,
+  selectedPackageId: string,
   onProgress?: (current: number, total: number) => void,
   onMethodAttempt?: (method: string) => void
 ): Promise<{ success: boolean; path?: string; error?: string; method?: string }> {
@@ -201,15 +205,12 @@ export async function downloadBundleWithFallback(
   // Method 2: Try authenticated download using user's VRChat session
   console.log('[BundleDownload] Method 2: Attempting authenticated download...');
   onMethodAttempt?.('downloading with your VRChat session');
-  const selectedPackage = avatar.unityPackages?.find(p => p.id);
-  if (selectedPackage) {
-    const authResult = await downloadBundleAuthenticated(avatar.id, selectedPackage.id, onProgress);
-    if (authResult.success && authResult.path) {
-      console.log('[BundleDownload] ✓ Success via authenticated download');
-      return { ...authResult, method: 'authenticated' };
-    }
-    console.log('[BundleDownload] ✗ Authenticated download failed:', authResult.error);
+  const authResult = await downloadBundleAuthenticated(avatar.id, selectedPackageId, onProgress);
+  if (authResult.success && authResult.path) {
+    console.log('[BundleDownload] ✓ Success via authenticated download');
+    return { ...authResult, method: 'authenticated' };
   }
+  console.log('[BundleDownload] ✗ Authenticated download failed:', authResult.error);
 
   // Method 3: File picker as last resort
   console.log('[BundleDownload] Method 3: Prompting for manual file...');

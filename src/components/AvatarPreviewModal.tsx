@@ -69,10 +69,11 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
     const packageUrl = selectedPackage?.unityPackageUrl ||
       `https://api.vrchat.cloud/file/file_${selectedPackageId}/file`;
 
-    // Use the fallback method which tries: cache, file picker, API
+    // Use the fallback method which tries: cache, authenticated, file picker
     const result = await downloadBundleWithFallback(
       avatar,
       packageUrl,
+      selectedPackageId,
       (current, total) => {
         setDownloadProgress(Math.round((current / total) * 100));
       },
