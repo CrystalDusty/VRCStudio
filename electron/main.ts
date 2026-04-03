@@ -170,6 +170,27 @@ ipcMain.handle('fs:readFile', async (_e, filePath: string) => {
   }
 });
 
+// Direct file copy - preserves binary data perfectly without encoding
+ipcMain.handle('fs:copyFile', async (_e, srcPath: string, destPath: string) => {
+  try {
+    console.log(`[CopyFile] Copying ${srcPath} → ${destPath}`);
+
+    // Ensure dest directory exists
+    const destDir = path.dirname(destPath);
+    if (!fs.existsSync(destDir)) {
+      fs.mkdirSync(destDir, { recursive: true });
+    }
+
+    fs.copyFileSync(srcPath, destPath);
+    const stats = fs.statSync(destPath);
+    console.log(`[CopyFile] ✓ File copied successfully (${stats.size} bytes)`);
+    return { success: true, size: stats.size };
+  } catch (err: any) {
+    console.error(`[CopyFile] ✗ Copy failed:`, err.message);
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('fs:listDir', async (_e, dirPath: string) => {
   try {
     const entries = fs.readdirSync(dirPath, { withFileTypes: true });

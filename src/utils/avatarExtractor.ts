@@ -177,10 +177,36 @@ export async function generateDownloadablePackage(
     const bundlePath = await findAvatarBundleInCache(avatar.id);
     if (bundlePath) {
       console.log('[AvatarExtractor] Found bundle at:', bundlePath);
-      const bundleResult = await extractBundleFromCache(bundlePath);
-      if (bundleResult.success && bundleResult.blob) {
-        files.push(new File([bundleResult.blob], `${avatar.id}.unitypackage`, { type: 'application/octet-stream' }));
-        console.log('[AvatarExtractor] Bundle included');
+
+      try {
+        const electronAPI = (window as any).electronAPI;
+
+        // Create temp file path for bundle
+        const tempBundlePath = `${(window as any).electronAPI?.getTempDir?.() || 'C:\\Temp'}\\${avatar.id}.unitypackage`;
+
+        // Direct file copy - no encoding/decoding!
+        const copyResult = await electronAPI.copyFile(bundlePath, tempBundlePath);
+
+        if (copyResult.success) {
+          console.log('[AvatarExtractor] Bundle copied to temp location:', tempBundlePath);
+
+          // Read the copied file directly
+          const readResult = await electronAPI.readFile(tempBundlePath);
+          if (readResult.success && readResult.content) {
+            // Decode base64 back to binary
+            const binaryString = atob(readResult.content);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+              bytes[i] = binaryString.charCodeAt(i);
+            }
+
+            const bundleBlob = new Blob([bytes], { type: 'application/octet-stream' });
+            files.push(new File([bundleBlob], `${avatar.id}.unitypackage`, { type: 'application/octet-stream' }));
+            console.log('[AvatarExtractor] Bundle included:', `${(bundleBlob.size / 1024 / 1024).toFixed(2)} MB`);
+          }
+        }
+      } catch (bundleError) {
+        console.error('[AvatarExtractor] Error copying bundle:', bundleError);
       }
     } else {
       console.log('[AvatarExtractor] Bundle not found in cache - user will need to add it manually');
