@@ -4,6 +4,7 @@
  */
 
 import type { VRCAvatar } from '../types/vrchat';
+import { downloadBundleAuthenticated } from './authenticatedDownload';
 
 const isElectron = () => {
   return typeof window !== 'undefined' && !!(window as any).electronAPI;
@@ -197,8 +198,21 @@ export async function downloadBundleWithFallback(
   }
   console.log('[BundleDownload] ✗ Cache failed:', cacheResult.error);
 
-  // Method 2: File picker
-  console.log('[BundleDownload] Method 2: Prompting for manual file...');
+  // Method 2: Try authenticated download using user's VRChat session
+  console.log('[BundleDownload] Method 2: Attempting authenticated download...');
+  onMethodAttempt?.('downloading with your VRChat session');
+  const selectedPackage = avatar.unityPackages?.find(p => p.id);
+  if (selectedPackage) {
+    const authResult = await downloadBundleAuthenticated(avatar.id, selectedPackage.id, onProgress);
+    if (authResult.success && authResult.path) {
+      console.log('[BundleDownload] ✓ Success via authenticated download');
+      return { ...authResult, method: 'authenticated' };
+    }
+    console.log('[BundleDownload] ✗ Authenticated download failed:', authResult.error);
+  }
+
+  // Method 3: File picker as last resort
+  console.log('[BundleDownload] Method 3: Prompting for manual file...');
   onMethodAttempt?.('prompting for manual file selection');
   const manualResult = await promptForManualFile(avatar.name);
   if (manualResult.success && manualResult.path) {
@@ -208,10 +222,10 @@ export async function downloadBundleWithFallback(
   console.log('[BundleDownload] ✗ Manual selection failed:', manualResult.error);
 
   // All methods failed
-  console.log('[BundleDownload] ✗ Both download methods failed');
+  console.log('[BundleDownload] ✗ All download methods failed');
   return {
     success: false,
-    error: 'Bundle not found in VRChat cache. Please download the avatar bundle manually from vrchat.com and select it using the file picker.',
+    error: 'Could not download bundle. Tried: cache, authenticated session, and manual file selection.',
     method: 'none',
   };
 }

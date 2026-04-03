@@ -260,7 +260,7 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
   console.log(`[Download] Target path: ${bundlePath}`);
   console.log(`[Download] Temp path: ${tempBundlePath}`);
 
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     let file: fs.WriteStream;
 
     // Attempt to create write stream with error handling
@@ -273,7 +273,27 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
       return;
     }
 
-    const request = https.get(url, { timeout: 30000 }, (response) => {
+    try {
+      // Get cookies from the session to authenticate the request
+      const cookies = await mainWindow?.webContents.session.cookies.get({
+        url: 'https://api.vrchat.cloud',
+      }) || [];
+
+      const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+      console.log(`[Download] Found ${cookies.length} cookies for authentication`);
+
+      // Build headers with authentication
+      const headers: Record<string, string> = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      };
+
+      if (cookieString) {
+        headers['Cookie'] = cookieString;
+      }
+
+      console.log(`[Download] Using ${cookieString ? 'authenticated' : 'unauthenticated'} request`);
+
+      const request = https.get(url, { headers, timeout: 30000 }, (response) => {
       console.log(`[Download] Response status: ${response.statusCode}`);
       console.log(`[Download] Content-Type: ${response.headers['content-type']}`);
 
@@ -363,6 +383,11 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
       fs.unlink(tempBundlePath, () => {}); // Delete the temp file on timeout
       reject(new Error('Download timeout - file is too large or server is slow'));
     });
+    } catch (cookieError) {
+      console.error(`[Download] Cookie/request setup error: ${cookieError instanceof Error ? cookieError.message : 'Unknown error'}`);
+      fs.unlink(tempBundlePath, () => {});
+      reject(new Error(`Failed to set up authenticated request: ${cookieError instanceof Error ? cookieError.message : 'Unknown error'}`));
+    }
   });
 });
 
