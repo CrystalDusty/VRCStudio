@@ -4,6 +4,8 @@
  */
 
 import type { VRCAvatar } from '../types/vrchat';
+import { findAvatarBundleInCache, extractBundleFromCache } from './vrchatCacheExtractor';
+import { generateUnityImporterScript, generateSetupScript, generateReadme } from './unityImporter';
 
 export interface AvatarAssets {
   avatarId: string;
@@ -137,7 +139,7 @@ export async function downloadAvatarImage(
 }
 
 /**
- * Create downloadable avatar package (metadata + images)
+ * Create downloadable avatar package (metadata + images + bundle + importer)
  */
 export async function generateDownloadablePackage(
   avatar: VRCAvatar
@@ -152,7 +154,7 @@ export async function generateDownloadablePackage(
     }
 
     const jsonBlob = new Blob([packageResult.data], { type: 'application/json' });
-    files.push(new File([jsonBlob], `${avatar.id}-metadata.json`, { type: 'application/json' }));
+    files.push(new File([jsonBlob], `metadata.json`, { type: 'application/json' }));
 
     // 2. Download avatar image
     if (avatar.imageUrl) {
@@ -169,6 +171,35 @@ export async function generateDownloadablePackage(
         files.push(new File([thumbResult.blob], `${avatar.id}-thumbnail.png`, { type: 'image/png' }));
       }
     }
+
+    // 4. Try to get avatar bundle from VRChat cache
+    console.log('[AvatarExtractor] Searching for avatar bundle in VRChat cache...');
+    const bundlePath = await findAvatarBundleInCache(avatar.id);
+    if (bundlePath) {
+      console.log('[AvatarExtractor] Found bundle at:', bundlePath);
+      const bundleResult = await extractBundleFromCache(bundlePath);
+      if (bundleResult.success && bundleResult.blob) {
+        files.push(new File([bundleResult.blob], `${avatar.id}.unitypackage`, { type: 'application/octet-stream' }));
+        console.log('[AvatarExtractor] Bundle included');
+      }
+    } else {
+      console.log('[AvatarExtractor] Bundle not found in cache - user will need to add it manually');
+    }
+
+    // 5. Generate Unity importer script
+    const importerScript = generateUnityImporterScript(avatar.id, avatar.name);
+    const importerBlob = new Blob([importerScript], { type: 'text/plain' });
+    files.push(new File([importerBlob], `Editor/${avatar.name}Importer.cs`, { type: 'text/plain' }));
+
+    // 6. Generate setup script
+    const setupScript = generateSetupScript();
+    const setupBlob = new Blob([setupScript], { type: 'text/plain' });
+    files.push(new File([setupBlob], `Editor/VRCStudioSetup.cs`, { type: 'text/plain' }));
+
+    // 7. Generate README
+    const readme = generateReadme(avatar.name, avatar.id, avatar.authorName);
+    const readmeBlob = new Blob([readme], { type: 'text/plain' });
+    files.push(new File([readmeBlob], `README.md`, { type: 'text/plain' }));
 
     console.log('[AvatarExtractor] Package generated with', files.length, 'files');
 
