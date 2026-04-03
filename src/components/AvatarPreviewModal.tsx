@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, Download, Copy, Check } from 'lucide-react';
+import { X, Download, Copy, Check, ExternalLink } from 'lucide-react';
 import type { VRCAvatar } from '../types/vrchat';
 
 interface AvatarPreviewModalProps {
@@ -16,9 +16,12 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleDownload = async () => {
+  const handleViewInVRChat = () => {
+    window.open(`https://vrchat.com/home/avatar/${avatar.id}`, '_blank');
+  };
+
+  const handleDownloadImage = async () => {
     try {
-      // Create a link to download the avatar image
       const response = await fetch(avatar.imageUrl);
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
@@ -30,7 +33,7 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
     } catch (error) {
-      console.error('Failed to download avatar:', error);
+      console.error('Failed to download image:', error);
     }
   };
 
@@ -121,13 +124,21 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
             </div>
           )}
 
-          {/* Download button */}
-          <button
-            onClick={handleDownload}
-            className="btn-primary w-full text-sm flex items-center justify-center gap-2 mt-4"
-          >
-            <Download size={14} /> Download Avatar
-          </button>
+          {/* Action buttons */}
+          <div className="space-y-2 mt-4">
+            <button
+              onClick={handleViewInVRChat}
+              className="btn-primary w-full text-sm flex items-center justify-center gap-2"
+            >
+              <ExternalLink size={14} /> View in VRChat
+            </button>
+            <button
+              onClick={handleDownloadImage}
+              className="btn-secondary w-full text-sm flex items-center justify-center gap-2"
+            >
+              <Download size={14} /> Download Image
+            </button>
+          </div>
         </div>
       </div>
     </div>

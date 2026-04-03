@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Globe, Shirt, Star, Settings,
   LogOut, Bell, Search, History, UsersRound, FileText, Camera,
-  ChevronDown, Flame, BarChart3, CalendarPlus, FolderHeart, Crown,
+  ChevronDown, Flame, BarChart3, CalendarPlus, TrendingUp,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useAuthStore } from '../../stores/authStore';
@@ -11,7 +11,6 @@ import { useThemeStore } from '../../stores/themeStore';
 import StatusPresetPanel from '../StatusPresetPanel';
 import api from '../../api/vrchat';
 import { getBestAvatarUrl } from '../../utils/avatar';
-import { isVrcPlus } from '../../utils/vrcPlus';
 
 const mainNavItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -25,13 +24,13 @@ const browseNavItems = [
   { to: '/avatars', icon: Shirt, label: 'Avatars' },
   { to: '/groups', icon: UsersRound, label: 'Groups' },
   { to: '/favorites', icon: Star, label: 'Favorites' },
-  { to: '/collections', icon: FolderHeart, label: 'Collections' },
   { to: '/notifications', icon: Bell, label: 'Notifications' },
 ];
 
 const toolsNavItems = [
   { to: '/activity', icon: Flame, label: 'Activity Map' },
   { to: '/friend-analytics', icon: BarChart3, label: 'Analytics' },
+  { to: '/statistics', icon: TrendingUp, label: 'Statistics' },
   { to: '/events', icon: CalendarPlus, label: 'Events' },
   { to: '/game-log', icon: FileText, label: 'Game Log' },
   { to: '/screenshots', icon: Camera, label: 'Screenshots' },
@@ -113,12 +112,7 @@ export default function Sidebar() {
             <div className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ring-2 ring-surface-900 ${statusDotColors[user?.status || 'offline']}`} />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1 text-sm font-semibold truncate text-surface-100">
-              {user?.displayName}
-              {isVrcPlus(user) && (
-                <Crown size={12} className="text-yellow-400 flex-shrink-0" title="VRC+ Subscriber" />
-              )}
-            </div>
+            <div className="text-sm font-semibold truncate text-surface-100">{user?.displayName}</div>
             <div className="text-[11px] text-surface-500 truncate">
               {statusLabels[user?.status || 'offline']}
             </div>

@@ -30,6 +30,8 @@ function saveMeta(meta: Record<string, Partial<ScreenshotEntry>>) {
 
 // --- Photo Print Creator ---
 
+type BorderType = 'none' | 'simple' | 'thick' | 'shadow' | 'neon' | 'grunge' | 'pixel' | 'hearts' | 'stars' | 'glitch' | 'fire' | 'rainbow';
+
 interface PrintSettings {
   showUsername: boolean;
   showDate: boolean;
@@ -39,6 +41,7 @@ interface PrintSettings {
   position: 'bottom-left' | 'bottom-right' | 'top-left' | 'top-right';
   style: 'classic' | 'polaroid' | 'minimal' | 'strip';
   fontSize: number;
+  border: BorderType;
 }
 
 const defaultPrintSettings: PrintSettings = {
@@ -50,7 +53,157 @@ const defaultPrintSettings: PrintSettings = {
   position: 'bottom-left',
   style: 'classic',
   fontSize: 24,
+  border: 'none',
 };
+
+function drawBorder(ctx: CanvasRenderingContext2D, w: number, h: number, border: BorderType) {
+  if (border === 'none') return;
+
+  ctx.save();
+
+  if (border === 'simple') {
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(2, 2, w - 4, h - 4);
+  } else if (border === 'thick') {
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 12;
+    ctx.strokeRect(6, 6, w - 12, h - 12);
+  } else if (border === 'shadow') {
+    // Inset shadow effect
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, 'rgba(0,0,0,0.6)');
+    grad.addColorStop(0.08, 'rgba(0,0,0,0)');
+    grad.addColorStop(0.92, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.6)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+    const gradH = ctx.createLinearGradient(0, 0, w, 0);
+    gradH.addColorStop(0, 'rgba(0,0,0,0.5)');
+    gradH.addColorStop(0.08, 'rgba(0,0,0,0)');
+    gradH.addColorStop(0.92, 'rgba(0,0,0,0)');
+    gradH.addColorStop(1, 'rgba(0,0,0,0.5)');
+    ctx.fillStyle = gradH;
+    ctx.fillRect(0, 0, w, h);
+  } else if (border === 'neon') {
+    ctx.shadowColor = '#00ffff';
+    ctx.shadowBlur = 15;
+    ctx.strokeStyle = '#00ffff';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(8, 8, w - 16, h - 16);
+    ctx.shadowColor = '#ff00ff';
+    ctx.shadowBlur = 15;
+    ctx.strokeStyle = '#ff00ff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(12, 12, w - 24, h - 24);
+    ctx.shadowBlur = 0;
+  } else if (border === 'grunge') {
+    const seed = 42;
+    for (let i = 0; i < 300; i++) {
+      const side = i % 4;
+      let x: number, y: number;
+      const rng = Math.sin(seed + i * 127.1) * 0.5 + 0.5;
+      const size = 3 + rng * 8;
+      if (side === 0) { x = rng * w; y = rng * 20; }
+      else if (side === 1) { x = rng * w; y = h - rng * 20; }
+      else if (side === 2) { x = rng * 20; y = rng * h; }
+      else { x = w - rng * 20; y = rng * h; }
+      ctx.fillStyle = `rgba(${60 + rng * 40}, ${40 + rng * 30}, ${30 + rng * 20}, ${0.4 + rng * 0.4})`;
+      ctx.fillRect(x, y, size, size);
+    }
+  } else if (border === 'pixel') {
+    const pxSize = 8;
+    const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ffffff'];
+    for (let x = 0; x < w; x += pxSize) {
+      const c = colors[(x / pxSize) % colors.length];
+      ctx.fillStyle = c;
+      ctx.fillRect(x, 0, pxSize, pxSize);
+      ctx.fillRect(x, h - pxSize, pxSize, pxSize);
+    }
+    for (let y = pxSize; y < h - pxSize; y += pxSize) {
+      const c = colors[(y / pxSize) % colors.length];
+      ctx.fillStyle = c;
+      ctx.fillRect(0, y, pxSize, pxSize);
+      ctx.fillRect(w - pxSize, y, pxSize, pxSize);
+    }
+  } else if (border === 'hearts') {
+    ctx.fillStyle = '#ff4488';
+    const drawHeart = (cx: number, cy: number, size: number) => {
+      ctx.beginPath();
+      ctx.moveTo(cx, cy + size / 4);
+      ctx.bezierCurveTo(cx, cy, cx - size / 2, cy, cx - size / 2, cy + size / 4);
+      ctx.bezierCurveTo(cx - size / 2, cy + size / 2, cx, cy + size * 0.7, cx, cy + size * 0.85);
+      ctx.bezierCurveTo(cx, cy + size * 0.7, cx + size / 2, cy + size / 2, cx + size / 2, cy + size / 4);
+      ctx.bezierCurveTo(cx + size / 2, cy, cx, cy, cx, cy + size / 4);
+      ctx.fill();
+    };
+    const step = 40;
+    for (let x = 20; x < w; x += step) { drawHeart(x, 6, 18); drawHeart(x, h - 20, 18); }
+    for (let y = 30; y < h - 30; y += step) { drawHeart(8, y, 18); drawHeart(w - 14, y, 18); }
+  } else if (border === 'stars') {
+    ctx.fillStyle = '#ffd700';
+    const drawStar = (cx: number, cy: number, r: number) => {
+      ctx.beginPath();
+      for (let i = 0; i < 5; i++) {
+        const angle = (i * 4 * Math.PI) / 5 - Math.PI / 2;
+        const method = i === 0 ? 'moveTo' : 'lineTo';
+        ctx[method](cx + r * Math.cos(angle), cy + r * Math.sin(angle));
+      }
+      ctx.closePath();
+      ctx.fill();
+    };
+    const step = 35;
+    for (let x = 12; x < w; x += step) { drawStar(x, 10, 8); drawStar(x, h - 10, 8); }
+    for (let y = 25; y < h - 25; y += step) { drawStar(10, y, 8); drawStar(w - 10, y, 8); }
+  } else if (border === 'glitch') {
+    const colors = ['rgba(255,0,0,0.6)', 'rgba(0,255,0,0.5)', 'rgba(0,0,255,0.5)', 'rgba(255,0,255,0.4)'];
+    for (let i = 0; i < 20; i++) {
+      const rng = Math.sin(i * 73.7) * 0.5 + 0.5;
+      const barH = 3 + rng * 12;
+      const y = rng * h;
+      ctx.fillStyle = colors[i % colors.length];
+      if (i % 2 === 0) {
+        ctx.fillRect(0, y, 15 + rng * 30, barH);
+      } else {
+        ctx.fillRect(w - 15 - rng * 30, y, 15 + rng * 30, barH);
+      }
+    }
+  } else if (border === 'fire') {
+    const gradTop = ctx.createLinearGradient(0, 0, 0, 30);
+    gradTop.addColorStop(0, 'rgba(255, 80, 0, 0.7)');
+    gradTop.addColorStop(0.5, 'rgba(255, 160, 0, 0.3)');
+    gradTop.addColorStop(1, 'rgba(255, 200, 0, 0)');
+    ctx.fillStyle = gradTop;
+    ctx.fillRect(0, 0, w, 30);
+    const gradBot = ctx.createLinearGradient(0, h - 30, 0, h);
+    gradBot.addColorStop(0, 'rgba(255, 200, 0, 0)');
+    gradBot.addColorStop(0.5, 'rgba(255, 160, 0, 0.3)');
+    gradBot.addColorStop(1, 'rgba(255, 80, 0, 0.7)');
+    ctx.fillStyle = gradBot;
+    ctx.fillRect(0, h - 30, w, 30);
+    const gradL = ctx.createLinearGradient(0, 0, 25, 0);
+    gradL.addColorStop(0, 'rgba(255, 80, 0, 0.6)');
+    gradL.addColorStop(1, 'rgba(255, 200, 0, 0)');
+    ctx.fillStyle = gradL;
+    ctx.fillRect(0, 0, 25, h);
+    const gradR = ctx.createLinearGradient(w - 25, 0, w, 0);
+    gradR.addColorStop(0, 'rgba(255, 200, 0, 0)');
+    gradR.addColorStop(1, 'rgba(255, 80, 0, 0.6)');
+    ctx.fillStyle = gradR;
+    ctx.fillRect(w - 25, 0, 25, h);
+  } else if (border === 'rainbow') {
+    const rainbowColors = ['#ff0000', '#ff8800', '#ffff00', '#00ff00', '#0088ff', '#8800ff'];
+    const bw = 6;
+    for (let i = 0; i < rainbowColors.length; i++) {
+      ctx.strokeStyle = rainbowColors[i];
+      ctx.lineWidth = bw;
+      const offset = i * bw + bw / 2;
+      ctx.strokeRect(offset, offset, w - offset * 2, h - offset * 2);
+    }
+  }
+
+  ctx.restore();
+}
 
 function PhotoPrintCreator({
   screenshot,
@@ -232,6 +385,9 @@ function PhotoPrintCreator({
       }
     }
 
+    // Draw border on top
+    drawBorder(ctx, canvas.width, canvas.height, settings.border);
+
     setPreviewUrl(canvas.toDataURL('image/png'));
     setRendering(false);
   }, [screenshot, settings, user]);
@@ -364,6 +520,26 @@ function PhotoPrintCreator({
             />
           </div>
 
+          {/* Border */}
+          <div>
+            <label className="text-xs text-surface-500 block mb-1.5">Border</label>
+            <div className="grid grid-cols-3 gap-1">
+              {(['none', 'simple', 'thick', 'shadow', 'neon', 'grunge', 'pixel', 'hearts', 'stars', 'glitch', 'fire', 'rainbow'] as const).map(border => (
+                <button
+                  key={border}
+                  onClick={() => setSettings(s => ({ ...s, border }))}
+                  className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${
+                    settings.border === border
+                      ? 'bg-accent-600 text-white'
+                      : 'bg-surface-800 text-surface-400 hover:bg-surface-700'
+                  }`}
+                >
+                  {border.charAt(0).toUpperCase() + border.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Actions */}
           <div className="space-y-2 pt-2 border-t border-surface-800">
             <button
@@ -404,7 +580,11 @@ export default function ScreenshotsPage() {
   const [saturation, setSaturation] = useState(100);
   const [hueRotate, setHueRotate] = useState(0);
   const [blur, setBlur] = useState(0);
-  const [filterPreset, setFilterPreset] = useState<'none' | 'grayscale' | 'sepia' | 'cool' | 'warm' | 'vintage' | 'noir' | 'neon' | 'vibrant' | 'soft'>('none');
+  const [grayscaleAmt, setGrayscaleAmt] = useState(0);
+  const [sepiaAmt, setSepiaAmt] = useState(0);
+  const [invertAmt, setInvertAmt] = useState(0);
+  const [opacityAmt, setOpacityAmt] = useState(100);
+  const [filterPreset, setFilterPreset] = useState('none');
   const fileRef = useRef<HTMLInputElement>(null);
   const photoEditCanvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -418,6 +598,12 @@ export default function ScreenshotsPage() {
     neon: { brightness: 110, contrast: 120, saturation: 150, hueRotate: 0 },
     vibrant: { brightness: 100, contrast: 115, saturation: 140, hueRotate: 0 },
     soft: { brightness: 110, contrast: 85, saturation: 90, hueRotate: 0 },
+    dreamy: { brightness: 115, contrast: 85, saturation: 110, hueRotate: 10 },
+    dramatic: { brightness: 90, contrast: 140, saturation: 120, hueRotate: 0 },
+    faded: { brightness: 110, contrast: 90, saturation: 70, hueRotate: 0 },
+    cyberpunk: { brightness: 105, contrast: 125, saturation: 150, hueRotate: -30 },
+    retro: { brightness: 105, contrast: 95, saturation: 80, hueRotate: 10 },
+    film: { brightness: 95, contrast: 110, saturation: 85, hueRotate: -5 },
   };
 
   const processFiles = useCallback(async (files: FileList | File[]) => {
@@ -598,8 +784,9 @@ export default function ScreenshotsPage() {
                 alt=""
                 className="w-full rounded-xl shadow-2xl"
                 style={{
-                  filter: `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%) hue-rotate(${hueRotate}deg) blur(${blur}px)`,
-                  transition: 'filter 0.1s ease-out',
+                  filter: `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%) hue-rotate(${hueRotate}deg) blur(${blur}px) grayscale(${grayscaleAmt}%) sepia(${sepiaAmt}%) invert(${invertAmt}%)`,
+                  opacity: opacityAmt / 100,
+                  transition: 'filter 0.1s ease-out, opacity 0.1s ease-out',
                 }}
               />
             </div>
@@ -667,8 +854,8 @@ export default function ScreenshotsPage() {
                 <div className="space-y-2 bg-surface-800/30 p-3 rounded">
                   <div className="space-y-1.5">
                     <label className="text-[10px] text-surface-500 block font-semibold">Filter Presets</label>
-                    <div className="grid grid-cols-3 gap-1">
-                      {['none', 'grayscale', 'sepia', 'cool', 'warm', 'vintage', 'noir', 'neon', 'vibrant', 'soft'].map(preset => (
+                    <div className="grid grid-cols-4 gap-1">
+                      {['none', 'grayscale', 'sepia', 'cool', 'warm', 'vintage', 'noir', 'neon', 'vibrant', 'soft', 'dreamy', 'dramatic', 'faded', 'cyberpunk', 'retro', 'film'].map(preset => (
                         <button
                           key={preset}
                           onClick={() => {
@@ -765,6 +952,62 @@ export default function ScreenshotsPage() {
                         value={blur}
                         onChange={e => {
                           setBlur(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Grayscale: {grayscaleAmt}%</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={grayscaleAmt}
+                        onChange={e => {
+                          setGrayscaleAmt(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Sepia: {sepiaAmt}%</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={sepiaAmt}
+                        onChange={e => {
+                          setSepiaAmt(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Invert: {invertAmt}%</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={invertAmt}
+                        onChange={e => {
+                          setInvertAmt(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Opacity: {opacityAmt}%</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={opacityAmt}
+                        onChange={e => {
+                          setOpacityAmt(Number(e.target.value));
                           setFilterPreset('none');
                         }}
                         className="w-full text-xs"
