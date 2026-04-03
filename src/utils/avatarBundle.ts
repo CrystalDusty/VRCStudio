@@ -71,6 +71,7 @@ export async function downloadAvatarBundle(
 
 /**
  * Extract a downloaded avatar bundle
+ * Returns the path to the extracted bundle contents
  */
 export async function extractAvatarBundle(
   bundlePath: string,
@@ -85,13 +86,21 @@ export async function extractAvatarBundle(
 
   try {
     const electronAPI = (window as any).electronAPI;
-    const store = useAvatarBundleStore.getState();
+    if (!electronAPI?.extractBundle) {
+      throw new Error('Extract bundle API not available');
+    }
 
+    const store = useAvatarBundleStore.getState();
     store.setExtracting(avatarId, true);
 
+    // Extract returns the path to the extracted directory
     const extractedPath = await electronAPI.extractBundle(bundlePath, avatarId);
 
     store.setExtracting(avatarId, false);
+
+    if (!extractedPath) {
+      throw new Error('No extraction path returned from Electron');
+    }
 
     return {
       success: true,
@@ -100,9 +109,13 @@ export async function extractAvatarBundle(
   } catch (error) {
     useAvatarBundleStore.getState().setExtracting(avatarId, false);
 
+    const errorMessage = error instanceof Error
+      ? error.message
+      : 'Failed to extract bundle. Make sure the downloaded file is a valid .unitypackage';
+
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to extract bundle',
+      error: errorMessage,
     };
   }
 }

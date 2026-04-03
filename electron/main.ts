@@ -5,6 +5,7 @@ import {
 import path from 'path';
 import fs from 'fs';
 import https from 'https';
+import tar from 'tar';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -278,23 +279,45 @@ ipcMain.handle('fs:extractBundle', async (_e, sourcePath: string, avatarId: stri
       throw new Error('Downloaded bundle file is empty. The download may have failed.');
     }
 
-    // Dynamically import adm-zip (ESM)
-    const AdmZip = await import('adm-zip').then(m => m.default);
-
-    let zip;
-    try {
-      zip = new AdmZip(sourcePath);
-    } catch (zipError) {
-      throw new Error(`Invalid bundle format: ${zipError instanceof Error ? zipError.message : 'Not a valid ZIP file'}. The file may be corrupted or incomplete.`);
-    }
-
     const extractDir = path.join(app.getPath('userData'), 'AvatarBundles', avatarId, 'extracted');
     if (fs.existsSync(extractDir)) {
       fs.rmSync(extractDir, { recursive: true, force: true });
     }
     fs.mkdirSync(extractDir, { recursive: true });
 
-    zip.extractAllTo(extractDir, true);
+    // Extract .unitypackage (TAR.GZ format)
+    // .unitypackage is a gzipped TAR archive with a specific structure:
+    // {assetId}/pathname - contains the asset path
+    // {assetId}/asset - contains the actual asset data
+    try {
+      await tar.x({
+        file: sourcePath,
+        cwd: extractDir,
+        strip: 1, // Remove the asset ID directory level
+      });
+    } catch (tarError) {
+      // If TAR extraction fails, try as gzipped TAR
+      try {
+        await tar.x({
+          file: sourcePath,
+          cwd: extractDir,
+          gzip: true,
+          strip: 1,
+        });
+      } catch (gzipError) {
+        throw new Error(
+          `Invalid bundle format: Not a valid TAR or TAR.GZ file. ` +
+          `Make sure you downloaded a valid .unitypackage file. ` +
+          `${tarError instanceof Error ? tarError.message : ''}`
+        );
+      }
+    }
+
+    // Verify extraction was successful
+    const extractedFiles = fs.readdirSync(extractDir);
+    if (extractedFiles.length === 0) {
+      throw new Error('Bundle extracted but no files found. The bundle may be corrupted.');
+    }
 
     return extractDir;
   } catch (error) {

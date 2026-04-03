@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { X, Download, Copy, Check, ExternalLink, Folder, AlertCircle, Loader } from 'lucide-react';
 import type { VRCAvatar } from '../types/vrchat';
 import { downloadAvatarBundle, extractAvatarBundle, openBundleFolder, isBundleDownloaded, addBundleToStore } from '../utils/avatarBundle';
+import BundleLoader from './BundleLoader';
 
 interface AvatarPreviewModalProps {
   avatar: VRCAvatar;
@@ -14,6 +15,7 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [isExtracting, setIsExtracting] = useState(false);
   const [isExtracted, setIsExtracted] = useState(false);
+  const [extractedPath, setExtractedPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(
     avatar.unityPackages?.[0]?.id || null
@@ -70,7 +72,7 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
       setIsExtracting(true);
       const extractResult = await extractAvatarBundle(result.path, avatar.id);
 
-      if (extractResult.success) {
+      if (extractResult.success && extractResult.extractedPath) {
         // Get bundle info for store
         const selectedPackage = avatar.unityPackages?.find(p => p.id === selectedPackageId);
         if (selectedPackage) {
@@ -84,6 +86,7 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
             selectedPackageId
           );
         }
+        setExtractedPath(extractResult.extractedPath);
         setIsExtracted(true);
         setError(null);
       } else {
@@ -282,6 +285,13 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
               <Download size={14} /> Download Image
             </button>
           </div>
+
+          {/* Bundle Loader - Show after extraction */}
+          {isExtracted && extractedPath && (
+            <div className="border-t border-surface-700 pt-4 mt-4">
+              <BundleLoader bundlePath={extractedPath} avatarName={avatar.name} />
+            </div>
+          )}
         </div>
       </div>
     </div>

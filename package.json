@@ -22,7 +22,8 @@
     "lucide-react": "^0.441.0",
     "date-fns": "^3.6.0",
     "clsx": "^2.1.1",
-    "adm-zip": "^0.5.10"
+    "adm-zip": "^0.5.10",
+    "tar": "^6.2.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",
