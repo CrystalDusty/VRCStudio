@@ -256,14 +256,16 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
   }
 
   const bundlePath = path.join(bundleDir, fileName);
+  const tempBundlePath = bundlePath + '.tmp';
   console.log(`[Download] Target path: ${bundlePath}`);
+  console.log(`[Download] Temp path: ${tempBundlePath}`);
 
   return new Promise((resolve, reject) => {
     let file: fs.WriteStream;
 
     // Attempt to create write stream with error handling
     try {
-      file = fs.createWriteStream(bundlePath);
+      file = fs.createWriteStream(tempBundlePath);
     } catch (streamError) {
       const errorMsg = streamError instanceof Error ? streamError.message : 'Unknown error';
       console.error(`[Download] Failed to create write stream: ${errorMsg}`);
@@ -276,7 +278,7 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
 
       // Check for HTTP errors
       if (response.statusCode && response.statusCode >= 400) {
-        fs.unlink(bundlePath, () => {});
+        fs.unlink(tempBundlePath, () => {});
         reject(new Error(`HTTP ${response.statusCode}: ${response.statusMessage}`));
         return;
       }
@@ -289,7 +291,7 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
           errorData += chunk.toString();
         });
         response.on('end', () => {
-          fs.unlink(bundlePath, () => {});
+          fs.unlink(tempBundlePath, () => {});
           try {
             const error = JSON.parse(errorData);
             reject(new Error(`API Error: ${error.error || error.message || JSON.stringify(error)}`));
@@ -321,30 +323,43 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
         // Verify file isn't too small (likely an error)
         if (downloadedSize < 1000) {
           console.warn(`[Download] File is very small (${downloadedSize} bytes), may be an error response`);
+          fs.unlink(tempBundlePath, () => {});
+          reject(new Error('Downloaded file is suspiciously small - may be an error response'));
+          return;
         }
 
-        resolve(bundlePath);
+        // Rename temp file to final destination
+        try {
+          fs.renameSync(tempBundlePath, bundlePath);
+          console.log(`[Download] Renamed temp file to: ${bundlePath}`);
+          resolve(bundlePath);
+        } catch (renameError) {
+          const errorMsg = renameError instanceof Error ? renameError.message : 'Unknown error';
+          console.error(`[Download] Failed to rename file: ${errorMsg}`);
+          fs.unlink(tempBundlePath, () => {});
+          reject(new Error(`Failed to finalize download: ${errorMsg}`));
+        }
       });
 
       file.on('error', (err) => {
         console.error(`[Download] File write error: ${err.message}`);
         console.error(`[Download] File write error code: ${(err as any).code}`);
         console.error(`[Download] File write error errno: ${(err as any).errno}`);
-        fs.unlink(bundlePath, () => {}); // Delete the file on error
+        fs.unlink(tempBundlePath, () => {}); // Delete the temp file on error
         reject(new Error(`File write error (${(err as any).code}): ${err.message}`));
       });
     });
 
     request.on('error', (err) => {
       console.error(`[Download] Request error: ${err.message}`);
-      fs.unlink(bundlePath, () => {}); // Delete the file on error
+      fs.unlink(tempBundlePath, () => {}); // Delete the temp file on error
       reject(err);
     });
 
     request.on('timeout', () => {
       console.error('[Download] Request timeout');
       request.destroy();
-      fs.unlink(bundlePath, () => {}); // Delete the file on timeout
+      fs.unlink(tempBundlePath, () => {}); // Delete the temp file on timeout
       reject(new Error('Download timeout - file is too large or server is slow'));
     });
   });
