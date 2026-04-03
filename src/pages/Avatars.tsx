@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Shirt, Search, Star, ArrowLeft, Heart, AlertCircle } from 'lucide-react';
+import { Shirt, Search, Star, ArrowLeft, Heart, AlertCircle, RotateCw, Download, Folder, Loader } from 'lucide-react';
 import api from '../api/vrchat';
 import SearchInput from '../components/common/SearchInput';
 import EmptyState from '../components/common/EmptyState';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import { downloadAvatarBundle, extractAvatarBundle, openBundleFolder, isBundleDownloaded, addBundleToStore } from '../utils/avatarBundle';
 import type { VRCAvatar } from '../types/vrchat';
 
 type AvatarTab = 'favorites' | 'own' | 'search';
@@ -14,20 +15,32 @@ export default function AvatarsPage() {
   const [ownAvatars, setOwnAvatars] = useState<VRCAvatar[]>([]);
   const [searchResults, setSearchResults] = useState<VRCAvatar[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [favoriteError, setFavoriteError] = useState<string | null>(null);
-  const [ownError, setOwnError] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState('');
   const [selected, setSelected] = useState<VRCAvatar | null>(null);
   const [switching, setSwitching] = useState(false);
+  const [ownAvatarsError, setOwnAvatarsError] = useState<string | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [isExtracted, setIsExtracted] = useState(false);
+  const [bundleError, setBundleError] = useState<string | null>(null);
+  const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
 
   useEffect(() => {
     loadFavoriteAvatars();
     loadOwnAvatars();
   }, []);
 
+  useEffect(() => {
+    if (selected) {
+      setSelectedPackageId(selected.unityPackages?.[0]?.id || null);
+      setIsExtracted(isBundleDownloaded(selected.id));
+      setBundleError(null);
+    }
+  }, [selected]);
+
   const loadFavoriteAvatars = async () => {
     setIsLoading(true);
-    setFavoriteError(null);
     try {
       const favorites = await api.getFavorites('avatar', 100);
       // Resolve each favorite to full avatar data
@@ -36,21 +49,20 @@ export default function AvatarsPage() {
       );
       const results = await Promise.all(avatarPromises);
       setFavoriteAvatars(results.filter((a): a is VRCAvatar => a !== null));
-    } catch (error) {
-      setFavoriteError('Failed to load favorite avatars');
-      console.error('Error loading favorites:', error);
-    }
+    } catch {}
     setIsLoading(false);
   };
 
   const loadOwnAvatars = async () => {
-    setOwnError(null);
     try {
+      setOwnAvatarsError(null);
       const avatars = await api.getOwnAvatars();
-      setOwnAvatars(avatars);
-    } catch (error) {
-      setOwnError('Failed to load uploaded avatars');
-      console.error('Error loading own avatars:', error);
+      setOwnAvatars(Array.isArray(avatars) ? avatars : []);
+      console.log('Loaded own avatars:', avatars);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to load uploaded avatars';
+      setOwnAvatarsError(errorMsg);
+      console.error('Error loading own avatars:', err);
     }
   };
 
@@ -71,6 +83,58 @@ export default function AvatarsPage() {
       await api.selectAvatar(avatarId);
     } catch {}
     setSwitching(false);
+  };
+
+  const handleDownloadBundle = async () => {
+    if (!selected || !selectedPackageId) return;
+
+    setIsDownloading(true);
+    setBundleError(null);
+    setDownloadProgress(0);
+
+    const result = await downloadAvatarBundle(selected, selectedPackageId, (current, total) => {
+      setDownloadProgress(Math.round((current / total) * 100));
+    });
+
+    if (result.success && result.path) {
+      // Extract the bundle
+      setIsExtracting(true);
+      const extractResult = await extractAvatarBundle(result.path, selected.id);
+
+      if (extractResult.success) {
+        // Get bundle info for store
+        const selectedPackage = selected.unityPackages?.find(p => p.id === selectedPackageId);
+        if (selectedPackage) {
+          addBundleToStore(
+            selected.id,
+            selected.name,
+            selectedPackage.platform,
+            result.path,
+            0,
+            selectedPackage.unityVersion,
+            selectedPackageId
+          );
+        }
+        setIsExtracted(true);
+      } else {
+        setBundleError(extractResult.error || 'Failed to extract bundle');
+      }
+
+      setIsExtracting(false);
+    } else {
+      setBundleError(result.error || 'Failed to download bundle');
+    }
+
+    setIsDownloading(false);
+  };
+
+  const handleOpenBundleFolder = async () => {
+    if (!selected) return;
+    try {
+      await openBundleFolder(selected.id);
+    } catch (error) {
+      setBundleError(error instanceof Error ? error.message : 'Failed to open folder');
+    }
   };
 
   const avatars = tab === 'favorites' ? favoriteAvatars : tab === 'own' ? ownAvatars : searchResults;
@@ -107,13 +171,87 @@ export default function AvatarsPage() {
               Version {selected.version} &middot;
               Updated: {new Date(selected.updated_at).toLocaleDateString()}
             </div>
-            <button
-              onClick={() => handleSelect(selected.id)}
-              disabled={switching}
-              className="btn-primary mt-4 text-sm"
-            >
-              {switching ? 'Switching...' : 'Switch to this Avatar'}
-            </button>
+
+            {bundleError && (
+              <div className="mt-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-400 flex gap-2">
+                <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
+                <span>{bundleError}</span>
+              </div>
+            )}
+
+            {(isDownloading || isExtracting) && (
+              <div className="mt-4 space-y-2">
+                <div className="flex items-center justify-between text-xs text-surface-400">
+                  <span>{isExtracting ? 'Extracting...' : 'Downloading...'}</span>
+                  {!isExtracting && <span>{downloadProgress}%</span>}
+                </div>
+                <div className="w-full bg-surface-800 rounded-full h-2 overflow-hidden">
+                  <div
+                    className="bg-accent-600 h-full rounded-full transition-all duration-300"
+                    style={{ width: `${isExtracting ? 100 : downloadProgress}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Package selector (Windows only) */}
+            {typeof window !== 'undefined' && (window as any).electronAPI && selected.unityPackages && selected.unityPackages.length > 0 && (
+              <div className="mt-4">
+                <label className="text-xs font-semibold text-surface-500 block mb-1.5">Package</label>
+                <select
+                  value={selectedPackageId || ''}
+                  onChange={e => setSelectedPackageId(e.target.value)}
+                  disabled={isDownloading || isExtracting}
+                  className="w-full px-3 py-2 bg-surface-800 border border-surface-700 rounded text-xs text-surface-300 hover:bg-surface-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {selected.unityPackages.map(pkg => (
+                    <option key={pkg.id} value={pkg.id}>
+                      {pkg.platform} (Unity {pkg.unityVersion})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="mt-4 space-y-2 flex flex-col">
+              <button
+                onClick={() => handleSelect(selected.id)}
+                disabled={switching}
+                className="btn-primary text-sm"
+              >
+                {switching ? 'Switching...' : 'Switch to this Avatar'}
+              </button>
+
+              {/* Bundle buttons (Windows only) */}
+              {typeof window !== 'undefined' && (window as any).electronAPI && (
+                <>
+                  {!isExtracted ? (
+                    <button
+                      onClick={handleDownloadBundle}
+                      disabled={isDownloading || isExtracting || !selectedPackageId}
+                      className="btn-secondary text-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isDownloading || isExtracting ? (
+                        <>
+                          <Loader size={14} className="animate-spin" /> Preparing...
+                        </>
+                      ) : (
+                        <>
+                          <Download size={14} /> Download Bundle
+                        </>
+                      )}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleOpenBundleFolder}
+                      className="btn-secondary text-sm flex items-center justify-center gap-2"
+                    >
+                      <Folder size={14} /> Open in File Explorer
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -154,22 +292,18 @@ export default function AvatarsPage() {
 
       {isLoading ? (
         <LoadingSpinner className="py-16" />
-      ) : (favoriteError && tab === 'favorites') || (ownError && tab === 'own') ? (
-        <div className="flex flex-col items-center justify-center py-12 gap-4">
-          <AlertCircle size={32} className="text-red-400/60" />
-          <div className="text-center">
-            <h2 className="text-lg font-semibold text-surface-100">
-              {tab === 'favorites' ? 'Failed to load favorites' : 'Failed to load uploads'}
-            </h2>
-            <p className="text-sm text-surface-400 mt-1">
-              {tab === 'favorites' ? favoriteError : ownError}
-            </p>
+      ) : tab === 'own' && ownAvatarsError ? (
+        <div className="glass-panel-solid border border-rose-500/30 bg-rose-500/10 p-4 rounded-lg flex items-start gap-3">
+          <AlertCircle size={20} className="text-rose-500 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-rose-400">Error loading uploaded avatars</p>
+            <p className="text-xs text-rose-400/80 mt-1">{ownAvatarsError}</p>
           </div>
           <button
-            onClick={tab === 'favorites' ? loadFavoriteAvatars : loadOwnAvatars}
-            className="btn-secondary text-sm"
+            onClick={loadOwnAvatars}
+            className="btn-secondary text-xs flex items-center gap-1 flex-shrink-0"
           >
-            Retry
+            <RotateCw size={14} /> Retry
           </button>
         </div>
       ) : avatars.length === 0 ? (

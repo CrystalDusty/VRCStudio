@@ -1,6 +1,7 @@
-import { useState } from 'react';
-import { X, Download, Copy, Check, ExternalLink } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { X, Download, Copy, Check, ExternalLink, Folder, AlertCircle, Loader } from 'lucide-react';
 import type { VRCAvatar } from '../types/vrchat';
+import { downloadAvatarBundle, extractAvatarBundle, openBundleFolder, isBundleDownloaded, addBundleToStore } from '../utils/avatarBundle';
 
 interface AvatarPreviewModalProps {
   avatar: VRCAvatar;
@@ -9,6 +10,19 @@ interface AvatarPreviewModalProps {
 
 export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewModalProps) {
   const [copied, setCopied] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [isExtracted, setIsExtracted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedPackageId, setSelectedPackageId] = useState<string | null>(
+    avatar.unityPackages?.[0]?.id || null
+  );
+
+  // Check if bundle is already downloaded
+  useEffect(() => {
+    setIsExtracted(isBundleDownloaded(avatar.id));
+  }, [avatar.id]);
 
   const handleCopyId = () => {
     navigator.clipboard.writeText(avatar.id);
@@ -34,6 +48,61 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
       window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Failed to download image:', error);
+    }
+  };
+
+  const handleDownloadBundle = async () => {
+    if (!selectedPackageId) {
+      setError('No package selected');
+      return;
+    }
+
+    setIsDownloading(true);
+    setError(null);
+    setDownloadProgress(0);
+
+    const result = await downloadAvatarBundle(avatar, selectedPackageId, (current, total) => {
+      setDownloadProgress(Math.round((current / total) * 100));
+    });
+
+    if (result.success && result.path) {
+      // Extract the bundle
+      setIsExtracting(true);
+      const extractResult = await extractAvatarBundle(result.path, avatar.id);
+
+      if (extractResult.success) {
+        // Get bundle info for store
+        const selectedPackage = avatar.unityPackages?.find(p => p.id === selectedPackageId);
+        if (selectedPackage) {
+          addBundleToStore(
+            avatar.id,
+            avatar.name,
+            selectedPackage.platform,
+            result.path,
+            0, // We don't have the file size readily available
+            selectedPackage.unityVersion,
+            selectedPackageId
+          );
+        }
+        setIsExtracted(true);
+        setError(null);
+      } else {
+        setError(extractResult.error || 'Failed to extract bundle');
+      }
+
+      setIsExtracting(false);
+    } else {
+      setError(result.error || 'Failed to download bundle');
+    }
+
+    setIsDownloading(false);
+  };
+
+  const handleOpenBundleFolder = async () => {
+    try {
+      await openBundleFolder(avatar.id);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to open folder');
     }
   };
 
@@ -124,6 +193,49 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
             </div>
           )}
 
+          {/* Error message */}
+          {error && (
+            <div className="flex gap-2 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-400">
+              <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {/* Package selector (Windows only) */}
+          {typeof window !== 'undefined' && (window as any).electronAPI && avatar.unityPackages && avatar.unityPackages.length > 0 && (
+            <div>
+              <label className="text-xs font-semibold text-surface-500 block mb-1.5">Package</label>
+              <select
+                value={selectedPackageId || ''}
+                onChange={e => setSelectedPackageId(e.target.value)}
+                disabled={isDownloading || isExtracting}
+                className="w-full px-3 py-2 bg-surface-800 border border-surface-700 rounded text-xs text-surface-300 hover:bg-surface-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {avatar.unityPackages.map(pkg => (
+                  <option key={pkg.id} value={pkg.id}>
+                    {pkg.platform} (Unity {pkg.unityVersion})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Bundle download progress */}
+          {(isDownloading || isExtracting) && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs text-surface-400">
+                <span>{isExtracting ? 'Extracting...' : 'Downloading...'}</span>
+                {!isExtracting && <span>{downloadProgress}%</span>}
+              </div>
+              <div className="w-full bg-surface-800 rounded-full h-2 overflow-hidden">
+                <div
+                  className="bg-accent-600 h-full rounded-full transition-all duration-300"
+                  style={{ width: `${isExtracting ? 100 : downloadProgress}%` }}
+                />
+              </div>
+            </div>
+          )}
+
           {/* Action buttons */}
           <div className="space-y-2 mt-4">
             <button
@@ -132,6 +244,37 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
             >
               <ExternalLink size={14} /> View in VRChat
             </button>
+
+            {/* Bundle download/open buttons (Windows only) */}
+            {typeof window !== 'undefined' && (window as any).electronAPI && (
+              <>
+                {!isExtracted ? (
+                  <button
+                    onClick={handleDownloadBundle}
+                    disabled={isDownloading || isExtracting || !selectedPackageId}
+                    className="btn-secondary w-full text-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isDownloading || isExtracting ? (
+                      <>
+                        <Loader size={14} className="animate-spin" /> Preparing...
+                      </>
+                    ) : (
+                      <>
+                        <Download size={14} /> Download Bundle
+                      </>
+                    )}
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleOpenBundleFolder}
+                    className="btn-secondary w-full text-sm flex items-center justify-center gap-2"
+                  >
+                    <Folder size={14} /> Open in File Explorer
+                  </button>
+                )}
+              </>
+            )}
+
             <button
               onClick={handleDownloadImage}
               className="btn-secondary w-full text-sm flex items-center justify-center gap-2"

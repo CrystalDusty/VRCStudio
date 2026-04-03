@@ -1,48 +1,79 @@
+/**
+ * VRC+ Detection utility
+ * Detects if a user has VRC+ subscription based on various indicators
+ */
+
 import type { VRCUser, VRCCurrentUser } from '../types/vrchat';
 
 /**
- * Detects if a user has VRC+ subscription
- * VRC+ is indicated by special userIcon values or specific tags
+ * Check if a user has VRC+ subscription
+ * VRC+ is indicated by:
+ * 1. Special userIcon URL containing "vrc_plus" or similar
+ * 2. Tags containing VRC+ indicators
+ * 3. Profile status or other markers
  */
 export function isVrcPlus(user: VRCUser | VRCCurrentUser | null | undefined): boolean {
   if (!user) return false;
 
-  // Check userIcon field for VRC+ indicators
-  // VRC+ users may have "twoFactorAuth" combined with other indicators
-  const userIcon = user.userIcon || '';
+  // Check userIcon for VRC+ indicator
+  // VRC+ users have a special icon that may contain specific markers
+  if (user.userIcon && typeof user.userIcon === 'string') {
+    // Check for known VRC+ icon patterns
+    if (
+      user.userIcon.includes('vrc_plus') ||
+      user.userIcon.includes('vrcplus') ||
+      user.userIcon.includes('vrc+') ||
+      user.userIcon.includes('premium')
+    ) {
+      return true;
+    }
+  }
 
   // Check tags for VRC+ indicators
-  const tags = user.tags || [];
-  const hasVrcPlusTag = tags.some(tag =>
-    tag.toLowerCase().includes('vrc_plus') ||
-    tag.toLowerCase().includes('vrcplus') ||
-    tag.toLowerCase() === 'system_vrc_plus'
-  );
+  if (user.tags && Array.isArray(user.tags)) {
+    for (const tag of user.tags) {
+      if (
+        tag === 'system_vrc_plus' ||
+        tag === 'system_vrcplus' ||
+        tag === 'vrc_plus' ||
+        tag.toLowerCase().includes('vrc_plus') ||
+        tag.toLowerCase().includes('vrcplus')
+      ) {
+        return true;
+      }
+    }
+  }
 
-  // VRC+ users typically have elevated trust ranks and special features
-  // The userIcon field may contain patterns specific to VRC+ (commonly has checkmark or special badge)
-  const hasVrcPlusIcon = userIcon && (
-    userIcon.includes('vrc_plus') ||
-    userIcon.includes('vrcplus') ||
-    userIcon.includes('checkmark')
-  );
+  // Check if profilePicOverride exists and has specific pattern
+  // VRC+ users often have special profile pic handling
+  if ((user as VRCCurrentUser).profilePicOverride) {
+    // This is a basic check; adjust based on actual API behavior
+    return true;
+  }
 
-  return hasVrcPlusTag || hasVrcPlusIcon;
+  return false;
 }
 
 /**
- * Get favorite slots count based on VRC+ status and trust rank
- * Base users: 5 slots
- * VRC+ users: 10 slots per type (world, avatar, friend)
+ * Get the number of favorite slots available for a user
+ * Non-VRC+ users have 4 favorite slots per category
+ * VRC+ users have more favorite slots (typically 8-10)
  */
-export function getFavoriteSlotsCount(isVrcPlus: boolean): number {
-  return isVrcPlus ? 10 : 5;
+export function getFavoriteSlotsCount(user: VRCUser | VRCCurrentUser | null | undefined, category: 'avatar' | 'world' | 'group'): number {
+  const hasVrcPlus = isVrcPlus(user);
+
+  // Standard favorite slots
+  const baseFavorites = 4;
+
+  // VRC+ bonus slots
+  const vrcPlusBonusPerCategory = 6; // Total 10 per category with VRC+
+
+  return hasVrcPlus ? (baseFavorites + vrcPlusBonusPerCategory) : baseFavorites;
 }
 
 /**
- * Get avatar favorite slots count based on VRC+ status
- * This applies to avatar favorites specifically
+ * Get display name for VRC+ subscription status
  */
-export function getAvatarFavoriteSlotsCount(isVrcPlus: boolean): number {
-  return isVrcPlus ? 10 : 5;
+export function getVrcPlusStatusText(user: VRCUser | VRCCurrentUser | null | undefined): string {
+  return isVrcPlus(user) ? 'VRC+ Member' : 'Free Account';
 }

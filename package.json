@@ -21,7 +21,8 @@
     "zustand": "^4.5.4",
     "lucide-react": "^0.441.0",
     "date-fns": "^3.6.0",
-    "clsx": "^2.1.1"
+    "clsx": "^2.1.1",
+    "adm-zip": "^0.5.10"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",
