@@ -398,7 +398,64 @@ function PhotoPrintCreator({
       // Draw border on fixed canvas
       drawBorder(ctx, canvas.width, canvas.height, settings.border);
 
-      // TODO: Add text overlay for fixed size
+      // Draw text overlay for fixed size
+      const lines: string[] = [];
+      if (settings.showUsername && user?.displayName) lines.push(user.displayName);
+      if (settings.showWorldName && screenshot.worldName) lines.push(`📍 ${screenshot.worldName}`);
+      if (settings.showDate) lines.push(format(screenshot.takenAt, 'MMM d, yyyy  HH:mm'));
+      if (settings.showCustomText && settings.customText) lines.push(settings.customText);
+
+      if (lines.length > 0) {
+        ctx.font = `bold ${settings.fontSize}px 'Segoe UI', sans-serif`;
+        const maxW = Math.max(...lines.map(l => ctx.measureText(l).width));
+        const blockH = lines.length * (settings.fontSize + 10) + 20;
+        const pad = 16;
+
+        let bx: number, by: number;
+        if (settings.position === 'bottom-right') {
+          bx = canvas.width - maxW - pad * 2 - 20;
+          by = canvas.height - blockH - 20;
+        } else if (settings.position === 'top-left') {
+          bx = 20;
+          by = 20;
+        } else if (settings.position === 'top-right') {
+          bx = canvas.width - maxW - pad * 2 - 20;
+          by = 20;
+        } else {
+          bx = 20;
+          by = canvas.height - blockH - 20;
+        }
+
+        // Background
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        const radius = 12;
+        ctx.beginPath();
+        ctx.moveTo(bx + radius, by);
+        ctx.lineTo(bx + maxW + pad * 2 - radius, by);
+        ctx.quadraticCurveTo(bx + maxW + pad * 2, by, bx + maxW + pad * 2, by + radius);
+        ctx.lineTo(bx + maxW + pad * 2, by + blockH - radius);
+        ctx.quadraticCurveTo(bx + maxW + pad * 2, by + blockH, bx + maxW + pad * 2 - radius, by + blockH);
+        ctx.lineTo(bx + radius, by + blockH);
+        ctx.quadraticCurveTo(bx, by + blockH, bx, by + blockH - radius);
+        ctx.lineTo(bx, by + radius);
+        ctx.quadraticCurveTo(bx, by, bx + radius, by);
+        ctx.closePath();
+        ctx.fill();
+
+        // Text
+        ctx.fillStyle = '#ffffff';
+        ctx.font = `bold ${settings.fontSize}px 'Segoe UI', sans-serif`;
+        let ty = by + pad + settings.fontSize;
+        for (let i = 0; i < lines.length; i++) {
+          if (i > 0) {
+            ctx.font = `${settings.fontSize - 4}px 'Segoe UI', sans-serif`;
+            ctx.fillStyle = 'rgba(255,255,255,0.85)';
+          }
+          ctx.fillText(lines[i], bx + pad, ty);
+          ty += settings.fontSize + 10;
+        }
+      }
+
       setPreviewUrl(canvas.toDataURL('image/png'));
       setRendering(false);
       return;
@@ -423,7 +480,7 @@ function PhotoPrintCreator({
       ctx.drawImage(img, padding, padding, img.width, img.height);
       ctx.shadowColor = 'transparent';
 
-      // Text on polaroid bottom
+      // Text on polaroid
       ctx.fillStyle = '#333333';
       ctx.font = `${settings.fontSize}px 'Segoe UI', sans-serif`;
       const lines: string[] = [];
@@ -432,7 +489,14 @@ function PhotoPrintCreator({
       if (settings.showDate) lines.push(format(screenshot.takenAt, 'MMM d, yyyy'));
       if (settings.showCustomText && settings.customText) lines.push(settings.customText);
 
-      let ty = img.height + padding + 40;
+      // Position text based on setting
+      let ty: number;
+      if (settings.position === 'top-left' || settings.position === 'top-right') {
+        ty = padding + 20;
+      } else {
+        ty = img.height + padding + 40;
+      }
+
       for (const line of lines) {
         ctx.fillText(line, padding + 10, ty);
         ty += settings.fontSize + 8;
@@ -441,11 +505,22 @@ function PhotoPrintCreator({
       const stripH = 60;
       canvas.width = img.width;
       canvas.height = img.height + stripH;
-      ctx.drawImage(img, 0, 0);
 
-      // Dark strip at bottom
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
-      ctx.fillRect(0, img.height, img.width, stripH);
+      // Position strip based on settings
+      const stripAtTop = settings.position === 'top-left' || settings.position === 'top-right';
+
+      // Draw image with appropriate positioning
+      if (stripAtTop) {
+        // Dark strip at top
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+        ctx.fillRect(0, 0, img.width, stripH);
+        ctx.drawImage(img, 0, stripH);
+      } else {
+        // Dark strip at bottom (default)
+        ctx.drawImage(img, 0, 0);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+        ctx.fillRect(0, img.height, img.width, stripH);
+      }
 
       ctx.fillStyle = '#ffffff';
       ctx.font = `${settings.fontSize - 4}px 'Segoe UI', sans-serif`;
@@ -457,7 +532,8 @@ function PhotoPrintCreator({
       if (settings.showCustomText && settings.customText) parts.push(settings.customText);
 
       const text = parts.join('  •  ');
-      ctx.fillText(text, 20, img.height + 38);
+      const textY = stripAtTop ? 38 : img.height + 38;
+      ctx.fillText(text, 20, textY);
     } else if (settings.style === 'minimal') {
       canvas.width = img.width;
       canvas.height = img.height;
@@ -619,10 +695,9 @@ function PhotoPrintCreator({
           </div>
 
           {/* Position */}
-          {settings.style !== 'polaroid' && settings.style !== 'strip' && (
-            <div>
-              <label className="text-xs text-surface-500 block mb-1.5">Position</label>
-              <div className="grid grid-cols-2 gap-1.5">
+          <div>
+            <label className="text-xs text-surface-500 block mb-1.5">Position</label>
+            <div className="grid grid-cols-2 gap-1.5">
                 {([
                   { key: 'bottom-left' as const, label: '↙ Bottom Left' },
                   { key: 'bottom-right' as const, label: '↘ Bottom Right' },
@@ -643,7 +718,6 @@ function PhotoPrintCreator({
                 ))}
               </div>
             </div>
-          )}
 
           {/* Toggle options */}
           <div className="space-y-2">
