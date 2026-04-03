@@ -328,6 +328,63 @@ ipcMain.handle('fs:deleteBundleData', async (_e, avatarId: string) => {
   }
 });
 
+// ─── Persistent App Data Storage ─────────────────────────────────────────────
+
+const getAppDataPath = (fileName: string) => {
+  const appDataDir = path.join(app.getPath('userData'), 'AppData');
+  if (!fs.existsSync(appDataDir)) {
+    fs.mkdirSync(appDataDir, { recursive: true });
+  }
+  return path.join(appDataDir, `${fileName}.json`);
+};
+
+ipcMain.handle('storage:saveAppData', async (_e, key: string, data: string) => {
+  try {
+    const filePath = getAppDataPath(key);
+    fs.writeFileSync(filePath, data, 'utf-8');
+    return { success: true };
+  } catch (error) {
+    throw new Error(`Failed to save app data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+});
+
+ipcMain.handle('storage:loadAppData', async (_e, key: string) => {
+  try {
+    const filePath = getAppDataPath(key);
+    if (!fs.existsSync(filePath)) {
+      return null;
+    }
+    const data = fs.readFileSync(filePath, 'utf-8');
+    return data;
+  } catch (error) {
+    throw new Error(`Failed to load app data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+});
+
+ipcMain.handle('storage:deleteAppData', async (_e, key: string) => {
+  try {
+    const filePath = getAppDataPath(key);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+    return { success: true };
+  } catch (error) {
+    throw new Error(`Failed to delete app data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+});
+
+ipcMain.handle('storage:clearAllAppData', async (_e) => {
+  try {
+    const appDataDir = path.join(app.getPath('userData'), 'AppData');
+    if (fs.existsSync(appDataDir)) {
+      fs.rmSync(appDataDir, { recursive: true, force: true });
+    }
+    return { success: true };
+  } catch (error) {
+    throw new Error(`Failed to clear app data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+});
+
 // Desktop notifications (Electron native)
 ipcMain.handle('notification:send', (_e, opts: { title: string; body: string; icon?: string }) => {
   if (Notification.isSupported()) {

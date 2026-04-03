@@ -34,6 +34,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openBundleFolder: (folderPath: string) => ipcRenderer.invoke('fs:openBundleFolder', folderPath),
   deleteBundleData: (avatarId: string) => ipcRenderer.invoke('fs:deleteBundleData', avatarId),
 
+  // Persistent app data storage
+  saveAppData: (key: string, data: string) => ipcRenderer.invoke('storage:saveAppData', key, data),
+  loadAppData: (key: string) => ipcRenderer.invoke('storage:loadAppData', key),
+  deleteAppData: (key: string) => ipcRenderer.invoke('storage:deleteAppData', key),
+  clearAllAppData: () => ipcRenderer.invoke('storage:clearAllAppData'),
+
   // Notifications
   sendNotification: (opts: { title: string; body: string; icon?: string }) =>
     ipcRenderer.invoke('notification:send', opts),
