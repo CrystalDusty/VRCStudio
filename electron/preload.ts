@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   extractBundle: (sourcePath: string, avatarId: string) => ipcRenderer.invoke('fs:extractBundle', sourcePath, avatarId),
   openBundleFolder: (folderPath: string) => ipcRenderer.invoke('fs:openBundleFolder', folderPath),
   deleteBundleData: (avatarId: string) => ipcRenderer.invoke('fs:deleteBundleData', avatarId),
+  openFileDialog: (options: { title?: string; message?: string; filters?: any[] }) => ipcRenderer.invoke('fs:openFileDialog', options),
 
   // Persistent app data storage
   saveAppData: (key: string, data: string) => ipcRenderer.invoke('storage:saveAppData', key, data),

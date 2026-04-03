@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { X, Download, Copy, Check, ExternalLink, Folder, AlertCircle, Loader } from 'lucide-react';
 import type { VRCAvatar } from '../types/vrchat';
-import { downloadAvatarBundle, extractAvatarBundle, openBundleFolder, isBundleDownloaded, addBundleToStore } from '../utils/avatarBundle';
+import { extractAvatarBundle, openBundleFolder, isBundleDownloaded, addBundleToStore } from '../utils/avatarBundle';
+import { downloadBundleWithFallback } from '../utils/bundleDownloadMethods';
 import BundleLoader from './BundleLoader';
 
 interface AvatarPreviewModalProps {
@@ -63,9 +64,22 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
     setError(null);
     setDownloadProgress(0);
 
-    const result = await downloadAvatarBundle(avatar, selectedPackageId, (current, total) => {
-      setDownloadProgress(Math.round((current / total) * 100));
-    });
+    // Get the package URL
+    const selectedPackage = avatar.unityPackages?.find(p => p.id === selectedPackageId);
+    const packageUrl = selectedPackage?.unityPackageUrl ||
+      `https://api.vrchat.cloud/file/file_${selectedPackageId}/file`;
+
+    // Use the fallback method which tries: cache, file picker, API
+    const result = await downloadBundleWithFallback(
+      avatar,
+      packageUrl,
+      (current, total) => {
+        setDownloadProgress(Math.round((current / total) * 100));
+      },
+      (method) => {
+        console.log(`[AvatarPreview] Attempting: ${method}`);
+      }
+    );
 
     if (result.success && result.path) {
       // Extract the bundle
@@ -74,7 +88,6 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
 
       if (extractResult.success && extractResult.extractedPath) {
         // Get bundle info for store
-        const selectedPackage = avatar.unityPackages?.find(p => p.id === selectedPackageId);
         if (selectedPackage) {
           addBundleToStore(
             avatar.id,
@@ -89,13 +102,14 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
         setExtractedPath(extractResult.extractedPath);
         setIsExtracted(true);
         setError(null);
+        console.log(`[AvatarPreview] Successfully downloaded and extracted via ${result.method}`);
       } else {
         setError(extractResult.error || 'Failed to extract bundle');
       }
 
       setIsExtracting(false);
     } else {
-      setError(result.error || 'Failed to download bundle');
+      setError(result.error || 'Failed to download bundle via any method');
     }
 
     setIsDownloading(false);

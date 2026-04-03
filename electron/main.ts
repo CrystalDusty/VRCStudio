@@ -1,5 +1,5 @@
 import {
-  app, BrowserWindow, ipcMain, shell, Tray, Menu,
+  app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog,
   nativeImage, Notification, nativeTheme,
 } from 'electron';
 import path from 'path';
@@ -524,6 +524,25 @@ ipcMain.handle('fs:deleteBundleData', async (_e, avatarId: string) => {
   const bundleDir = path.join(app.getPath('userData'), 'AvatarBundles', avatarId);
   if (fs.existsSync(bundleDir)) {
     fs.rmSync(bundleDir, { recursive: true, force: true });
+  }
+});
+
+ipcMain.handle('fs:openFileDialog', async (_e, options: any) => {
+  if (!mainWindow) {
+    throw new Error('Main window not available');
+  }
+
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: options.title || 'Select File',
+      message: options.message,
+      filters: options.filters || [{ name: 'All Files', extensions: ['*'] }],
+      properties: ['openFile'],
+    });
+
+    return result;
+  } catch (error) {
+    throw new Error(`Failed to open file dialog: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 });
 
