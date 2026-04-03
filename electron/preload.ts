@@ -17,7 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // File system
   readFile: (path: string) => ipcRenderer.invoke('fs:readFile', path),
   listDir: (path: string) => ipcRenderer.invoke('fs:listDir', path),
-  copyFile: (src: string, dest: string) => ipcRenderer.invoke('fs:copyFile', src, dest),
+  extractAvatarToDownloads: (cacheDataPath: string, avatarId: string) => ipcRenderer.invoke('fs:extractAvatarToDownloads', cacheDataPath, avatarId),
   getVRChatLogPath: () => ipcRenderer.invoke('fs:getVRChatLogPath'),
   getVRChatScreenshotPath: () => ipcRenderer.invoke('fs:getVRChatScreenshotPath'),
 

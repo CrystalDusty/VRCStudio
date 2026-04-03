@@ -172,7 +172,7 @@ export async function generateDownloadablePackage(
       }
     }
 
-    // 4. Try to get avatar bundle from VRChat cache
+    // 4. Try to get avatar bundle from VRChat cache - direct extraction to Downloads
     console.log('[AvatarExtractor] Searching for avatar bundle in VRChat cache...');
     const bundlePath = await findAvatarBundleInCache(avatar.id);
     if (bundlePath) {
@@ -181,32 +181,18 @@ export async function generateDownloadablePackage(
       try {
         const electronAPI = (window as any).electronAPI;
 
-        // Create temp file path for bundle
-        const tempBundlePath = `${(window as any).electronAPI?.getTempDir?.() || 'C:\\Temp'}\\${avatar.id}.unitypackage`;
+        // Direct extraction to Downloads - bypasses all encoding issues!
+        console.log('[AvatarExtractor] Extracting directly to Downloads folder...');
+        const extractResult = await electronAPI.extractAvatarToDownloads(bundlePath, avatar.id);
 
-        // Direct file copy - no encoding/decoding!
-        const copyResult = await electronAPI.copyFile(bundlePath, tempBundlePath);
-
-        if (copyResult.success) {
-          console.log('[AvatarExtractor] Bundle copied to temp location:', tempBundlePath);
-
-          // Read the copied file directly
-          const readResult = await electronAPI.readFile(tempBundlePath);
-          if (readResult.success && readResult.content) {
-            // Decode base64 back to binary
-            const binaryString = atob(readResult.content);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-              bytes[i] = binaryString.charCodeAt(i);
-            }
-
-            const bundleBlob = new Blob([bytes], { type: 'application/octet-stream' });
-            files.push(new File([bundleBlob], `${avatar.id}.unitypackage`, { type: 'application/octet-stream' }));
-            console.log('[AvatarExtractor] Bundle included:', `${(bundleBlob.size / 1024 / 1024).toFixed(2)} MB`);
-          }
+        if (extractResult.success) {
+          console.log('[AvatarExtractor] ✓ Bundle extracted to Downloads:', extractResult.path);
+          console.log('[AvatarExtractor] File size:', extractResult.size, 'bytes');
+        } else {
+          console.error('[AvatarExtractor] ✗ Extraction failed:', extractResult.error);
         }
       } catch (bundleError) {
-        console.error('[AvatarExtractor] Error copying bundle:', bundleError);
+        console.error('[AvatarExtractor] Error during extraction:', bundleError);
       }
     } else {
       console.log('[AvatarExtractor] Bundle not found in cache - user will need to add it manually');

@@ -170,23 +170,43 @@ ipcMain.handle('fs:readFile', async (_e, filePath: string) => {
   }
 });
 
-// Direct file copy - preserves binary data perfectly without encoding
-ipcMain.handle('fs:copyFile', async (_e, srcPath: string, destPath: string) => {
+// Extract avatar bundle directly from cache and save to Downloads
+ipcMain.handle('fs:extractAvatarToDownloads', async (_e, cacheDataPath: string, avatarId: string) => {
   try {
-    console.log(`[CopyFile] Copying ${srcPath} → ${destPath}`);
+    console.log(`[ExtractToDownloads] Extracting ${cacheDataPath}`);
 
-    // Ensure dest directory exists
-    const destDir = path.dirname(destPath);
-    if (!fs.existsSync(destDir)) {
-      fs.mkdirSync(destDir, { recursive: true });
+    // Verify cache file exists
+    if (!fs.existsSync(cacheDataPath)) {
+      throw new Error(`Cache file not found: ${cacheDataPath}`);
     }
 
-    fs.copyFileSync(srcPath, destPath);
-    const stats = fs.statSync(destPath);
-    console.log(`[CopyFile] ✓ File copied successfully (${stats.size} bytes)`);
-    return { success: true, size: stats.size };
+    const cacheStats = fs.statSync(cacheDataPath);
+    console.log(`[ExtractToDownloads] Cache file size: ${cacheStats.size} bytes`);
+
+    // Get Downloads folder
+    const downloadsPath = app.getPath('downloads');
+    const bundleFileName = `${avatarId}.unitypackage`;
+    const outputPath = path.join(downloadsPath, bundleFileName);
+
+    console.log(`[ExtractToDownloads] Copying to: ${outputPath}`);
+
+    // Direct binary copy - no encoding/decoding
+    fs.copyFileSync(cacheDataPath, outputPath);
+
+    const outputStats = fs.statSync(outputPath);
+    console.log(`[ExtractToDownloads] ✓ File copied successfully (${outputStats.size} bytes)`);
+
+    if (outputStats.size === 0) {
+      throw new Error('Output file is empty - copy may have failed');
+    }
+
+    if (outputStats.size !== cacheStats.size) {
+      console.warn(`[ExtractToDownloads] ⚠ Size mismatch: ${cacheStats.size} → ${outputStats.size}`);
+    }
+
+    return { success: true, path: outputPath, size: outputStats.size };
   } catch (err: any) {
-    console.error(`[CopyFile] ✗ Copy failed:`, err.message);
+    console.error(`[ExtractToDownloads] ✗ Failed:`, err.message);
     return { success: false, error: err.message };
   }
 });
