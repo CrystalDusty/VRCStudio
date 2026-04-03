@@ -1,0 +1,228 @@
+/**
+ * Avatar Extractor - Extract avatar data and assets for download
+ * Pulls avatar information, images, and builds a downloadable package
+ */
+
+import type { VRCAvatar } from '../types/vrchat';
+
+export interface AvatarAssets {
+  avatarId: string;
+  avatarName: string;
+  authorName: string;
+  description: string;
+  imageUrl: string;
+  thumbnailUrl: string;
+  tags: string[];
+  unityPackages: any[];
+  metadata: {
+    createdAt: string;
+    updatedAt: string;
+    releaseStatus: string;
+    version: number;
+  };
+}
+
+/**
+ * Extract avatar data and assets into a downloadable format
+ */
+export async function extractAvatarData(avatar: VRCAvatar): Promise<AvatarAssets> {
+  console.log('[AvatarExtractor] Extracting data for avatar:', avatar.name);
+
+  return {
+    avatarId: avatar.id,
+    avatarName: avatar.name,
+    authorName: avatar.authorName,
+    description: avatar.description,
+    imageUrl: avatar.imageUrl,
+    thumbnailUrl: avatar.thumbnailImageUrl,
+    tags: avatar.tags,
+    unityPackages: avatar.unityPackages.map(pkg => ({
+      id: pkg.id,
+      platform: pkg.platform,
+      unityVersion: pkg.unityVersion,
+      unitySortNumber: pkg.unitySortNumber,
+      assetVersion: pkg.assetVersion,
+      created_at: pkg.created_at,
+      unityPackageUrl: pkg.unityPackageUrl,
+    })),
+    metadata: {
+      createdAt: avatar.created_at,
+      updatedAt: avatar.updated_at,
+      releaseStatus: avatar.releaseStatus,
+      version: avatar.version,
+    },
+  };
+}
+
+/**
+ * Create a downloadable JSON file with all avatar data and asset URLs
+ */
+export async function createAvatarPackage(avatar: VRCAvatar): Promise<{
+  success: boolean;
+  data?: string;
+  error?: string;
+}> {
+  try {
+    const avatarData = await extractAvatarData(avatar);
+
+    // Create a comprehensive package with all downloadable asset URLs
+    const packageData = {
+      format: 'vrc-studio-avatar-v1',
+      timestamp: new Date().toISOString(),
+      avatar: avatarData,
+      downloadLinks: {
+        avatarImage: avatar.imageUrl,
+        avatarThumbnail: avatar.thumbnailImageUrl,
+      },
+      instructions: {
+        title: `How to use ${avatar.name}`,
+        steps: [
+          '1. Download the avatar image and thumbnail',
+          '2. If a bundle is available, download the .unitypackage for your platform',
+          '3. Import the package into Unity',
+          '4. Use the avatar in VRChat',
+        ],
+      },
+    };
+
+    // Convert to JSON string
+    const jsonData = JSON.stringify(packageData, null, 2);
+
+    console.log('[AvatarExtractor] Package created successfully');
+
+    return {
+      success: true,
+      data: jsonData,
+    };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[AvatarExtractor] Package creation failed:', errorMsg);
+    return {
+      success: false,
+      error: errorMsg,
+    };
+  }
+}
+
+/**
+ * Download avatar image as blob
+ */
+export async function downloadAvatarImage(
+  imageUrl: string,
+  fileName: string
+): Promise<{ success: boolean; blob?: Blob; error?: string }> {
+  try {
+    console.log('[AvatarExtractor] Downloading image from:', imageUrl);
+
+    const response = await fetch(imageUrl);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const blob = await response.blob();
+    console.log('[AvatarExtractor] Image downloaded, size:', blob.size);
+
+    return {
+      success: true,
+      blob,
+    };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[AvatarExtractor] Image download failed:', errorMsg);
+    return {
+      success: false,
+      error: errorMsg,
+    };
+  }
+}
+
+/**
+ * Create downloadable avatar package (metadata + images)
+ */
+export async function generateDownloadablePackage(
+  avatar: VRCAvatar
+): Promise<{ success: boolean; files?: File[]; error?: string }> {
+  try {
+    const files: File[] = [];
+
+    // 1. Create metadata JSON
+    const packageResult = await createAvatarPackage(avatar);
+    if (!packageResult.success || !packageResult.data) {
+      throw new Error('Failed to create package metadata');
+    }
+
+    const jsonBlob = new Blob([packageResult.data], { type: 'application/json' });
+    files.push(new File([jsonBlob], `${avatar.id}-metadata.json`, { type: 'application/json' }));
+
+    // 2. Download avatar image
+    if (avatar.imageUrl) {
+      const imageResult = await downloadAvatarImage(avatar.imageUrl, `${avatar.id}-image.png`);
+      if (imageResult.success && imageResult.blob) {
+        files.push(new File([imageResult.blob], `${avatar.id}-image.png`, { type: 'image/png' }));
+      }
+    }
+
+    // 3. Download avatar thumbnail
+    if (avatar.thumbnailImageUrl) {
+      const thumbResult = await downloadAvatarImage(avatar.thumbnailImageUrl, `${avatar.id}-thumbnail.png`);
+      if (thumbResult.success && thumbResult.blob) {
+        files.push(new File([thumbResult.blob], `${avatar.id}-thumbnail.png`, { type: 'image/png' }));
+      }
+    }
+
+    console.log('[AvatarExtractor] Package generated with', files.length, 'files');
+
+    return {
+      success: true,
+      files,
+    };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[AvatarExtractor] Package generation failed:', errorMsg);
+    return {
+      success: false,
+      error: errorMsg,
+    };
+  }
+}
+
+/**
+ * Trigger browser download of extracted avatar data
+ */
+export async function downloadAvatarExtract(avatar: VRCAvatar): Promise<{
+  success: boolean;
+  error?: string;
+}> {
+  try {
+    // Create downloadable package
+    const packageResult = await generateDownloadablePackage(avatar);
+    if (!packageResult.success || !packageResult.files) {
+      throw new Error(packageResult.error || 'Failed to generate package');
+    }
+
+    // Download each file
+    for (const file of packageResult.files) {
+      const url = URL.createObjectURL(file);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = file.name;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      // Small delay between downloads
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    console.log('[AvatarExtractor] Download completed');
+    return { success: true };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[AvatarExtractor] Download failed:', errorMsg);
+    return {
+      success: false,
+      error: errorMsg,
+    };
+  }
+}

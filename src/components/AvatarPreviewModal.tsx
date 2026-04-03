@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { X, Download, Copy, Check, ExternalLink, Folder, AlertCircle, Loader } from 'lucide-react';
+import { X, Download, Copy, Check, ExternalLink, Folder, AlertCircle, Loader, Archive } from 'lucide-react';
 import type { VRCAvatar } from '../types/vrchat';
 import { extractAvatarBundle, openBundleFolder, isBundleDownloaded, addBundleToStore } from '../utils/avatarBundle';
 import { downloadBundleDirectly } from '../utils/directDownload';
+import { downloadAvatarExtract } from '../utils/avatarExtractor';
 import BundleLoader from './BundleLoader';
 
 interface AvatarPreviewModalProps {
@@ -21,11 +22,35 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(
     avatar.unityPackages?.[0]?.id || null
   );
+  const [isExtracting2, setIsExtracting2] = useState(false);
 
   // Check if bundle is already downloaded
   useEffect(() => {
     setIsExtracted(isBundleDownloaded(avatar.id));
   }, [avatar.id]);
+
+  const handleExtractAvatar = async () => {
+    setIsExtracting2(true);
+    setError(null);
+
+    try {
+      const result = await downloadAvatarExtract(avatar);
+      if (result.success) {
+        setError(null);
+        // Show success message
+        setTimeout(() => {
+          setError(null);
+        }, 3000);
+      } else {
+        setError(result.error || 'Failed to extract avatar');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      setError(`Extraction failed: ${errorMsg}`);
+    } finally {
+      setIsExtracting2(false);
+    }
+  };
 
   const handleCopyId = () => {
     navigator.clipboard.writeText(avatar.id);
@@ -297,6 +322,23 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
               className="btn-secondary w-full text-sm flex items-center justify-center gap-2"
             >
               <Download size={14} /> Download Image
+            </button>
+
+            <button
+              onClick={handleExtractAvatar}
+              disabled={isExtracting2}
+              className="btn-secondary w-full text-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Extract avatar metadata and images for download"
+            >
+              {isExtracting2 ? (
+                <>
+                  <Loader size={14} className="animate-spin" /> Extracting...
+                </>
+              ) : (
+                <>
+                  <Archive size={14} /> Extract Avatar Data
+                </>
+              )}
             </button>
           </div>
 
