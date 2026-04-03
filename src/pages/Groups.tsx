@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { UsersRound, ArrowLeft, Shield, Hash, Calendar, AlertCircle, RotateCw } from 'lucide-react';
+import { UsersRound, ArrowLeft, Shield, Hash, Calendar, AlertCircle, RotateCw, ExternalLink } from 'lucide-react';
 import api from '../api/vrchat';
 import { useAuthStore } from '../stores/authStore';
 import EmptyState from '../components/common/EmptyState';
@@ -37,11 +37,25 @@ export default function GroupsPage() {
   };
 
   if (selectedGroup) {
+    const handleVisitGroup = () => {
+      const groupUrl = `https://vrchat.com/groups/${selectedGroup.shortCode}.${selectedGroup.discriminator}`;
+      window.open(groupUrl, '_blank');
+    };
+
     return (
       <div className="max-w-3xl mx-auto animate-fade-in">
-        <button onClick={() => setSelectedGroup(null)} className="btn-ghost flex items-center gap-1 mb-4 -ml-2">
-          <ArrowLeft size={16} /> Back to Groups
-        </button>
+        <div className="flex items-center justify-between mb-4">
+          <button onClick={() => setSelectedGroup(null)} className="btn-ghost flex items-center gap-1 -ml-2">
+            <ArrowLeft size={16} /> Back to Groups
+          </button>
+          <button
+            onClick={handleVisitGroup}
+            className="btn-secondary text-sm flex items-center gap-1.5"
+            title="Open this group in VRChat"
+          >
+            <ExternalLink size={14} /> Visit in Browser
+          </button>
+        </div>
 
         <div className="glass-panel-solid overflow-hidden">
           {selectedGroup.bannerUrl && (

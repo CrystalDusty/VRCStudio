@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Shirt, Search, Star, ArrowLeft, Heart } from 'lucide-react';
+import { Shirt, Search, Star, ArrowLeft, Heart, AlertCircle, RotateCw } from 'lucide-react';
 import api from '../api/vrchat';
 import SearchInput from '../components/common/SearchInput';
 import EmptyState from '../components/common/EmptyState';
@@ -17,6 +17,7 @@ export default function AvatarsPage() {
   const [searchInput, setSearchInput] = useState('');
   const [selected, setSelected] = useState<VRCAvatar | null>(null);
   const [switching, setSwitching] = useState(false);
+  const [ownAvatarsError, setOwnAvatarsError] = useState<string | null>(null);
 
   useEffect(() => {
     loadFavoriteAvatars();
@@ -39,9 +40,15 @@ export default function AvatarsPage() {
 
   const loadOwnAvatars = async () => {
     try {
+      setOwnAvatarsError(null);
       const avatars = await api.getOwnAvatars();
-      setOwnAvatars(avatars);
-    } catch {}
+      setOwnAvatars(Array.isArray(avatars) ? avatars : []);
+      console.log('Loaded own avatars:', avatars);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to load uploaded avatars';
+      setOwnAvatarsError(errorMsg);
+      console.error('Error loading own avatars:', err);
+    }
   };
 
   const handleSearch = async () => {
@@ -144,6 +151,20 @@ export default function AvatarsPage() {
 
       {isLoading ? (
         <LoadingSpinner className="py-16" />
+      ) : tab === 'own' && ownAvatarsError ? (
+        <div className="glass-panel-solid border border-rose-500/30 bg-rose-500/10 p-4 rounded-lg flex items-start gap-3">
+          <AlertCircle size={20} className="text-rose-500 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-rose-400">Error loading uploaded avatars</p>
+            <p className="text-xs text-rose-400/80 mt-1">{ownAvatarsError}</p>
+          </div>
+          <button
+            onClick={loadOwnAvatars}
+            className="btn-secondary text-xs flex items-center gap-1 flex-shrink-0"
+          >
+            <RotateCw size={14} /> Retry
+          </button>
+        </div>
       ) : avatars.length === 0 ? (
         <EmptyState
           icon={tab === 'search' ? Search : tab === 'favorites' ? Heart : Shirt}

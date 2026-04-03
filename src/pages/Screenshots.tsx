@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { Camera, Upload, FolderOpen, X, Globe, Calendar, Printer, Download, Type, Paintbrush, Undo, Redo, RotateCcw, Palette } from 'lucide-react';
 import { format } from 'date-fns';
 import EmptyState from '../components/common/EmptyState';
@@ -53,6 +53,73 @@ const defaultPrintSettings: PrintSettings = {
   style: 'classic',
   fontSize: 24,
 };
+
+// Photo Editor Canvas Component
+function PhotoEditorCanvas({
+  imageSrc,
+  editState,
+  canvasRef,
+}: {
+  imageSrc: string;
+  editState: CanvasEditState;
+  canvasRef: React.RefObject<HTMLCanvasElement>;
+}) {
+  useEffect(() => {
+    if (!canvasRef.current) return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      // Set canvas size to image size
+      canvas.width = img.width;
+      canvas.height = img.height;
+
+      // Draw the original image
+      ctx.drawImage(img, 0, 0);
+
+      // Apply adjustments (brightness, contrast, saturation)
+      applyAdjustments(
+        ctx,
+        editState.brightness,
+        editState.contrast,
+        editState.saturation,
+        canvas.width,
+        canvas.height
+      );
+
+      // Apply filters (grayscale, sepia, blur, temperature)
+      applyFilters(
+        ctx,
+        editState.filters.grayscale,
+        editState.filters.sepia,
+        editState.filters.blur,
+        editState.filters.temperature,
+        canvas.width,
+        canvas.height
+      );
+
+      // Apply border
+      if (editState.borderStyle.width > 0) {
+        drawBorder(
+          ctx,
+          canvas.width,
+          canvas.height,
+          editState.borderStyle.width,
+          editState.borderStyle.color,
+          editState.borderStyle.style,
+          editState.borderStyle.radius
+        );
+      }
+    };
+    img.src = imageSrc;
+  }, [imageSrc, editState, canvasRef]);
+
+  return <canvas ref={canvasRef} className="w-full rounded-xl shadow-2xl" />;
+}
 
 function PhotoPrintCreator({
   screenshot,
@@ -241,10 +308,10 @@ function PhotoPrintCreator({
     setRendering(false);
   }, [screenshot, settings, user]);
 
-  // Auto-render on settings change
-  useState(() => {
+  // Auto-render on settings change or theme change
+  useEffect(() => {
     setTimeout(renderPrint, 100);
-  });
+  }, [renderPrint, settings, currentTheme]);
 
   const handleDownload = () => {
     if (!previewUrl) return;
@@ -699,12 +766,16 @@ export default function ScreenshotsPage() {
             <div className="flex-1 flex items-center justify-center overflow-auto">
               {isPhotoEditing ? (
                 <div className="flex flex-col gap-3 w-full">
-                  <canvas ref={photoCanvasRef} className="w-full rounded-xl shadow-2xl" />
+                  <PhotoEditorCanvas
+                    imageSrc={selected.src}
+                    editState={editState}
+                    canvasRef={photoCanvasRef}
+                  />
                   <div className="flex gap-2 justify-center">
-                    <button className="btn-secondary text-xs flex items-center gap-1">
+                    <button className="btn-secondary text-xs flex items-center gap-1" disabled>
                       <Undo size={12} /> Undo
                     </button>
-                    <button className="btn-secondary text-xs flex items-center gap-1">
+                    <button className="btn-secondary text-xs flex items-center gap-1" disabled>
                       <Redo size={12} /> Redo
                     </button>
                     <button
