@@ -263,6 +263,44 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
   });
 });
 
+// Detect file format by reading magic bytes (file signature)
+function detectFileFormat(filePath: string): string {
+  try {
+    const buffer = Buffer.alloc(16);
+    const fd = fs.openSync(filePath, 'r');
+    fs.readSync(fd, buffer, 0, 16);
+    fs.closeSync(fd);
+
+    // Magic bytes detection
+    // ZIP: 50 4B 03 04 or 50 4B 05 06 or 50 4B 07 08
+    if (buffer[0] === 0x50 && buffer[1] === 0x4b) {
+      return 'ZIP';
+    }
+    // TAR.GZ: 1F 8B (gzip magic)
+    if (buffer[0] === 0x1f && buffer[1] === 0x8b) {
+      return 'TAR.GZ';
+    }
+    // TAR (ustar): 75 73 74 61 72 at offset 257
+    if (buffer.toString('ascii', 257, 262) === 'ustar') {
+      return 'TAR';
+    }
+    // 7z: 37 7A BC AF 27 1C
+    if (buffer[0] === 0x37 && buffer[1] === 0x7a) {
+      return '7z';
+    }
+    // GZIP only (not TAR): 1F 8B but check if it's compressed data
+    if (buffer[0] === 0x1f && buffer[1] === 0x8b) {
+      return 'GZIP';
+    }
+
+    // Unknown format - return hex dump for debugging
+    const hexDump = buffer.toString('hex');
+    return `UNKNOWN (${hexDump})`;
+  } catch (error) {
+    return `ERROR_DETECTING_FORMAT: ${error instanceof Error ? error.message : 'Unknown error'}`;
+  }
+}
+
 ipcMain.handle('fs:extractBundle', async (_e, sourcePath: string, avatarId: string) => {
   if (process.platform !== 'win32') {
     throw new Error('Avatar extraction only supported on Windows');
@@ -279,49 +317,144 @@ ipcMain.handle('fs:extractBundle', async (_e, sourcePath: string, avatarId: stri
       throw new Error('Downloaded bundle file is empty. The download may have failed.');
     }
 
+    // Detect actual file format
+    const detectedFormat = detectFileFormat(sourcePath);
+    console.log(`[Bundle] Detected format: ${detectedFormat}, File size: ${stats.size} bytes`);
+
     const extractDir = path.join(app.getPath('userData'), 'AvatarBundles', avatarId, 'extracted');
     if (fs.existsSync(extractDir)) {
       fs.rmSync(extractDir, { recursive: true, force: true });
     }
     fs.mkdirSync(extractDir, { recursive: true });
 
-    // Extract .unitypackage (TAR.GZ format)
-    // .unitypackage is a gzipped TAR archive with a specific structure:
-    // {assetId}/pathname - contains the asset path
-    // {assetId}/asset - contains the actual asset data
-    try {
-      await tar.x({
-        file: sourcePath,
-        cwd: extractDir,
-        strip: 1, // Remove the asset ID directory level
-      });
-    } catch (tarError) {
-      // If TAR extraction fails, try as gzipped TAR
+    let extractionSuccess = false;
+    let lastError: Error | null = null;
+
+    // Try different extraction methods based on detected format
+    if (detectedFormat.includes('ZIP')) {
       try {
+        console.log('[Bundle] Attempting ZIP extraction...');
+        const AdmZip = await import('adm-zip').then(m => m.default);
+        const zip = new AdmZip(sourcePath);
+        zip.extractAllTo(extractDir, true);
+        extractionSuccess = true;
+        console.log('[Bundle] ZIP extraction successful');
+      } catch (zipError) {
+        lastError = zipError instanceof Error ? zipError : new Error(String(zipError));
+        console.log('[Bundle] ZIP extraction failed:', lastError.message);
+      }
+    }
+
+    // Try TAR.GZ extraction
+    if (!extractionSuccess && (detectedFormat.includes('TAR.GZ') || detectedFormat.includes('GZIP'))) {
+      try {
+        console.log('[Bundle] Attempting TAR.GZ extraction...');
         await tar.x({
           file: sourcePath,
           cwd: extractDir,
           gzip: true,
           strip: 1,
         });
-      } catch (gzipError) {
-        throw new Error(
-          `Invalid bundle format: Not a valid TAR or TAR.GZ file. ` +
-          `Make sure you downloaded a valid .unitypackage file. ` +
-          `${tarError instanceof Error ? tarError.message : ''}`
-        );
+        extractionSuccess = true;
+        console.log('[Bundle] TAR.GZ extraction successful');
+      } catch (tarError) {
+        lastError = tarError instanceof Error ? tarError : new Error(String(tarError));
+        console.log('[Bundle] TAR.GZ extraction failed:', lastError.message);
       }
+    }
+
+    // Try plain TAR extraction
+    if (!extractionSuccess && detectedFormat.includes('TAR')) {
+      try {
+        console.log('[Bundle] Attempting TAR extraction...');
+        await tar.x({
+          file: sourcePath,
+          cwd: extractDir,
+          strip: 1,
+        });
+        extractionSuccess = true;
+        console.log('[Bundle] TAR extraction successful');
+      } catch (tarError) {
+        lastError = tarError instanceof Error ? tarError : new Error(String(tarError));
+        console.log('[Bundle] TAR extraction failed:', lastError.message);
+      }
+    }
+
+    // If detected format failed, try all formats as fallback
+    if (!extractionSuccess) {
+      console.log('[Bundle] Trying all extraction methods as fallback...');
+
+      // Try TAR without gzip
+      try {
+        console.log('[Bundle] Fallback: Attempting TAR extraction...');
+        await tar.x({
+          file: sourcePath,
+          cwd: extractDir,
+          strict: false, // Be lenient with TAR format
+        });
+        extractionSuccess = true;
+        console.log('[Bundle] Fallback TAR extraction successful');
+      } catch (e) {
+        console.log('[Bundle] Fallback TAR failed');
+      }
+
+      // Try TAR with gzip
+      if (!extractionSuccess) {
+        try {
+          console.log('[Bundle] Fallback: Attempting TAR.GZ extraction...');
+          await tar.x({
+            file: sourcePath,
+            cwd: extractDir,
+            gzip: true,
+            strict: false,
+          });
+          extractionSuccess = true;
+          console.log('[Bundle] Fallback TAR.GZ extraction successful');
+        } catch (e) {
+          console.log('[Bundle] Fallback TAR.GZ failed');
+        }
+      }
+
+      // Try ZIP as last resort
+      if (!extractionSuccess) {
+        try {
+          console.log('[Bundle] Fallback: Attempting ZIP extraction...');
+          const AdmZip = await import('adm-zip').then(m => m.default);
+          const zip = new AdmZip(sourcePath);
+          zip.extractAllTo(extractDir, true);
+          extractionSuccess = true;
+          console.log('[Bundle] Fallback ZIP extraction successful');
+        } catch (e) {
+          console.log('[Bundle] Fallback ZIP failed');
+        }
+      }
+    }
+
+    // Check if extraction was successful
+    if (!extractionSuccess) {
+      const errorMsg = lastError?.message || 'Unknown extraction error';
+      throw new Error(
+        `Failed to extract bundle: Could not extract file. ` +
+        `Detected format: ${detectedFormat}. ` +
+        `File size: ${stats.size} bytes. ` +
+        `Error: ${errorMsg}`
+      );
     }
 
     // Verify extraction was successful
     const extractedFiles = fs.readdirSync(extractDir);
     if (extractedFiles.length === 0) {
-      throw new Error('Bundle extracted but no files found. The bundle may be corrupted.');
+      throw new Error(
+        'Bundle extracted but no files found. The bundle may be corrupted or in an unexpected format.'
+      );
     }
 
+    console.log(`[Bundle] Extraction complete. Extracted ${extractedFiles.length} items.`);
     return extractDir;
   } catch (error) {
-    throw new Error(`Failed to extract bundle: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[Bundle] Extraction error:', errorMsg);
+    throw new Error(`Failed to extract bundle: ${errorMsg}`);
   }
 });
 
