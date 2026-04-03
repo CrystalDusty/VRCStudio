@@ -36,11 +36,12 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
     try {
       const result = await downloadAvatarExtract(avatar);
       if (result.success) {
-        setError(null);
-        // Show success message
-        setTimeout(() => {
+        if (!result.bundleFound) {
+          setError(result.error || 'Bundle not found in VRChat cache - download still completed with metadata and images');
+          console.warn('[AvatarPreview] Bundle not in cache:', result.error);
+        } else {
           setError(null);
-        }, 3000);
+        }
       } else {
         setError(result.error || 'Failed to extract avatar');
       }

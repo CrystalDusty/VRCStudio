@@ -60,45 +60,65 @@ export async function findAvatarBundleInCache(
 
   try {
     const electronAPI = (window as any).electronAPI;
-    const username = (window as any).electronAPI?.username || process.env.USERNAME || 'User';
 
-    // VRChat cache locations
+    // Get username from environment - try multiple ways
+    let username = process.env.USERNAME || 'User';
+
+    // Remove "avtr_" prefix to get just the ID for searching
+    const shortAvatarId = avatarId.replace('avtr_', '');
+
+    console.log('[VRChatCache] Searching for avatar:', avatarId, '(short ID:', shortAvatarId, ')');
+    console.log('[VRChatCache] Username:', username);
+
+    // VRChat cache locations - try many possible locations
     const cachePaths = [
       `C:\\Users\\${username}\\AppData\\LocalLow\\VRChat\\VRChat\\Cache-WebGL`,
       `C:\\Users\\${username}\\AppData\\LocalLow\\VRChat\\VRChat\\Cache`,
+      `C:\\Users\\${username}\\AppData\\LocalLow\\VRChat\\VRChat\\Avatars`,
       `C:\\Users\\${username}\\AppData\\LocalLow\\VRChat\\VRChat\\file_${avatarId}`,
+      `C:\\Users\\${username}\\AppData\\LocalLow\\VRChat\\VRChat\\${avatarId}`,
     ];
-
-    console.log('[VRChatCache] Searching for avatar:', avatarId);
 
     for (const cachePath of cachePaths) {
       try {
+        console.log(`[VRChatCache] Checking: ${cachePath}`);
         const files = await electronAPI.listDir(cachePath);
 
         if (files && files.length > 0) {
-          console.log(`[VRChatCache] Checking path: ${cachePath}`);
+          console.log(`[VRChatCache] Found ${files.length} files in ${cachePath}`);
 
-          // Look for avatar bundle files
+          // Look for avatar bundle files - check for various patterns
           for (const file of files) {
-            if (
-              file.name &&
-              (file.name.includes(avatarId) ||
-                file.name.endsWith('.unitypackage') ||
-                file.name.includes('bundle'))
-            ) {
+            if (!file.name) continue;
+
+            const matches =
+              file.name.includes(avatarId) ||
+              file.name.includes(shortAvatarId) ||
+              file.name.endsWith('.unitypackage') ||
+              file.name.includes('bundle') ||
+              file.name.startsWith('file_');
+
+            if (matches) {
               const fullPath = `${cachePath}\\${file.name}`;
-              console.log('[VRChatCache] Found potential avatar file:', fullPath);
-              return fullPath;
+              console.log('[VRChatCache] Found potential bundle:', file.name, `(${file.size} bytes)`);
+
+              // Verify file size is reasonable (at least 100KB for a bundle)
+              if (file.size && file.size > 100000) {
+                console.log('[VRChatCache] File size OK, returning path');
+                return fullPath;
+              } else if (file.size) {
+                console.log('[VRChatCache] File too small:', file.size, 'bytes');
+              }
             }
           }
         }
       } catch (e) {
         // Path doesn't exist, continue
-        console.log(`[VRChatCache] Cache path not found: ${cachePath}`);
+        console.log(`[VRChatCache] Path not accessible: ${cachePath}`);
       }
     }
 
-    console.log('[VRChatCache] Avatar not found in cache');
+    console.log('[VRChatCache] Avatar not found in any cache location');
     return null;
   } catch (error) {
     console.error('[VRChatCache] Error searching cache:', error);
@@ -112,17 +132,24 @@ export async function findAvatarBundleInCache(
 export async function extractBundleFromCache(
   bundlePath: string
 ): Promise<{ success: boolean; blob?: Blob; error?: string }> {
+  if (!isElectron()) {
+    return { success: false, error: 'Not in Electron environment' };
+  }
+
   try {
     console.log('[VRChatCache] Reading bundle from:', bundlePath);
 
-    // Use fetch to read the file as blob
-    const response = await fetch(`file:///${bundlePath.replace(/\\/g, '/')}`);
+    const electronAPI = (window as any).electronAPI;
 
-    if (!response.ok) {
-      throw new Error(`Failed to read file: ${response.statusText}`);
+    // Use Electron API to read the file
+    const fileData = await electronAPI.readFile(bundlePath);
+
+    if (!fileData) {
+      throw new Error('File is empty');
     }
 
-    const blob = await response.blob();
+    // Convert to blob
+    const blob = new Blob([fileData], { type: 'application/octet-stream' });
     console.log('[VRChatCache] Bundle read successfully, size:', blob.size);
 
     return {

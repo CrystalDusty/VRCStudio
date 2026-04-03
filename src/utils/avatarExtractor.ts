@@ -222,6 +222,7 @@ export async function generateDownloadablePackage(
  */
 export async function downloadAvatarExtract(avatar: VRCAvatar): Promise<{
   success: boolean;
+  bundleFound?: boolean;
   error?: string;
 }> {
   try {
@@ -230,6 +231,9 @@ export async function downloadAvatarExtract(avatar: VRCAvatar): Promise<{
     if (!packageResult.success || !packageResult.files) {
       throw new Error(packageResult.error || 'Failed to generate package');
     }
+
+    // Check if bundle was included
+    const bundleFound = packageResult.files.some(f => f.name.endsWith('.unitypackage'));
 
     // Download each file
     for (const file of packageResult.files) {
@@ -247,12 +251,31 @@ export async function downloadAvatarExtract(avatar: VRCAvatar): Promise<{
     }
 
     console.log('[AvatarExtractor] Download completed');
-    return { success: true };
+
+    if (!bundleFound) {
+      console.log('[AvatarExtractor] Bundle not found in cache');
+      return {
+        success: true,
+        bundleFound: false,
+        error:
+          'Avatar bundle not found in VRChat cache. ' +
+          'You can manually add it: ' +
+          '1) Download avatar in VRChat or copy from cache ' +
+          '2) Place .unitypackage in the extracted folder ' +
+          '3) Use the Unity importer script to import',
+      };
+    }
+
+    return {
+      success: true,
+      bundleFound: true,
+    };
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     console.error('[AvatarExtractor] Download failed:', errorMsg);
     return {
       success: false,
+      bundleFound: false,
       error: errorMsg,
     };
   }
