@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { X, Download, Copy, Check, ExternalLink, Folder, AlertCircle, Loader } from 'lucide-react';
 import type { VRCAvatar } from '../types/vrchat';
 import { extractAvatarBundle, openBundleFolder, isBundleDownloaded, addBundleToStore } from '../utils/avatarBundle';
-import { downloadBundleWithFallback } from '../utils/bundleDownloadMethods';
+import { downloadBundleDirectly } from '../utils/directDownload';
 import BundleLoader from './BundleLoader';
 
 interface AvatarPreviewModalProps {
@@ -60,64 +60,56 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
       return;
     }
 
-    // Skip authentication attempts - go straight to file picker which actually works
     setIsDownloading(true);
     setError(null);
     setDownloadProgress(0);
 
-    console.log('[AvatarPreview] Using file picker for bundle download');
+    console.log('[AvatarPreview] Starting direct download for package:', selectedPackageId);
 
-    // Open file picker for user to select manually downloaded bundle
     try {
-      const result = await (window as any).electronAPI.openFileDialog({
-        title: `Select ${avatar.name} Avatar Bundle`,
-        message: 'Select the .unitypackage file you downloaded from vrchat.com',
-        filters: [
-          { name: 'Unity Packages', extensions: ['unitypackage'] },
-          { name: 'ZIP Archives', extensions: ['zip'] },
-          { name: 'All Files', extensions: ['*'] },
-        ],
-      });
-
-      if (result.canceled) {
-        setIsDownloading(false);
-        return;
-      }
-
-      // User selected a file
-      const bundlePath = result.filePaths[0];
-      console.log('[AvatarPreview] User selected:', bundlePath);
-
-      // Extract the bundle
-      setIsExtracting(true);
-      const extractResult = await extractAvatarBundle(bundlePath, avatar.id);
-
-      if (extractResult.success && extractResult.extractedPath) {
-        // Get bundle info for store
-        const selectedPackage = avatar.unityPackages?.find(p => p.id === selectedPackageId);
-        if (selectedPackage) {
-          addBundleToStore(
-            avatar.id,
-            avatar.name,
-            selectedPackage.platform,
-            bundlePath,
-            0,
-            selectedPackage.unityVersion,
-            selectedPackageId
-          );
+      // Use direct download with the URL from VRChat API
+      const result = await downloadBundleDirectly(
+        avatar,
+        selectedPackageId,
+        (current, total) => {
+          setDownloadProgress(Math.round((current / total) * 100));
         }
-        setExtractedPath(extractResult.extractedPath);
-        setIsExtracted(true);
-        setError(null);
-        console.log(`[AvatarPreview] Successfully extracted`);
-      } else {
-        setError(extractResult.error || 'Failed to extract bundle');
-      }
+      );
 
-      setIsExtracting(false);
+      if (result.success && result.path) {
+        // Extract the bundle
+        setIsExtracting(true);
+        const extractResult = await extractAvatarBundle(result.path, avatar.id);
+
+        if (extractResult.success && extractResult.extractedPath) {
+          // Get bundle info for store
+          const selectedPackage = avatar.unityPackages?.find(p => p.id === selectedPackageId);
+          if (selectedPackage) {
+            addBundleToStore(
+              avatar.id,
+              avatar.name,
+              selectedPackage.platform,
+              result.path,
+              0,
+              selectedPackage.unityVersion,
+              selectedPackageId
+            );
+          }
+          setExtractedPath(extractResult.extractedPath);
+          setIsExtracted(true);
+          setError(null);
+          console.log(`[AvatarPreview] Successfully downloaded and extracted`);
+        } else {
+          setError(extractResult.error || 'Failed to extract bundle');
+        }
+
+        setIsExtracting(false);
+      } else {
+        setError(result.error || 'Failed to download bundle');
+      }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-      setError(`Failed to select file: ${errorMsg}`);
+      setError(`Download error: ${errorMsg}`);
     }
 
     setIsDownloading(false);
