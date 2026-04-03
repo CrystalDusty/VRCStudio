@@ -223,8 +223,30 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
     fs.mkdirSync(bundleDir, { recursive: true });
   }
 
-  const fileName = url.split('/').pop() || `avatar-${avatarId}.unitypackage`;
+  // Extract filename more intelligently
+  let fileName: string;
+  try {
+    // Remove query parameters
+    const urlWithoutQuery = url.split('?')[0];
+    const pathParts = urlWithoutQuery.split('/');
+    const lastPart = pathParts[pathParts.length - 1];
+
+    // Check if last part looks like a real filename (has an extension)
+    if (lastPart && lastPart.includes('.')) {
+      fileName = lastPart;
+    } else {
+      // Use default filename for API endpoints
+      fileName = `avatar-${avatarId}.unitypackage`;
+    }
+
+    // Sanitize filename to prevent path traversal
+    fileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+  } catch (err) {
+    fileName = `avatar-${avatarId}.unitypackage`;
+  }
+
   const bundlePath = path.join(bundleDir, fileName);
+  console.log(`[Download] Target path: ${bundlePath}`);
 
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(bundlePath);
