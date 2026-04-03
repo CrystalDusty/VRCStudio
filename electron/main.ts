@@ -391,6 +391,130 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
   });
 });
 
+// Native Electron download using session (more reliable for auth)
+ipcMain.handle('fs:downloadFileNative', async (event, url: string, avatarId: string) => {
+  if (process.platform !== 'win32') {
+    throw new Error('Avatar downloads only supported on Windows');
+  }
+
+  console.log(`[NativeDownload] Starting native download from: ${url}`);
+
+  const bundleDir = path.join(app.getPath('userData'), 'AvatarBundles', avatarId);
+  console.log(`[NativeDownload] Bundle directory: ${bundleDir}`);
+
+  // Ensure directory exists
+  try {
+    if (!fs.existsSync(bundleDir)) {
+      fs.mkdirSync(bundleDir, { recursive: true });
+      console.log(`[NativeDownload] Created directory: ${bundleDir}`);
+    }
+  } catch (mkdirError) {
+    const errorMsg = mkdirError instanceof Error ? mkdirError.message : 'Unknown error';
+    console.error(`[NativeDownload] Failed to create directory: ${errorMsg}`);
+    throw new Error(`Cannot create bundle directory: ${errorMsg}`);
+  }
+
+  // Extract filename
+  let fileName: string;
+  try {
+    const urlWithoutQuery = url.split('?')[0];
+    const pathParts = urlWithoutQuery.split('/');
+    const lastPart = pathParts[pathParts.length - 1];
+
+    if (lastPart && lastPart.includes('.')) {
+      fileName = lastPart;
+    } else {
+      fileName = `avatar-${avatarId}.unitypackage`;
+    }
+
+    fileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+  } catch (err) {
+    fileName = `avatar-${avatarId}.unitypackage`;
+  }
+
+  const bundlePath = path.join(bundleDir, fileName);
+  console.log(`[NativeDownload] Target path: ${bundlePath}`);
+
+  return new Promise((resolve, reject) => {
+    if (!mainWindow) {
+      reject(new Error('Main window not available'));
+      return;
+    }
+
+    // Use Electron's native download which respects cookies and session
+    console.log(`[NativeDownload] Using Electron session download`);
+
+    mainWindow.webContents.downloadURL(url);
+
+    // Listen for download completion
+    const handleDownloadUpdated = (downloadItem: any) => {
+      const downloadPath = downloadItem.getFilename();
+
+      console.log(`[NativeDownload] Download item path: ${downloadPath}`);
+      console.log(`[NativeDownload] Download state: ${downloadItem.getState()}`);
+
+      if (downloadItem.getState() === 'completed') {
+        console.log(`[NativeDownload] Download completed from ${downloadPath}`);
+
+        // Move downloaded file to our bundle directory
+        try {
+          const srcPath = downloadItem.getSavePath();
+          if (srcPath && fs.existsSync(srcPath)) {
+            // Copy instead of move to avoid conflicts
+            fs.copyFileSync(srcPath, bundlePath);
+            console.log(`[NativeDownload] Copied file to: ${bundlePath}`);
+            mainWindow?.webContents.session.removeListener('will-download', handleDownloadUpdated);
+            resolve(bundlePath);
+          } else {
+            reject(new Error(`Downloaded file not found at: ${srcPath}`));
+          }
+        } catch (copyError) {
+          const errorMsg = copyError instanceof Error ? copyError.message : 'Unknown error';
+          console.error(`[NativeDownload] Failed to copy file: ${errorMsg}`);
+          mainWindow?.webContents.session.removeListener('will-download', handleDownloadUpdated);
+          reject(new Error(`Failed to save downloaded file: ${errorMsg}`));
+        }
+      } else if (downloadItem.getState() === 'cancelled' || downloadItem.getState() === 'interrupted') {
+        console.error(`[NativeDownload] Download ${downloadItem.getState()}`);
+        mainWindow?.webContents.session.removeListener('will-download', handleDownloadUpdated);
+        reject(new Error(`Download ${downloadItem.getState()}`));
+      }
+    };
+
+    mainWindow.webContents.session.on('will-download', (event, downloadItem) => {
+      console.log(`[NativeDownload] Download starting: ${downloadItem.getFilename()}`);
+
+      // Set the save path to a temp location
+      const tempPath = path.join(bundleDir, `temp-${Date.now()}.unitypackage`);
+      downloadItem.setSavePath(tempPath);
+
+      downloadItem.on('done', (event, state) => {
+        console.log(`[NativeDownload] Download done with state: ${state}`);
+
+        if (state === 'completed') {
+          try {
+            fs.copyFileSync(tempPath, bundlePath);
+            fs.unlinkSync(tempPath);
+            console.log(`[NativeDownload] File saved to: ${bundlePath}`);
+            resolve(bundlePath);
+          } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+            console.error(`[NativeDownload] Failed to finalize: ${errorMsg}`);
+            reject(new Error(`Failed to save file: ${errorMsg}`));
+          }
+        } else {
+          reject(new Error(`Download failed with state: ${state}`));
+        }
+      });
+    });
+
+    // Timeout after 5 minutes
+    setTimeout(() => {
+      reject(new Error('Download timeout after 5 minutes'));
+    }, 5 * 60 * 1000);
+  });
+});
+
 // Detect file format by reading magic bytes (file signature)
 function detectFileFormat(filePath: string): string {
   try {

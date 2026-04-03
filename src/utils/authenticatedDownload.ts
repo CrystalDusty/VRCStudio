@@ -35,9 +35,9 @@ export async function downloadBundleAuthenticated(
 
     console.log('[AuthDownload] Download URL:', downloadUrl);
 
-    // Use the authenticated download endpoint in Electron
-    // This will use Electron's session which includes our cookies
-    const bundlePath = await electronAPI.downloadFile(downloadUrl, avatarId);
+    // Use Electron's native download which respects session cookies
+    // This is more reliable than manual HTTPS requests
+    const bundlePath = await electronAPI.downloadFileNative(downloadUrl, avatarId);
 
     console.log('[AuthDownload] Successfully downloaded to:', bundlePath);
 
