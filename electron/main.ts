@@ -202,6 +202,115 @@ ipcMain.handle('fs:getVRChatScreenshotPath', () => {
   return path.join(app.getPath('home'), 'Pictures', 'VRChat');
 });
 
+// Avatar bundle operations (Windows only)
+ipcMain.handle('fs:getAvatarBundlePath', () => {
+  if (process.platform !== 'win32') {
+    throw new Error('Avatar bundles only supported on Windows');
+  }
+  return path.join(app.getPath('userData'), 'AvatarBundles');
+});
+
+ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) => {
+  if (process.platform !== 'win32') {
+    throw new Error('Avatar downloads only supported on Windows');
+  }
+
+  const bundleDir = path.join(app.getPath('userData'), 'AvatarBundles', avatarId);
+  if (!fs.existsSync(bundleDir)) {
+    fs.mkdirSync(bundleDir, { recursive: true });
+  }
+
+  const fileName = url.split('/').pop() || `avatar-${avatarId}.unitypackage`;
+  const bundlePath = path.join(bundleDir, fileName);
+
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(bundlePath);
+    const request = https.get(url, { timeout: 30000 }, (response) => {
+      const totalSize = parseInt(response.headers['content-length'] || '0', 10);
+      let downloadedSize = 0;
+
+      response.on('data', (chunk) => {
+        downloadedSize += chunk.length;
+        if (totalSize > 0) {
+          event.sender.send('fs:downloadFile:progress', downloadedSize, totalSize);
+        }
+      });
+
+      response.pipe(file);
+
+      file.on('finish', () => {
+        file.close();
+        resolve(bundlePath);
+      });
+
+      file.on('error', (err) => {
+        fs.unlink(bundlePath, () => {}); // Delete the file on error
+        reject(err);
+      });
+    });
+
+    request.on('error', (err) => {
+      fs.unlink(bundlePath, () => {}); // Delete the file on error
+      reject(err);
+    });
+
+    request.on('timeout', () => {
+      request.destroy();
+      fs.unlink(bundlePath, () => {}); // Delete the file on timeout
+      reject(new Error('Download timeout'));
+    });
+  });
+});
+
+ipcMain.handle('fs:extractBundle', async (_e, sourcePath: string, avatarId: string) => {
+  if (process.platform !== 'win32') {
+    throw new Error('Avatar extraction only supported on Windows');
+  }
+
+  try {
+    // Dynamically import adm-zip (ESM)
+    const AdmZip = await import('adm-zip').then(m => m.default);
+    const zip = new AdmZip(sourcePath);
+
+    const extractDir = path.join(app.getPath('userData'), 'AvatarBundles', avatarId, 'extracted');
+    if (!fs.existsSync(extractDir)) {
+      fs.mkdirSync(extractDir, { recursive: true });
+    }
+
+    zip.extractAllTo(extractDir, true);
+
+    return extractDir;
+  } catch (error) {
+    throw new Error(`Failed to extract bundle: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+});
+
+ipcMain.handle('fs:openBundleFolder', async (_e, folderPath: string) => {
+  if (process.platform !== 'win32') {
+    throw new Error('Bundle folder open only supported on Windows');
+  }
+
+  try {
+    if (!fs.existsSync(folderPath)) {
+      throw new Error('Folder does not exist');
+    }
+    shell.openPath(folderPath);
+  } catch (error) {
+    throw new Error(`Failed to open folder: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+});
+
+ipcMain.handle('fs:deleteBundleData', async (_e, avatarId: string) => {
+  if (process.platform !== 'win32') {
+    throw new Error('Bundle deletion only supported on Windows');
+  }
+
+  const bundleDir = path.join(app.getPath('userData'), 'AvatarBundles', avatarId);
+  if (fs.existsSync(bundleDir)) {
+    fs.rmSync(bundleDir, { recursive: true, force: true });
+  }
+});
+
 // Desktop notifications (Electron native)
 ipcMain.handle('notification:send', (_e, opts: { title: string; body: string; icon?: string }) => {
   if (Notification.isSupported()) {
