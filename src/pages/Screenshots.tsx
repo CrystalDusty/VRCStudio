@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback } from 'react';
-import { Camera, Upload, FolderOpen, X, Globe, Calendar, Printer, Download, Type } from 'lucide-react';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { Camera, Upload, FolderOpen, X, Globe, Calendar, Printer, Download, Type, Paintbrush, Sliders } from 'lucide-react';
 import { format } from 'date-fns';
 import EmptyState from '../components/common/EmptyState';
 import { useAuthStore } from '../stores/authStore';
@@ -398,7 +398,12 @@ export default function ScreenshotsPage() {
   const [editingWorld, setEditingWorld] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const [meta, setMeta] = useState(loadMeta());
+  const [isPhotoEditing, setIsPhotoEditing] = useState(false);
+  const [brightness, setBrightness] = useState(100);
+  const [contrast, setContrast] = useState(100);
+  const [saturation, setSaturation] = useState(100);
   const fileRef = useRef<HTMLInputElement>(null);
+  const photoEditCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const processFiles = useCallback(async (files: FileList | File[]) => {
     const arr = Array.from(files);
@@ -573,7 +578,15 @@ export default function ScreenshotsPage() {
           <div className="relative max-w-5xl w-full mx-4 flex gap-4 items-start" onClick={e => e.stopPropagation()}>
             {/* Image */}
             <div className="flex-1">
-              <img src={selected.src} alt="" className="w-full rounded-xl shadow-2xl" />
+              <img
+                src={selected.src}
+                alt=""
+                className="w-full rounded-xl shadow-2xl"
+                style={{
+                  filter: `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%)`,
+                  transition: 'filter 0.1s ease-out',
+                }}
+              />
             </div>
 
             {/* Info panel */}
@@ -629,13 +642,58 @@ export default function ScreenshotsPage() {
               )}
 
               <button
+                onClick={() => setIsPhotoEditing(!isPhotoEditing)}
+                className="btn-secondary text-xs w-full flex items-center justify-center gap-1.5"
+              >
+                <Paintbrush size={12} /> {isPhotoEditing ? 'Done Editing' : 'Photo Editor'}
+              </button>
+
+              {isPhotoEditing && (
+                <div className="space-y-2 bg-surface-800/30 p-3 rounded">
+                  <div>
+                    <label className="text-[10px] text-surface-500 block mb-1">Brightness: {brightness}%</label>
+                    <input
+                      type="range"
+                      min={0}
+                      max={200}
+                      value={brightness}
+                      onChange={e => setBrightness(Number(e.target.value))}
+                      className="w-full text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-surface-500 block mb-1">Contrast: {contrast}%</label>
+                    <input
+                      type="range"
+                      min={0}
+                      max={200}
+                      value={contrast}
+                      onChange={e => setContrast(Number(e.target.value))}
+                      className="w-full text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-surface-500 block mb-1">Saturation: {saturation}%</label>
+                    <input
+                      type="range"
+                      min={0}
+                      max={200}
+                      value={saturation}
+                      onChange={e => setSaturation(Number(e.target.value))}
+                      className="w-full text-xs"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <button
                 onClick={() => setPrintTarget(selected)}
                 className="btn-primary text-xs w-full flex items-center justify-center gap-1.5"
               >
                 <Printer size={12} /> Create Print
               </button>
 
-              <button onClick={() => { setSelected(null); setIsEditing(false); }} className="btn-ghost text-xs w-full">
+              <button onClick={() => { setSelected(null); setIsEditing(false); setIsPhotoEditing(false); }} className="btn-ghost text-xs w-full">
                 Close
               </button>
             </div>
