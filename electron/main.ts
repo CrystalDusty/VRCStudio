@@ -5,8 +5,8 @@ import {
 import path from 'path';
 import fs from 'fs';
 import https from 'https';
-import tar from 'tar';
 import crypto from 'crypto';
+import zlib from 'zlib';
 import { promisify } from 'util';
 
 // Initialize logging EARLY - use a simpler path
@@ -322,25 +322,30 @@ ipcMain.handle('fs:extractAvatarToDownloads', async (_e, cacheDataPath: string, 
     const downloadsPath = app.getPath('downloads');
     const outputPath = path.join(downloadsPath, `${avatarId}.unitypackage`);
 
-    if (detectedFormat === 'GZIP_COMPRESSED' || detectedFormat === 'ZIP_UNITYPACKAGE') {
-      // Already a valid archive format - save as-is
-      logDiagnostic(`File is already an archive (${detectedFormat}), saving directly`);
-      fs.writeFileSync(outputPath, buffer);
-    } else {
-      // Raw UnityFS bundle or unknown - wrap in proper .unitypackage (tar.gz)
-      logDiagnostic(`Wrapping raw bundle in .unitypackage tar.gz format...`);
-
-      // Save raw bundle to a temp file first
-      const tempRawPath = path.join(downloadsPath, `${avatarId}-raw.tmp`);
-      fs.writeFileSync(tempRawPath, buffer);
-
+    // Decompress gzip if needed to get the raw bundle data
+    let rawBundleBuffer = buffer;
+    if (detectedFormat === 'GZIP_COMPRESSED') {
+      logDiagnostic('Decompressing gzip to get raw bundle...');
       try {
-        await createUnityPackage(tempRawPath, avatarId, outputPath);
-      } finally {
-        // Clean up temp file
-        if (fs.existsSync(tempRawPath)) {
-          fs.unlinkSync(tempRawPath);
-        }
+        rawBundleBuffer = zlib.gunzipSync(buffer);
+        logDiagnostic(`Decompressed: ${rawBundleBuffer.length} bytes`);
+        const innerHeader = rawBundleBuffer.slice(0, 7).toString('utf8');
+        logDiagnostic(`Inner format: "${innerHeader}"`);
+      } catch (decompErr: any) {
+        logDiagnostic(`Decompression failed: ${decompErr.message}, using raw buffer`);
+      }
+    }
+
+    // Always wrap in a proper .unitypackage tar.gz
+    logDiagnostic(`Creating .unitypackage tar.gz...`);
+    const tempRawPath = path.join(downloadsPath, `${avatarId}-raw.tmp`);
+    fs.writeFileSync(tempRawPath, rawBundleBuffer);
+
+    try {
+      await createUnityPackage(tempRawPath, avatarId, outputPath);
+    } finally {
+      if (fs.existsSync(tempRawPath)) {
+        fs.unlinkSync(tempRawPath);
       }
     }
 
@@ -853,56 +858,545 @@ ipcMain.handle('fs:downloadFileNative', async (event, url: string, avatarId: str
 });
 
 /**
+ * Build a GNU tar header (512 bytes) for a single entry.
+ * Uses the old-style GNU/ustar format that Unity's importer can read.
+ */
+function buildTarHeader(fileName: string, fileSize: number, isDir: boolean): Buffer {
+  const header = Buffer.alloc(512, 0);
+  const mtime = Math.floor(Date.now() / 1000);
+
+  // name (0, 100) - use forward slashes, must end with / for dirs
+  const name = isDir ? fileName + '/' : fileName;
+  header.write(name, 0, Math.min(name.length, 100), 'utf8');
+
+  // mode (100, 8) - octal, null-terminated
+  header.write(isDir ? '0000755' : '0000644', 100, 7, 'utf8');
+  header[107] = 0;
+
+  // uid (108, 8)
+  header.write('0001750', 108, 7, 'utf8');
+  header[115] = 0;
+
+  // gid (116, 8)
+  header.write('0001750', 116, 7, 'utf8');
+  header[123] = 0;
+
+  // size (124, 12) - octal, null-terminated
+  const sizeStr = fileSize.toString(8).padStart(11, '0');
+  header.write(sizeStr, 124, 11, 'utf8');
+  header[135] = 0;
+
+  // mtime (136, 12) - octal, null-terminated
+  const mtimeStr = mtime.toString(8).padStart(11, '0');
+  header.write(mtimeStr, 136, 11, 'utf8');
+  header[147] = 0;
+
+  // typeflag (156, 1) - '5' for directory, '0' for regular file
+  header[156] = isDir ? 0x35 : 0x30;
+
+  // magic (257, 6) - "ustar\0" for POSIX/GNU
+  header.write('ustar', 257, 5, 'utf8');
+  header[262] = 0;
+
+  // version (263, 2) - "00"
+  header.write('00', 263, 2, 'utf8');
+
+  // uname (265, 32)
+  header.write('root', 265, 4, 'utf8');
+
+  // gname (297, 32)
+  header.write('root', 297, 4, 'utf8');
+
+  // Compute checksum: sum of all bytes with checksum field treated as spaces
+  // First fill checksum field (148-155) with spaces for calculation
+  for (let i = 148; i < 156; i++) header[i] = 0x20;
+  let checksum = 0;
+  for (let i = 0; i < 512; i++) checksum += header[i];
+  // Write checksum as 6-digit octal + null + space
+  const csStr = checksum.toString(8).padStart(6, '0');
+  header.write(csStr, 148, 6, 'utf8');
+  header[154] = 0;
+  header[155] = 0x20;
+
+  return header;
+}
+
+/**
+ * Pad data to a 512-byte boundary for tar format.
+ */
+function tarPad(dataLength: number): Buffer {
+  const remainder = dataLength % 512;
+  if (remainder === 0) return Buffer.alloc(0);
+  return Buffer.alloc(512 - remainder, 0);
+}
+
+/**
  * Create a valid .unitypackage (tar.gz) from a raw AssetBundle file.
- * A .unitypackage is a tar.gz containing: <GUID>/asset, <GUID>/pathname, <GUID>/asset.meta
+ * Uses manual GNU tar construction for maximum Unity compatibility.
+ *
+ * Includes:
+ *   - The raw AssetBundle as Assets/Avatar/<id>.vrca
+ *   - A Unity Editor script that loads and extracts assets from the bundle
  */
 async function createUnityPackage(sourcePath: string, avatarId: string, outputPath: string): Promise<void> {
-  const guid = crypto.randomBytes(16).toString('hex');
-  const stagingDir = path.join(path.dirname(outputPath), `staging-${Date.now()}`);
-  const guidDir = path.join(stagingDir, guid);
+  const bundleGuid = crypto.randomBytes(16).toString('hex');
+  const scriptGuid = crypto.randomBytes(16).toString('hex');
+  logDiagnostic(`[UnityPackage] Bundle GUID: ${bundleGuid}`);
+  logDiagnostic(`[UnityPackage] Script GUID: ${scriptGuid}`);
 
-  try {
-    // Create staging structure
-    fs.mkdirSync(guidDir, { recursive: true });
-    logDiagnostic(`[UnityPackage] Staging dir: ${guidDir}`);
+  // Read the source asset bundle
+  const assetData = fs.readFileSync(sourcePath);
+  logDiagnostic(`[UnityPackage] Asset size: ${assetData.length} bytes`);
 
-    // Write pathname file (tells Unity where to place the asset)
-    const pathname = `Assets/Avatar/${avatarId}.vrca`;
-    fs.writeFileSync(path.join(guidDir, 'pathname'), pathname + '\n');
-    logDiagnostic(`[UnityPackage] Pathname: ${pathname}`);
+  // --- Asset 1: The raw bundle file ---
+  const bundlePathname = Buffer.from(`Assets/Avatar/${avatarId}.vrca`);
+  const bundleMeta = Buffer.from(
+    `fileFormatVersion: 2\nguid: ${bundleGuid}\nDefaultImporter:\n  userData:\n  assetBundleName:\n  assetBundleVariant:\n`
+  );
 
-    // Copy the raw bundle as "asset"
-    fs.copyFileSync(sourcePath, path.join(guidDir, 'asset'));
-    const assetSize = fs.statSync(path.join(guidDir, 'asset')).size;
-    logDiagnostic(`[UnityPackage] Asset copied: ${assetSize} bytes`);
+  // --- Asset 2: Unity Editor script to load the AssetBundle ---
+  const safeAvatarId = avatarId.replace(/[^a-zA-Z0-9_]/g, '_');
 
-    // Write minimal Unity .meta file
-    const metaContent = [
-      'fileFormatVersion: 2',
-      `guid: ${guid}`,
-      'NativeFormatImporter:',
-      '  userData:',
-      '  assetBundleName:',
-      '  assetBundleVariant:',
-      '',
-    ].join('\n');
-    fs.writeFileSync(path.join(guidDir, 'asset.meta'), metaContent);
-
-    // Create tar.gz archive
-    await tar.create(
-      { gzip: true, file: outputPath, cwd: stagingDir },
-      [guid],
-    );
-
-    const outputSize = fs.statSync(outputPath).size;
-    logDiagnostic(`[UnityPackage] Created: ${outputPath} (${outputSize} bytes)`);
-  } finally {
-    // Clean up staging directory
-    if (fs.existsSync(stagingDir)) {
-      fs.rmSync(stagingDir, { recursive: true, force: true });
-      logDiagnostic(`[UnityPackage] Staging cleaned up`);
+  // Read the bundle header to extract the Unity version it was built with
+  const bundleHeader = fs.readFileSync(sourcePath, { encoding: null });
+  let bundleUnityVersion = 'unknown';
+  // UnityFS header: "UnityFS\0" + 4 bytes version + version string + engine string
+  if (bundleHeader.slice(0, 7).toString('utf8') === 'UnityFS') {
+    // Skip "UnityFS\0" (8 bytes) + 4 bytes (format version)
+    // Then read null-terminated strings: player version, then engine version
+    let offset = 12;
+    // Skip player version string
+    while (offset < bundleHeader.length && bundleHeader[offset] !== 0) offset++;
+    offset++; // skip null
+    // Read engine version string
+    let engineVer = '';
+    while (offset < bundleHeader.length && bundleHeader[offset] !== 0) {
+      engineVer += String.fromCharCode(bundleHeader[offset]);
+      offset++;
     }
+    if (engineVer) bundleUnityVersion = engineVer;
   }
+  logDiagnostic(`[UnityPackage] Bundle built with Unity: ${bundleUnityVersion}`);
+
+  const editorScript = Buffer.from(`using UnityEngine;
+using UnityEditor;
+using System.IO;
+using System.Text;
+
+/// <summary>
+/// VRC Studio - AssetBundle Loader
+/// Bundle was built with Unity ${bundleUnityVersion}
+///
+/// Uses in-memory version patching to bypass Unity's strict version check.
+/// VRChat builds bundles with a custom Unity fork that doesn't match
+/// any public release, so we patch the version header before loading.
+/// </summary>
+public class VRCStudioBundleLoader : EditorWindow
+{
+    /// <summary>
+    /// Reads the .vrca file, patches the Unity version in the header to match
+    /// the current editor, then loads via AssetBundle.LoadFromMemory().
+    /// This bypasses the "wrong version or build target" error.
+    /// </summary>
+    static AssetBundle LoadBundleWithVersionPatch(string bundlePath)
+    {
+        // Fast path: attempt unmodified load first
+        AssetBundle directBundle = AssetBundle.LoadFromFile(bundlePath);
+        if (directBundle != null)
+        {
+            Debug.Log("[VRC Studio] Bundle loaded directly without patch.");
+            return directBundle;
+        }
+
+        byte[] data = File.ReadAllBytes(bundlePath);
+        Debug.Log("[VRC Studio] Read " + data.Length + " bytes from: " + bundlePath);
+
+        // Verify it's a UnityFS bundle
+        string magic = Encoding.UTF8.GetString(data, 0, 7);
+        if (magic != "UnityFS")
+        {
+            Debug.LogError("[VRC Studio] Not a UnityFS bundle (magic: " + magic + ")");
+            return null;
+        }
+
+        // Parse the header to find the engine version string
+        // Format: "UnityFS\\0" (8) + uint32 format (4) + playerVer\\0 + engineVer\\0
+        int offset = 12;
+
+        // Skip player version (null-terminated)
+        while (offset < data.Length && data[offset] != 0) offset++;
+        offset++; // skip null terminator
+
+        // Read the engine version string
+        int engineVerStart = offset;
+        while (offset < data.Length && data[offset] != 0) offset++;
+        int engineVerEnd = offset; // position of the null terminator
+
+        string originalVersion = Encoding.UTF8.GetString(data, engineVerStart, engineVerEnd - engineVerStart);
+        int versionFieldLen = engineVerEnd - engineVerStart; // length WITHOUT null
+
+        Debug.Log("[VRC Studio] Original bundle version: " + originalVersion);
+        Debug.Log("[VRC Studio] Your Unity version: " + Application.unityVersion);
+
+        // VRChat bundles often report 2022.3.22f2-* while Creator Companion supports 2022.3.22f1.
+        // Force that exact base version and preserve any custom suffix (e.g. "-DWR")
+        // so header length/structure remains stable.
+        string patchBaseVersion = "2022.3.22f1";
+        string targetVersion = patchBaseVersion;
+        int dashIndex = originalVersion.IndexOf('-');
+        if (dashIndex >= 0 && dashIndex < originalVersion.Length - 1)
+        {
+            targetVersion = patchBaseVersion + originalVersion.Substring(dashIndex);
+        }
+
+        Debug.Log("[VRC Studio] Target patch version: " + targetVersion);
+
+        // Overwrite only the START of the engine version and leave any remaining
+        // original suffix bytes intact. Never write null padding here.
+        byte[] verBytes = Encoding.UTF8.GetBytes(targetVersion);
+        int copyLen = System.Math.Min(verBytes.Length, versionFieldLen);
+        System.Array.Copy(verBytes, 0, data, engineVerStart, copyLen);
+
+        string patchedVersion = Encoding.UTF8.GetString(data, engineVerStart, versionFieldLen).TrimEnd('\\0');
+        Debug.Log("[VRC Studio] Patched version: " + patchedVersion);
+
+        // Also patch any additional exact header/version occurrences we can find
+        // without changing total byte lengths.
+        if (!string.IsNullOrEmpty(originalVersion) && originalVersion != targetVersion)
+        {
+            byte[] originalBytes = Encoding.UTF8.GetBytes(originalVersion);
+            int maxReplacements = 8;
+            int replacements = 0;
+            for (int i = 0; i <= data.Length - originalBytes.Length && replacements < maxReplacements; i++)
+            {
+                bool match = true;
+                for (int j = 0; j < originalBytes.Length; j++)
+                {
+                    if (data[i + j] != originalBytes[j])
+                    {
+                        match = false;
+                        break;
+                    }
+                }
+
+                if (match)
+                {
+                    int replaceLen = System.Math.Min(verBytes.Length, originalBytes.Length);
+                    System.Array.Copy(verBytes, 0, data, i, replaceLen);
+                    replacements++;
+                    i += originalBytes.Length - 1;
+                }
+            }
+            Debug.Log("[VRC Studio] Additional version string replacements: " + replacements);
+        }
+
+        // Try loading from patched memory first
+        AssetBundle bundle = AssetBundle.LoadFromMemory(data);
+        if (bundle == null)
+        {
+            // Fallback: write patched bytes to a temp bundle and load from file path.
+            // Some Unity versions handle large bundles more reliably via file IO APIs.
+            try
+            {
+                string tempPath = Path.Combine(Path.GetTempPath(),
+                    "vrcstudio_patched_" + Path.GetFileName(bundlePath));
+                File.WriteAllBytes(tempPath, data);
+                Debug.Log("[VRC Studio] Memory load failed, retrying from temp file: " + tempPath);
+                bundle = AssetBundle.LoadFromFile(tempPath);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[VRC Studio] Temp file fallback failed: " + e.Message);
+            }
+        }
+
+        if (bundle != null)
+        {
+            Debug.Log("[VRC Studio] Bundle loaded successfully with version patch!");
+        }
+        else
+        {
+            Debug.LogError("[VRC Studio] Bundle still failed to load after version patch.");
+            Debug.LogError("[VRC Studio] This may be a build target issue. Current target: " +
+                EditorUserBuildSettings.activeBuildTarget);
+        }
+
+        return bundle;
+    }
+
+    [MenuItem("VRC Studio/Load Avatar Into Scene")]
+    static void LoadIntoScene()
+    {
+        string bundlePath = FindBundleFile();
+        if (string.IsNullOrEmpty(bundlePath))
+        {
+            EditorUtility.DisplayDialog("VRC Studio",
+                "Could not find .vrca bundle file.\\nMake sure it was imported correctly.", "OK");
+            return;
+        }
+
+        AssetBundle bundle = LoadBundleWithVersionPatch(bundlePath);
+        if (bundle == null)
+        {
+            string bundleInfo = ReadBundleInfo(bundlePath);
+            EditorUtility.DisplayDialog("VRC Studio - Load Failed",
+                "Failed to load AssetBundle even after version patching.\\n\\n"
+                + bundleInfo + "\\n\\n"
+                + "Make sure your build target is PC Standalone:\\n"
+                + "File > Build Settings > PC, Mac & Linux Standalone\\n\\n"
+                + "If this still fails, try AssetRipper:\\n"
+                + "github.com/AssetRipper/AssetRipper", "OK");
+            return;
+        }
+
+        // Try to load the main avatar prefab
+        GameObject[] prefabs = bundle.LoadAllAssets<GameObject>();
+        if (prefabs.Length > 0)
+        {
+            foreach (GameObject prefab in prefabs)
+            {
+                GameObject instance = Instantiate(prefab);
+                instance.name = prefab.name;
+                Undo.RegisterCreatedObjectUndo(instance, "Load VRC Avatar");
+                Selection.activeGameObject = instance;
+                Debug.Log("[VRC Studio] Loaded avatar: " + prefab.name);
+            }
+            EditorUtility.DisplayDialog("VRC Studio",
+                "Avatar loaded into scene!\\nCheck the Hierarchy window.", "OK");
+        }
+        else
+        {
+            Object[] allAssets = bundle.LoadAllAssets();
+            string assetList = "Found " + allAssets.Length + " assets:\\n";
+            foreach (Object a in allAssets)
+                assetList += "  - " + a.name + " (" + a.GetType().Name + ")\\n";
+
+            EditorUtility.DisplayDialog("VRC Studio",
+                "No GameObjects found, but found other assets:\\n\\n" + assetList, "OK");
+        }
+
+        bundle.Unload(false);
+    }
+
+    [MenuItem("VRC Studio/Extract All Assets From Bundle")]
+    static void ExtractAll()
+    {
+        string bundlePath = FindBundleFile();
+        if (string.IsNullOrEmpty(bundlePath))
+        {
+            EditorUtility.DisplayDialog("VRC Studio",
+                "Could not find .vrca bundle file.", "OK");
+            return;
+        }
+
+        AssetBundle bundle = LoadBundleWithVersionPatch(bundlePath);
+        if (bundle == null)
+        {
+            string bundleInfo = ReadBundleInfo(bundlePath);
+            EditorUtility.DisplayDialog("VRC Studio - Load Failed",
+                "Failed to load AssetBundle.\\n\\n" + bundleInfo + "\\n\\n"
+                + "Try AssetRipper instead:\\nhttps://github.com/AssetRipper/AssetRipper", "OK");
+            return;
+        }
+
+        string outputDir = "Assets/VRCStudio_Extracted";
+        if (!Directory.Exists(outputDir))
+            Directory.CreateDirectory(outputDir);
+
+        Object[] allAssets = bundle.LoadAllAssets();
+        int count = 0;
+
+        foreach (Object asset in allAssets)
+        {
+            try
+            {
+                string safeName = asset.name.Replace("/", "_").Replace("\\\\", "_");
+                if (string.IsNullOrEmpty(safeName)) safeName = "asset_" + count;
+
+                if (asset is GameObject go)
+                {
+                    string path = outputDir + "/" + safeName + ".prefab";
+                    PrefabUtility.SaveAsPrefabAsset(Instantiate(go), path);
+                    count++;
+                }
+                else if (asset is Texture2D tex)
+                {
+                    byte[] png = tex.EncodeToPNG();
+                    if (png != null)
+                    {
+                        File.WriteAllBytes(outputDir + "/" + safeName + ".png", png);
+                        count++;
+                    }
+                }
+                else if (asset is Mesh || asset is Material || asset is AnimationClip ||
+                         asset is RuntimeAnimatorController || asset is Avatar)
+                {
+                    Object copy = Instantiate(asset);
+                    copy.name = asset.name;
+                    AssetDatabase.CreateAsset(copy, outputDir + "/" + safeName + ".asset");
+                    count++;
+                }
+
+                Debug.Log("[VRC Studio] Extracted: " + asset.name + " (" + asset.GetType().Name + ")");
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[VRC Studio] Failed to extract " + asset.name + ": " + e.Message);
+            }
+        }
+
+        bundle.Unload(false);
+        AssetDatabase.Refresh();
+
+        EditorUtility.DisplayDialog("VRC Studio",
+            "Extracted " + count + " of " + allAssets.Length + " assets to:\\n" + outputDir, "OK");
+
+        Object folder = AssetDatabase.LoadAssetAtPath<Object>(outputDir);
+        if (folder != null) Selection.activeObject = folder;
+    }
+
+    [MenuItem("VRC Studio/Show Bundle Info")]
+    static void ShowInfo()
+    {
+        string bundlePath = FindBundleFile();
+        if (string.IsNullOrEmpty(bundlePath))
+        {
+            EditorUtility.DisplayDialog("VRC Studio", "No .vrca file found.", "OK");
+            return;
+        }
+
+        string info = ReadBundleInfo(bundlePath);
+        info += "\\n\\nYour Unity: " + Application.unityVersion;
+        info += "\\nYour Platform: " + EditorUserBuildSettings.activeBuildTarget;
+        info += "\\n\\nBundle built with: ${bundleUnityVersion}";
+        info += "\\nBundle platform: Windows (StandaloneWindows64)";
+        info += "\\n\\nThe loader will auto-patch the version when loading.";
+
+        EditorUtility.DisplayDialog("VRC Studio - Bundle Info", info, "OK");
+    }
+
+    static string ReadBundleInfo(string filePath)
+    {
+        try
+        {
+            using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+            {
+                byte[] header = new byte[64];
+                fs.Read(header, 0, header.Length);
+
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine("File: " + Path.GetFileName(filePath));
+                sb.AppendLine("Size: " + (new FileInfo(filePath).Length / 1024 / 1024) + " MB");
+
+                // Check for UnityFS magic
+                string magic = Encoding.UTF8.GetString(header, 0, 7);
+                if (magic == "UnityFS")
+                {
+                    sb.AppendLine("Format: UnityFS AssetBundle");
+                    // Read version strings (null-terminated after offset 12)
+                    int offset = 12;
+                    string playerVer = "";
+                    while (offset < header.Length && header[offset] != 0)
+                        playerVer += (char)header[offset++];
+                    offset++;
+                    string engineVer = "";
+                    while (offset < header.Length && header[offset] != 0)
+                        engineVer += (char)header[offset++];
+                    sb.AppendLine("Player version: " + playerVer);
+                    sb.AppendLine("Engine version: " + engineVer);
+                }
+                else
+                {
+                    sb.AppendLine("Format: Unknown (not UnityFS)");
+                    sb.AppendLine("Header hex: " + System.BitConverter.ToString(header, 0, 16));
+                }
+                return sb.ToString();
+            }
+        }
+        catch (System.Exception e)
+        {
+            return "Error reading bundle: " + e.Message;
+        }
+    }
+
+    static string FindBundleFile()
+    {
+        // Search for .vrca files in Assets/Avatar
+        string[] guids = AssetDatabase.FindAssets("", new[] { "Assets/Avatar" });
+        foreach (string guid in guids)
+        {
+            string p = AssetDatabase.GUIDToAssetPath(guid);
+            if (p.EndsWith(".vrca")) return Path.GetFullPath(p);
+        }
+
+        // Fallback: search entire Assets folder
+        string[] files = Directory.GetFiles(Application.dataPath, "*.vrca", SearchOption.AllDirectories);
+        if (files.Length > 0) return files[0];
+
+        return null;
+    }
+}
+`);
+
+  const scriptPathname = Buffer.from(`Assets/Editor/VRCStudioBundleLoader.cs`);
+  const scriptMeta = Buffer.from(
+    `fileFormatVersion: 2\nguid: ${scriptGuid}\nMonoImporter:\n  serializedVersion: 2\n  defaultReferences: []\n  executionOrder: 0\n  icon: {instanceID: 0}\n  userData:\n  assetBundleName:\n  assetBundleVariant:\n`
+  );
+
+  // Build tar archive in memory
+  const parts: Buffer[] = [];
+
+  // --- Bundle asset entry ---
+  parts.push(buildTarHeader(bundleGuid, 0, true));
+
+  parts.push(buildTarHeader(`${bundleGuid}/pathname`, bundlePathname.length, false));
+  parts.push(bundlePathname);
+  parts.push(tarPad(bundlePathname.length));
+
+  parts.push(buildTarHeader(`${bundleGuid}/asset`, assetData.length, false));
+  parts.push(assetData);
+  parts.push(tarPad(assetData.length));
+
+  parts.push(buildTarHeader(`${bundleGuid}/asset.meta`, bundleMeta.length, false));
+  parts.push(bundleMeta);
+  parts.push(tarPad(bundleMeta.length));
+
+  // --- Editor script entry ---
+  parts.push(buildTarHeader(scriptGuid, 0, true));
+
+  parts.push(buildTarHeader(`${scriptGuid}/pathname`, scriptPathname.length, false));
+  parts.push(scriptPathname);
+  parts.push(tarPad(scriptPathname.length));
+
+  parts.push(buildTarHeader(`${scriptGuid}/asset`, editorScript.length, false));
+  parts.push(editorScript);
+  parts.push(tarPad(editorScript.length));
+
+  parts.push(buildTarHeader(`${scriptGuid}/asset.meta`, scriptMeta.length, false));
+  parts.push(scriptMeta);
+  parts.push(tarPad(scriptMeta.length));
+
+  // End-of-archive marker (two 512-byte zero blocks)
+  parts.push(Buffer.alloc(1024, 0));
+
+  const tarData = Buffer.concat(parts);
+  logDiagnostic(`[UnityPackage] Tar size: ${tarData.length} bytes`);
+
+  // Gzip compress
+  const gzipAsync = promisify(zlib.gzip);
+  const gzippedData = await gzipAsync(tarData, { level: 6 });
+  logDiagnostic(`[UnityPackage] Gzipped size: ${gzippedData.length} bytes`);
+
+  // Write final .unitypackage
+  fs.writeFileSync(outputPath, gzippedData);
+
+  // Verify the output starts with gzip magic bytes
+  const verify = Buffer.alloc(2);
+  const fd = fs.openSync(outputPath, 'r');
+  fs.readSync(fd, verify, 0, 2, 0);
+  fs.closeSync(fd);
+  logDiagnostic(`[UnityPackage] Output magic: ${verify.toString('hex')} (expect 1f8b for gzip)`);
+  logDiagnostic(`[UnityPackage] Created: ${outputPath} (${gzippedData.length} bytes)`);
 }
 
 // Detect file format by reading magic bytes (file signature)

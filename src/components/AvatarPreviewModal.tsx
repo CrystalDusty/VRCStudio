@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { X, Download, Copy, Check, ExternalLink, Folder, AlertCircle, Loader, Archive, FolderOpen } from 'lucide-react';
+import { X, Download, Copy, Check, ExternalLink, Folder, AlertCircle, Loader, Archive, FolderOpen, Save } from 'lucide-react';
 import type { VRCAvatar } from '../types/vrchat';
 import { extractAvatarBundle, openBundleFolder, isBundleDownloaded, addBundleToStore } from '../utils/avatarBundle';
 import { downloadBundleDirectly } from '../utils/directDownload';
-import { downloadAvatarExtract, browseCacheFile } from '../utils/avatarExtractor';
+import { browseCacheFile } from '../utils/avatarExtractor';
 import BundleLoader from './BundleLoader';
 
 interface AvatarPreviewModalProps {
@@ -24,6 +24,7 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
   );
   const [isExtracting2, setIsExtracting2] = useState(false);
   const [selectedCacheFile, setSelectedCacheFile] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Check if bundle is already downloaded
   useEffect(() => {
@@ -33,18 +34,40 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
   const handleExtractAvatar = async () => {
     setIsExtracting2(true);
     setError(null);
+    setSuccessMessage(null);
 
     try {
-      const result = await downloadAvatarExtract(avatar, selectedCacheFile);
-      if (result.success) {
-        if (!result.bundleFound) {
-          setError(result.error || 'Bundle not found in VRChat cache - download still completed with metadata and images');
-          console.warn('[AvatarPreview] Bundle not in cache:', result.error);
+      const electronAPI = (window as any).electronAPI;
+      let cacheFile = selectedCacheFile;
+
+      // If no cache file selected, try auto-search
+      if (!cacheFile) {
+        console.log('[AvatarPreview] No cache file selected, searching cache...');
+        const searchResult = await electronAPI.searchCacheForDataFiles();
+
+        if (searchResult.success && searchResult.bundles && searchResult.bundles.length > 0) {
+          cacheFile = searchResult.bundles[0];
+          console.log('[AvatarPreview] Found cache bundle:', cacheFile);
         } else {
-          setError(null);
+          setError('No avatar bundle found in VRChat cache. Use "Browse Cache File" to select one manually.');
+          return;
         }
+      }
+
+      console.log('[AvatarPreview] Creating .unitypackage from:', cacheFile);
+      const result = await electronAPI.extractAvatarToDownloads(cacheFile, avatar.id);
+
+      if (result.success) {
+        setError(null);
+        setSuccessMessage(`Saved to Downloads: ${avatar.id}.unitypackage`);
+        console.log('[AvatarPreview] .unitypackage saved to:', result.path);
+
+        // Open the file in Explorer so user can see it
+        try {
+          await electronAPI.openBundleFolder(result.path);
+        } catch { /* non-critical */ }
       } else {
-        setError(result.error || 'Failed to extract avatar');
+        setError(result.error || 'Failed to create .unitypackage');
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error';
@@ -169,6 +192,42 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
     }
   };
 
+  const handleSaveRawBundle = async () => {
+    if (!selectedCacheFile) {
+      setError('Please select a cache file first using "Browse Cache File"');
+      return;
+    }
+
+    try {
+      const electronAPI = (window as any).electronAPI;
+      const readResult = await electronAPI.readFile(selectedCacheFile, false); // false = no auto-decompress
+
+      if (!readResult.success) {
+        setError(readResult.error || 'Failed to read cache file');
+        return;
+      }
+
+      // Convert base64 to blob and trigger browser download as .vrca
+      const binaryString = atob(readResult.content);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+
+      const blob = new Blob([bytes], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${avatar.id}.vrca`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save raw bundle');
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-fade-in"
@@ -253,6 +312,14 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
                     </span>
                   ))}
               </div>
+            </div>
+          )}
+
+          {/* Success message */}
+          {successMessage && (
+            <div className="flex gap-2 p-3 bg-green-500/10 border border-green-500/30 rounded-lg text-xs text-green-400">
+              <Check size={14} className="flex-shrink-0 mt-0.5" />
+              <span>{successMessage}</span>
             </div>
           )}
 
@@ -348,16 +415,16 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
             <button
               onClick={handleExtractAvatar}
               disabled={isExtracting2}
-              className="btn-secondary w-full text-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Extract avatar metadata and images for download"
+              className="btn-primary w-full text-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Create .unitypackage from cache file (saves to Downloads)"
             >
               {isExtracting2 ? (
                 <>
-                  <Loader size={14} className="animate-spin" /> Extracting...
+                  <Loader size={14} className="animate-spin" /> Creating .unitypackage...
                 </>
               ) : (
                 <>
-                  <Archive size={14} /> Extract Avatar Data
+                  <Archive size={14} /> Create .unitypackage
                 </>
               )}
             </button>
@@ -386,6 +453,16 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
                 </>
               )}
             </button>
+
+            {selectedCacheFile && (
+              <button
+                onClick={handleSaveRawBundle}
+                className="btn-secondary w-full text-sm flex items-center justify-center gap-2"
+                title="Save the raw AssetBundle (.vrca) for use with AssetRipper or other tools"
+              >
+                <Save size={14} /> Save Raw Bundle (.vrca)
+              </button>
+            )}
           </div>
 
           {/* Bundle Loader - Show after extraction */}
