@@ -915,18 +915,44 @@ async function createUnityPackage(sourcePath: string, avatarId: string, outputPa
 
   // --- Asset 2: Unity Editor script to load the AssetBundle ---
   const safeAvatarId = avatarId.replace(/[^a-zA-Z0-9_]/g, '_');
+
+  // Read the bundle header to extract the Unity version it was built with
+  const bundleHeader = fs.readFileSync(sourcePath, { encoding: null });
+  let bundleUnityVersion = 'unknown';
+  // UnityFS header: "UnityFS\0" + 4 bytes version + version string + engine string
+  if (bundleHeader.slice(0, 7).toString('utf8') === 'UnityFS') {
+    // Skip "UnityFS\0" (8 bytes) + 4 bytes (format version)
+    // Then read null-terminated strings: player version, then engine version
+    let offset = 12;
+    // Skip player version string
+    while (offset < bundleHeader.length && bundleHeader[offset] !== 0) offset++;
+    offset++; // skip null
+    // Read engine version string
+    let engineVer = '';
+    while (offset < bundleHeader.length && bundleHeader[offset] !== 0) {
+      engineVer += String.fromCharCode(bundleHeader[offset]);
+      offset++;
+    }
+    if (engineVer) bundleUnityVersion = engineVer;
+  }
+  logDiagnostic(`[UnityPackage] Bundle built with Unity: ${bundleUnityVersion}`);
+
   const editorScript = Buffer.from(`using UnityEngine;
 using UnityEditor;
 using System.IO;
+using System.Text;
 
 /// <summary>
 /// VRC Studio - AssetBundle Loader
-/// Loads avatar assets from the included .vrca bundle file.
+/// Bundle was built with Unity ${bundleUnityVersion}
+///
+/// IMPORTANT: Your Unity Editor version must match or be compatible.
+/// Your build target must be set to Windows (File > Build Settings > PC).
 /// </summary>
-public class VRCStudioBundleLoader_${safeAvatarId} : EditorWindow
+public class VRCStudioBundleLoader : EditorWindow
 {
-    [MenuItem("VRC Studio/Load Avatar Bundle")]
-    static void LoadBundle()
+    [MenuItem("VRC Studio/Load Avatar Into Scene")]
+    static void LoadIntoScene()
     {
         string bundlePath = FindBundleFile();
         if (string.IsNullOrEmpty(bundlePath))
@@ -936,75 +962,58 @@ public class VRCStudioBundleLoader_${safeAvatarId} : EditorWindow
             return;
         }
 
+        // Read and display bundle info before loading
+        string bundleInfo = ReadBundleInfo(bundlePath);
+        Debug.Log("[VRC Studio] Bundle info:\\n" + bundleInfo);
+
         AssetBundle bundle = AssetBundle.LoadFromFile(bundlePath);
         if (bundle == null)
         {
-            EditorUtility.DisplayDialog("VRC Studio",
-                "Failed to load AssetBundle.\\nThe file may be corrupted or incompatible.", "OK");
+            string msg = "Failed to load AssetBundle.\\n\\n"
+                + "Bundle info:\\n" + bundleInfo + "\\n\\n"
+                + "This usually means:\\n"
+                + "1. Unity version mismatch - bundle needs ${bundleUnityVersion}\\n"
+                + "   Your editor: " + Application.unityVersion + "\\n\\n"
+                + "2. Wrong build target - go to File > Build Settings\\n"
+                + "   and switch to 'PC, Mac & Linux Standalone'\\n\\n"
+                + "3. Try using AssetRipper (github.com/AssetRipper/AssetRipper)\\n"
+                + "   to extract the .vrca file instead.";
+            EditorUtility.DisplayDialog("VRC Studio - Load Failed", msg, "OK");
             return;
         }
 
-        // Extract all assets
-        string outputDir = "Assets/VRCStudio_Extracted/${avatarId}";
-        if (!Directory.Exists(outputDir))
-            Directory.CreateDirectory(outputDir);
-
-        string[] assetNames = bundle.GetAllAssetNames();
-        int count = 0;
-
-        foreach (string assetName in assetNames)
+        // Try to load the main avatar prefab
+        GameObject[] prefabs = bundle.LoadAllAssets<GameObject>();
+        if (prefabs.Length > 0)
         {
-            Object asset = bundle.LoadAsset(assetName);
-            if (asset != null)
+            foreach (GameObject prefab in prefabs)
             {
-                string fileName = Path.GetFileName(assetName);
-                string outputPath = Path.Combine(outputDir, fileName);
-
-                // Handle different asset types
-                if (asset is GameObject go)
-                {
-                    string prefabPath = outputDir + "/" + fileName + ".prefab";
-                    PrefabUtility.SaveAsPrefabAsset(go, prefabPath);
-                    count++;
-                    Debug.Log("[VRC Studio] Saved prefab: " + prefabPath);
-                }
-                else if (asset is Texture2D tex)
-                {
-                    byte[] png = tex.EncodeToPNG();
-                    if (png != null)
-                    {
-                        File.WriteAllBytes(outputDir + "/" + fileName + ".png", png);
-                        count++;
-                    }
-                }
-                else if (asset is Material || asset is Mesh || asset is AnimationClip)
-                {
-                    // For materials, meshes, animations - instantiate and save
-                    Object copy = Object.Instantiate(asset);
-                    AssetDatabase.CreateAsset(copy, outputDir + "/" + fileName + ".asset");
-                    count++;
-                }
-                else
-                {
-                    Debug.Log("[VRC Studio] Skipped: " + assetName + " (" + asset.GetType().Name + ")");
-                }
+                GameObject instance = Instantiate(prefab);
+                instance.name = prefab.name;
+                Undo.RegisterCreatedObjectUndo(instance, "Load VRC Avatar");
+                Selection.activeGameObject = instance;
+                Debug.Log("[VRC Studio] Loaded avatar: " + prefab.name);
             }
+            EditorUtility.DisplayDialog("VRC Studio",
+                "Avatar loaded into scene!\\nCheck the Hierarchy window.", "OK");
+        }
+        else
+        {
+            // Try loading all assets of any type
+            Object[] allAssets = bundle.LoadAllAssets();
+            string assetList = "Found " + allAssets.Length + " assets:\\n";
+            foreach (Object a in allAssets)
+                assetList += "  - " + a.name + " (" + a.GetType().Name + ")\\n";
+
+            EditorUtility.DisplayDialog("VRC Studio",
+                "No GameObjects found, but found other assets:\\n\\n" + assetList, "OK");
         }
 
         bundle.Unload(false);
-        AssetDatabase.Refresh();
-
-        EditorUtility.DisplayDialog("VRC Studio",
-            "Extracted " + count + " assets to:\\n" + outputDir +
-            "\\n\\nAsset names found: " + assetNames.Length, "OK");
-
-        // Select the output folder
-        Object folder = AssetDatabase.LoadAssetAtPath<Object>(outputDir);
-        if (folder != null) Selection.activeObject = folder;
     }
 
-    [MenuItem("VRC Studio/Load Avatar Into Scene")]
-    static void LoadIntoScene()
+    [MenuItem("VRC Studio/Extract All Assets From Bundle")]
+    static void ExtractAll()
     {
         string bundlePath = FindBundleFile();
         if (string.IsNullOrEmpty(bundlePath))
@@ -1017,39 +1026,146 @@ public class VRCStudioBundleLoader_${safeAvatarId} : EditorWindow
         AssetBundle bundle = AssetBundle.LoadFromFile(bundlePath);
         if (bundle == null)
         {
-            EditorUtility.DisplayDialog("VRC Studio",
-                "Failed to load AssetBundle.", "OK");
+            string bundleInfo = ReadBundleInfo(bundlePath);
+            EditorUtility.DisplayDialog("VRC Studio - Load Failed",
+                "Failed to load AssetBundle.\\n\\n"
+                + "Bundle needs Unity ${bundleUnityVersion}\\n"
+                + "Your editor: " + Application.unityVersion + "\\n\\n"
+                + bundleInfo + "\\n\\n"
+                + "Try AssetRipper instead:\\nhttps://github.com/AssetRipper/AssetRipper", "OK");
             return;
         }
 
-        // Try to load the main avatar prefab
-        GameObject[] prefabs = bundle.LoadAllAssets<GameObject>();
-        if (prefabs.Length > 0)
+        string outputDir = "Assets/VRCStudio_Extracted";
+        if (!Directory.Exists(outputDir))
+            Directory.CreateDirectory(outputDir);
+
+        Object[] allAssets = bundle.LoadAllAssets();
+        int count = 0;
+
+        foreach (Object asset in allAssets)
         {
-            foreach (GameObject prefab in prefabs)
+            try
             {
-                GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(
-                    Object.Instantiate(prefab));
-                instance.name = prefab.name;
-                Undo.RegisterCreatedObjectUndo(instance, "Load VRC Avatar");
-                Selection.activeGameObject = instance;
-                Debug.Log("[VRC Studio] Loaded avatar: " + prefab.name);
+                string safeName = asset.name.Replace("/", "_").Replace("\\\\", "_");
+                if (string.IsNullOrEmpty(safeName)) safeName = "asset_" + count;
+
+                if (asset is GameObject go)
+                {
+                    string path = outputDir + "/" + safeName + ".prefab";
+                    PrefabUtility.SaveAsPrefabAsset(Instantiate(go), path);
+                    count++;
+                }
+                else if (asset is Texture2D tex)
+                {
+                    byte[] png = tex.EncodeToPNG();
+                    if (png != null)
+                    {
+                        File.WriteAllBytes(outputDir + "/" + safeName + ".png", png);
+                        count++;
+                    }
+                }
+                else if (asset is Mesh || asset is Material || asset is AnimationClip ||
+                         asset is RuntimeAnimatorController || asset is Avatar)
+                {
+                    Object copy = Instantiate(asset);
+                    copy.name = asset.name;
+                    AssetDatabase.CreateAsset(copy, outputDir + "/" + safeName + ".asset");
+                    count++;
+                }
+
+                Debug.Log("[VRC Studio] Extracted: " + asset.name + " (" + asset.GetType().Name + ")");
             }
-            EditorUtility.DisplayDialog("VRC Studio",
-                "Avatar loaded into scene!\\nCheck the Hierarchy window.", "OK");
-        }
-        else
-        {
-            EditorUtility.DisplayDialog("VRC Studio",
-                "No GameObjects found in bundle.\\nTry 'Load Avatar Bundle' to extract raw assets.", "OK");
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[VRC Studio] Failed to extract " + asset.name + ": " + e.Message);
+            }
         }
 
         bundle.Unload(false);
+        AssetDatabase.Refresh();
+
+        EditorUtility.DisplayDialog("VRC Studio",
+            "Extracted " + count + " of " + allAssets.Length + " assets to:\\n" + outputDir, "OK");
+
+        Object folder = AssetDatabase.LoadAssetAtPath<Object>(outputDir);
+        if (folder != null) Selection.activeObject = folder;
+    }
+
+    [MenuItem("VRC Studio/Show Bundle Info")]
+    static void ShowInfo()
+    {
+        string bundlePath = FindBundleFile();
+        if (string.IsNullOrEmpty(bundlePath))
+        {
+            EditorUtility.DisplayDialog("VRC Studio", "No .vrca file found.", "OK");
+            return;
+        }
+
+        string info = ReadBundleInfo(bundlePath);
+        info += "\\n\\nYour Unity: " + Application.unityVersion;
+        info += "\\nYour Platform: " + EditorUserBuildSettings.activeBuildTarget;
+        info += "\\n\\nBundle needs: ${bundleUnityVersion}";
+        info += "\\nBundle platform: Windows (StandaloneWindows64)";
+
+        bool versionsMatch = Application.unityVersion.StartsWith("${bundleUnityVersion.split('.').slice(0, 2).join('.')}");
+        if (!versionsMatch)
+        {
+            info += "\\n\\n⚠ VERSION MISMATCH ⚠\\n"
+                + "Install Unity ${bundleUnityVersion} via Unity Hub,\\n"
+                + "or use AssetRipper to extract.";
+        }
+
+        EditorUtility.DisplayDialog("VRC Studio - Bundle Info", info, "OK");
+    }
+
+    static string ReadBundleInfo(string filePath)
+    {
+        try
+        {
+            using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+            {
+                byte[] header = new byte[64];
+                fs.Read(header, 0, header.Length);
+
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine("File: " + Path.GetFileName(filePath));
+                sb.AppendLine("Size: " + (new FileInfo(filePath).Length / 1024 / 1024) + " MB");
+
+                // Check for UnityFS magic
+                string magic = Encoding.UTF8.GetString(header, 0, 7);
+                if (magic == "UnityFS")
+                {
+                    sb.AppendLine("Format: UnityFS AssetBundle");
+                    // Read version strings (null-terminated after offset 12)
+                    int offset = 12;
+                    string playerVer = "";
+                    while (offset < header.Length && header[offset] != 0)
+                        playerVer += (char)header[offset++];
+                    offset++;
+                    string engineVer = "";
+                    while (offset < header.Length && header[offset] != 0)
+                        engineVer += (char)header[offset++];
+                    sb.AppendLine("Player version: " + playerVer);
+                    sb.AppendLine("Engine version: " + engineVer);
+                }
+                else
+                {
+                    sb.AppendLine("Format: Unknown (not UnityFS)");
+                    sb.AppendLine("Header hex: " + System.BitConverter.ToString(header, 0, 16));
+                }
+                return sb.ToString();
+            }
+        }
+        catch (System.Exception e)
+        {
+            return "Error reading bundle: " + e.Message;
+        }
     }
 
     static string FindBundleFile()
     {
-        // Search for .vrca files in Assets
+        // Search for .vrca files in Assets/Avatar
         string[] guids = AssetDatabase.FindAssets("", new[] { "Assets/Avatar" });
         foreach (string guid in guids)
         {
