@@ -941,6 +941,7 @@ async function createUnityPackage(sourcePath: string, avatarId: string, outputPa
 using UnityEditor;
 using System.IO;
 using System.Text;
+using System.IO.Compression;
 
 /// <summary>
 /// VRC Studio - AssetBundle Loader
@@ -970,12 +971,52 @@ public class VRCStudioBundleLoader : EditorWindow
         byte[] data = File.ReadAllBytes(bundlePath);
         Debug.Log("[VRC Studio] Read " + data.Length + " bytes from: " + bundlePath);
 
-        // Verify it's a UnityFS bundle
-        string magic = Encoding.UTF8.GetString(data, 0, 7);
-        if (magic != "UnityFS")
+        // If this is gzip-wrapped data, try to decompress first.
+        if (data.Length > 2 && data[0] == 0x1f && data[1] == 0x8b)
         {
-            Debug.LogError("[VRC Studio] Not a UnityFS bundle (magic: " + magic + ")");
+            try
+            {
+                using (MemoryStream input = new MemoryStream(data))
+                using (GZipStream gzip = new GZipStream(input, CompressionMode.Decompress))
+                using (MemoryStream output = new MemoryStream())
+                {
+                    gzip.CopyTo(output);
+                    data = output.ToArray();
+                    Debug.Log("[VRC Studio] Decompressed gzip wrapper, new size: " + data.Length + " bytes");
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[VRC Studio] Gzip decompress attempt failed: " + e.Message);
+            }
+        }
+
+        // Verify it's a UnityFS bundle. Some cache files can have leading bytes,
+        // so search for UnityFS marker and trim to that offset when found.
+        int unityFsOffset = -1;
+        for (int i = 0; i <= data.Length - 7; i++)
+        {
+            if (data[i] == (byte)'U' && data[i + 1] == (byte)'n' && data[i + 2] == (byte)'i' &&
+                data[i + 3] == (byte)'t' && data[i + 4] == (byte)'y' && data[i + 5] == (byte)'F' &&
+                data[i + 6] == (byte)'S')
+            {
+                unityFsOffset = i;
+                break;
+            }
+        }
+
+        if (unityFsOffset < 0)
+        {
+            Debug.LogError("[VRC Studio] Could not find UnityFS marker in bundle bytes.");
             return null;
+        }
+
+        if (unityFsOffset > 0)
+        {
+            byte[] trimmed = new byte[data.Length - unityFsOffset];
+            System.Array.Copy(data, unityFsOffset, trimmed, 0, trimmed.Length);
+            data = trimmed;
+            Debug.Log("[VRC Studio] Trimmed " + unityFsOffset + " leading bytes before UnityFS header.");
         }
 
         // Parse the header to find the engine version string
