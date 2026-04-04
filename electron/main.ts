@@ -997,21 +997,11 @@ public class VRCStudioBundleLoader : EditorWindow
         Debug.Log("[VRC Studio] Original bundle version: " + originalVersion);
         Debug.Log("[VRC Studio] Your Unity version: " + Application.unityVersion);
 
-        // VRChat bundles often report 2022.3.22f2-* while Creator Companion supports 2022.3.22f1.
-        // Force that exact base version and preserve any custom suffix (e.g. "-DWR")
-        // so header length/structure remains stable.
-        string patchBaseVersion = "2022.3.22f1";
-        string patchVersion = patchBaseVersion;
-        int dashIndex = originalVersion.IndexOf('-');
-        if (dashIndex >= 0 && dashIndex < originalVersion.Length - 1)
-        {
-            patchVersion = patchBaseVersion + originalVersion.Substring(dashIndex);
-        }
-
-        Debug.Log("[VRC Studio] Target patch version: " + patchVersion);
-
-        // Overwrite only the START of the engine version and leave any remaining
-        // original suffix bytes intact. Never write null padding here.
+        // Patch: overwrite only the START of the engine version and leave any
+        // remaining original suffix bytes intact. Never write null padding here,
+        // because changing bytes to 0x00 can effectively shorten the header string
+        // Unity parses and corrupt downstream reads.
+        string patchVersion = Application.unityVersion;
         byte[] verBytes = Encoding.UTF8.GetBytes(patchVersion);
         int copyLen = System.Math.Min(verBytes.Length, versionFieldLen);
         System.Array.Copy(verBytes, 0, data, engineVerStart, copyLen);
