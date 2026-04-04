@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // File system
   readFile: (path: string) => ipcRenderer.invoke('fs:readFile', path),
   listDir: (path: string) => ipcRenderer.invoke('fs:listDir', path),
+  searchCacheForDataFiles: () => ipcRenderer.invoke('fs:searchCacheForDataFiles'),
+  browseCacheFolder: () => ipcRenderer.invoke('fs:browseCacheFolder'),
+  extractAvatarToDownloads: (cacheDataPath: string, avatarId: string) => ipcRenderer.invoke('fs:extractAvatarToDownloads', cacheDataPath, avatarId),
+  getDiagnosticLog: () => ipcRenderer.invoke('fs:getDiagnosticLog'),
   getVRChatLogPath: () => ipcRenderer.invoke('fs:getVRChatLogPath'),
   getVRChatScreenshotPath: () => ipcRenderer.invoke('fs:getVRChatScreenshotPath'),
 
@@ -30,9 +34,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
     return ipcRenderer.invoke('fs:downloadFile', url, avatarId);
   },
+  downloadFileNative: (url: string, avatarId: string) => ipcRenderer.invoke('fs:downloadFileNative', url, avatarId),
   extractBundle: (sourcePath: string, avatarId: string) => ipcRenderer.invoke('fs:extractBundle', sourcePath, avatarId),
   openBundleFolder: (folderPath: string) => ipcRenderer.invoke('fs:openBundleFolder', folderPath),
   deleteBundleData: (avatarId: string) => ipcRenderer.invoke('fs:deleteBundleData', avatarId),
+  openFileDialog: (options: { title?: string; message?: string; filters?: any[] }) => ipcRenderer.invoke('fs:openFileDialog', options),
+
+  // Persistent app data storage
+  saveAppData: (key: string, data: string) => ipcRenderer.invoke('storage:saveAppData', key, data),
+  loadAppData: (key: string) => ipcRenderer.invoke('storage:loadAppData', key),
+  deleteAppData: (key: string) => ipcRenderer.invoke('storage:deleteAppData', key),
+  clearAllAppData: () => ipcRenderer.invoke('storage:clearAllAppData'),
 
   // Notifications
   sendNotification: (opts: { title: string; body: string; icon?: string }) =>

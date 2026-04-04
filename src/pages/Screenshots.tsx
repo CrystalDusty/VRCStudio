@@ -1,10 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Camera, Upload, FolderOpen, X, Globe, Calendar, Printer, Download, Type, Paintbrush, Undo, Redo, RotateCcw, Palette } from 'lucide-react';
+import { Camera, Upload, FolderOpen, X, Globe, Calendar, Printer, Download, Type, Paintbrush, Sliders } from 'lucide-react';
 import { format } from 'date-fns';
 import EmptyState from '../components/common/EmptyState';
 import { useAuthStore } from '../stores/authStore';
-import { PRESET_FILTERS, applyAdjustments, applyFilters, drawBorder, type CanvasEditState } from '../utils/canvasFilters';
-import { PRESET_THEMES, getThemeNames, applyThemeToCanvas, getFontString, type PrintTheme } from '../utils/printThemes';
 
 interface ScreenshotEntry {
   id: string;
@@ -32,6 +30,8 @@ function saveMeta(meta: Record<string, Partial<ScreenshotEntry>>) {
 
 // --- Photo Print Creator ---
 
+type BorderType = 'none' | 'simple' | 'thick' | 'shadow' | 'neon' | 'grunge' | 'pixel' | 'hearts' | 'stars' | 'glitch' | 'fire' | 'rainbow' | 'metallic' | 'soft-glow' | 'film-strip' | 'neon-tube' | 'hologram' | 'retro-pixel' | 'watercolor' | 'chain-link';
+
 interface PrintSettings {
   showUsername: boolean;
   showDate: boolean;
@@ -41,6 +41,9 @@ interface PrintSettings {
   position: 'bottom-left' | 'bottom-right' | 'top-left' | 'top-right';
   style: 'classic' | 'polaroid' | 'minimal' | 'strip';
   fontSize: number;
+  border: BorderType;
+  printSize: 'fit' | '2048' | '1024' | 'custom';
+  customPrintSize?: { width: number; height: number };
 }
 
 const defaultPrintSettings: PrintSettings = {
@@ -52,73 +55,278 @@ const defaultPrintSettings: PrintSettings = {
   position: 'bottom-left',
   style: 'classic',
   fontSize: 24,
+  border: 'none',
+  printSize: 'fit',
 };
 
-// Photo Editor Canvas Component
-function PhotoEditorCanvas({
-  imageSrc,
-  editState,
-  canvasRef,
-}: {
-  imageSrc: string;
-  editState: CanvasEditState;
-  canvasRef: React.RefObject<HTMLCanvasElement>;
-}) {
-  useEffect(() => {
-    if (!canvasRef.current) return;
+function drawBorder(ctx: CanvasRenderingContext2D, w: number, h: number, border: BorderType) {
+  if (border === 'none') return;
 
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+  ctx.save();
 
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      // Set canvas size to image size
-      canvas.width = img.width;
-      canvas.height = img.height;
-
-      // Draw the original image
-      ctx.drawImage(img, 0, 0);
-
-      // Apply adjustments (brightness, contrast, saturation)
-      applyAdjustments(
-        ctx,
-        editState.brightness,
-        editState.contrast,
-        editState.saturation,
-        canvas.width,
-        canvas.height
-      );
-
-      // Apply filters (grayscale, sepia, blur, temperature)
-      applyFilters(
-        ctx,
-        editState.filters.grayscale,
-        editState.filters.sepia,
-        editState.filters.blur,
-        editState.filters.temperature,
-        canvas.width,
-        canvas.height
-      );
-
-      // Apply border
-      if (editState.borderStyle.width > 0) {
-        drawBorder(
-          ctx,
-          canvas.width,
-          canvas.height,
-          editState.borderStyle.width,
-          editState.borderStyle.color,
-          editState.borderStyle.style,
-          editState.borderStyle.radius
-        );
-      }
+  if (border === 'simple') {
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(2, 2, w - 4, h - 4);
+  } else if (border === 'thick') {
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 12;
+    ctx.strokeRect(6, 6, w - 12, h - 12);
+  } else if (border === 'shadow') {
+    // Inset shadow effect
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, 'rgba(0,0,0,0.6)');
+    grad.addColorStop(0.08, 'rgba(0,0,0,0)');
+    grad.addColorStop(0.92, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.6)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+    const gradH = ctx.createLinearGradient(0, 0, w, 0);
+    gradH.addColorStop(0, 'rgba(0,0,0,0.5)');
+    gradH.addColorStop(0.08, 'rgba(0,0,0,0)');
+    gradH.addColorStop(0.92, 'rgba(0,0,0,0)');
+    gradH.addColorStop(1, 'rgba(0,0,0,0.5)');
+    ctx.fillStyle = gradH;
+    ctx.fillRect(0, 0, w, h);
+  } else if (border === 'neon') {
+    ctx.shadowColor = '#00ffff';
+    ctx.shadowBlur = 15;
+    ctx.strokeStyle = '#00ffff';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(8, 8, w - 16, h - 16);
+    ctx.shadowColor = '#ff00ff';
+    ctx.shadowBlur = 15;
+    ctx.strokeStyle = '#ff00ff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(12, 12, w - 24, h - 24);
+    ctx.shadowBlur = 0;
+  } else if (border === 'grunge') {
+    const seed = 42;
+    for (let i = 0; i < 300; i++) {
+      const side = i % 4;
+      let x: number, y: number;
+      const rng = Math.sin(seed + i * 127.1) * 0.5 + 0.5;
+      const size = 3 + rng * 8;
+      if (side === 0) { x = rng * w; y = rng * 20; }
+      else if (side === 1) { x = rng * w; y = h - rng * 20; }
+      else if (side === 2) { x = rng * 20; y = rng * h; }
+      else { x = w - rng * 20; y = rng * h; }
+      ctx.fillStyle = `rgba(${60 + rng * 40}, ${40 + rng * 30}, ${30 + rng * 20}, ${0.4 + rng * 0.4})`;
+      ctx.fillRect(x, y, size, size);
+    }
+  } else if (border === 'pixel') {
+    const pxSize = 8;
+    const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ffffff'];
+    for (let x = 0; x < w; x += pxSize) {
+      const c = colors[(x / pxSize) % colors.length];
+      ctx.fillStyle = c;
+      ctx.fillRect(x, 0, pxSize, pxSize);
+      ctx.fillRect(x, h - pxSize, pxSize, pxSize);
+    }
+    for (let y = pxSize; y < h - pxSize; y += pxSize) {
+      const c = colors[(y / pxSize) % colors.length];
+      ctx.fillStyle = c;
+      ctx.fillRect(0, y, pxSize, pxSize);
+      ctx.fillRect(w - pxSize, y, pxSize, pxSize);
+    }
+  } else if (border === 'hearts') {
+    ctx.fillStyle = '#ff4488';
+    const drawHeart = (cx: number, cy: number, size: number) => {
+      ctx.beginPath();
+      ctx.moveTo(cx, cy + size / 4);
+      ctx.bezierCurveTo(cx, cy, cx - size / 2, cy, cx - size / 2, cy + size / 4);
+      ctx.bezierCurveTo(cx - size / 2, cy + size / 2, cx, cy + size * 0.7, cx, cy + size * 0.85);
+      ctx.bezierCurveTo(cx, cy + size * 0.7, cx + size / 2, cy + size / 2, cx + size / 2, cy + size / 4);
+      ctx.bezierCurveTo(cx + size / 2, cy, cx, cy, cx, cy + size / 4);
+      ctx.fill();
     };
-    img.src = imageSrc;
-  }, [imageSrc, editState, canvasRef]);
+    const step = 40;
+    for (let x = 20; x < w; x += step) { drawHeart(x, 6, 18); drawHeart(x, h - 20, 18); }
+    for (let y = 30; y < h - 30; y += step) { drawHeart(8, y, 18); drawHeart(w - 14, y, 18); }
+  } else if (border === 'stars') {
+    ctx.fillStyle = '#ffd700';
+    const drawStar = (cx: number, cy: number, r: number) => {
+      ctx.beginPath();
+      for (let i = 0; i < 5; i++) {
+        const angle = (i * 4 * Math.PI) / 5 - Math.PI / 2;
+        const method = i === 0 ? 'moveTo' : 'lineTo';
+        ctx[method](cx + r * Math.cos(angle), cy + r * Math.sin(angle));
+      }
+      ctx.closePath();
+      ctx.fill();
+    };
+    const step = 35;
+    for (let x = 12; x < w; x += step) { drawStar(x, 10, 8); drawStar(x, h - 10, 8); }
+    for (let y = 25; y < h - 25; y += step) { drawStar(10, y, 8); drawStar(w - 10, y, 8); }
+  } else if (border === 'glitch') {
+    const colors = ['rgba(255,0,0,0.6)', 'rgba(0,255,0,0.5)', 'rgba(0,0,255,0.5)', 'rgba(255,0,255,0.4)'];
+    for (let i = 0; i < 20; i++) {
+      const rng = Math.sin(i * 73.7) * 0.5 + 0.5;
+      const barH = 3 + rng * 12;
+      const y = rng * h;
+      ctx.fillStyle = colors[i % colors.length];
+      if (i % 2 === 0) {
+        ctx.fillRect(0, y, 15 + rng * 30, barH);
+      } else {
+        ctx.fillRect(w - 15 - rng * 30, y, 15 + rng * 30, barH);
+      }
+    }
+  } else if (border === 'fire') {
+    const gradTop = ctx.createLinearGradient(0, 0, 0, 30);
+    gradTop.addColorStop(0, 'rgba(255, 80, 0, 0.7)');
+    gradTop.addColorStop(0.5, 'rgba(255, 160, 0, 0.3)');
+    gradTop.addColorStop(1, 'rgba(255, 200, 0, 0)');
+    ctx.fillStyle = gradTop;
+    ctx.fillRect(0, 0, w, 30);
+    const gradBot = ctx.createLinearGradient(0, h - 30, 0, h);
+    gradBot.addColorStop(0, 'rgba(255, 200, 0, 0)');
+    gradBot.addColorStop(0.5, 'rgba(255, 160, 0, 0.3)');
+    gradBot.addColorStop(1, 'rgba(255, 80, 0, 0.7)');
+    ctx.fillStyle = gradBot;
+    ctx.fillRect(0, h - 30, w, 30);
+    const gradL = ctx.createLinearGradient(0, 0, 25, 0);
+    gradL.addColorStop(0, 'rgba(255, 80, 0, 0.6)');
+    gradL.addColorStop(1, 'rgba(255, 200, 0, 0)');
+    ctx.fillStyle = gradL;
+    ctx.fillRect(0, 0, 25, h);
+    const gradR = ctx.createLinearGradient(w - 25, 0, w, 0);
+    gradR.addColorStop(0, 'rgba(255, 200, 0, 0)');
+    gradR.addColorStop(1, 'rgba(255, 80, 0, 0.6)');
+    ctx.fillStyle = gradR;
+    ctx.fillRect(w - 25, 0, 25, h);
+  } else if (border === 'rainbow') {
+    const rainbowColors = ['#ff0000', '#ff8800', '#ffff00', '#00ff00', '#0088ff', '#8800ff'];
+    const bw = 6;
+    for (let i = 0; i < rainbowColors.length; i++) {
+      ctx.strokeStyle = rainbowColors[i];
+      ctx.lineWidth = bw;
+      const offset = i * bw + bw / 2;
+      ctx.strokeRect(offset, offset, w - offset * 2, h - offset * 2);
+    }
+  } else if (border === 'metallic') {
+    // Chrome/steel gradient with beveled edges
+    const grad = ctx.createLinearGradient(0, 0, w, h);
+    grad.addColorStop(0, '#e0e0e0');
+    grad.addColorStop(0.5, '#ffffff');
+    grad.addColorStop(1, '#888888');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, 10);
+    ctx.fillRect(0, h - 10, w, 10);
+    ctx.fillRect(0, 10, 10, h - 20);
+    ctx.fillRect(w - 10, 10, 10, h - 20);
+    ctx.strokeStyle = '#333333';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(4, 4, w - 8, h - 8);
+  } else if (border === 'soft-glow') {
+    // Radial gradient glow from edges
+    ctx.fillStyle = 'rgba(255, 200, 100, 0.1)';
+    for (let i = 40; i > 0; i -= 5) {
+      ctx.globalAlpha = (40 - i) / 40 * 0.4;
+      ctx.fillRect(i, i, w - i * 2, h - i * 2);
+    }
+    ctx.globalAlpha = 1;
+  } else if (border === 'film-strip') {
+    // Movie filmstrip perforations
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#333333';
+    ctx.fillRect(20, 20, w - 40, h - 40);
+    ctx.fillStyle = '#000000';
+    const perfSize = 12;
+    const perfSpacing = 30;
+    for (let y = 40; y < h - 40; y += perfSpacing) {
+      ctx.fillRect(10, y, perfSize, perfSize);
+      ctx.fillRect(w - 10 - perfSize, y, perfSize, perfSize);
+    }
+  } else if (border === 'neon-tube') {
+    // Thicker neon glow with multiple layers
+    ctx.shadowColor = '#00ffff';
+    ctx.shadowBlur = 20;
+    ctx.strokeStyle = '#00ffff';
+    ctx.lineWidth = 6;
+    ctx.strokeRect(8, 8, w - 16, h - 16);
+    ctx.shadowColor = '#ff00ff';
+    ctx.shadowBlur = 25;
+    ctx.strokeStyle = '#ff00ff';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(14, 14, w - 28, h - 28);
+    ctx.shadowBlur = 0;
+  } else if (border === 'hologram') {
+    // Sci-fi hologram with color shift and scan lines
+    const hgrad = ctx.createLinearGradient(0, 0, w, h);
+    hgrad.addColorStop(0, 'rgba(0, 255, 200, 0.6)');
+    hgrad.addColorStop(0.5, 'rgba(100, 200, 255, 0.4)');
+    hgrad.addColorStop(1, 'rgba(200, 100, 255, 0.6)');
+    ctx.strokeStyle = hgrad;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(10, 10, w - 20, h - 20);
+    ctx.strokeStyle = 'rgba(0, 255, 200, 0.3)';
+    for (let y = 10; y < h; y += 8) {
+      ctx.fillRect(10, y, w - 20, 1);
+    }
+  } else if (border === 'retro-pixel') {
+    // Larger pixel blocks for 8-bit retro look
+    ctx.fillStyle = '#ff1493';
+    const pxSize = 16;
+    const colors = ['#ff1493', '#00ffff', '#ffff00', '#00ff00', '#ff6600', '#9933ff'];
+    let colorIdx = 0;
+    for (let x = 0; x < w; x += pxSize) {
+      ctx.fillStyle = colors[colorIdx % colors.length];
+      ctx.fillRect(x, 0, pxSize, pxSize);
+      ctx.fillRect(x, h - pxSize, pxSize, pxSize);
+      colorIdx++;
+    }
+    colorIdx = 0;
+    for (let y = pxSize; y < h - pxSize; y += pxSize) {
+      ctx.fillStyle = colors[colorIdx % colors.length];
+      ctx.fillRect(0, y, pxSize, pxSize);
+      ctx.fillRect(w - pxSize, y, pxSize, pxSize);
+      colorIdx++;
+    }
+  } else if (border === 'watercolor') {
+    // Organic watercolor brush strokes
+    ctx.fillStyle = 'rgba(100, 150, 200, 0.4)';
+    for (let i = 0; i < 15; i++) {
+      const x = Math.random() * w;
+      const y = Math.random() * (h * 0.2);
+      const size = 20 + Math.random() * 40;
+      ctx.beginPath();
+      ctx.arc(x, y, size, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillRect(x, h - y - size, size, size);
+    }
+    ctx.fillStyle = 'rgba(150, 100, 150, 0.3)';
+    for (let x = 0; x < w; x += 60) {
+      ctx.fillRect(x, 0, 40, 15);
+      ctx.fillRect(x, h - 15, 40, 15);
+    }
+  } else if (border === 'chain-link') {
+    // Decorative linked circles pattern
+    ctx.strokeStyle = '#d4af37';
+    ctx.lineWidth = 3;
+    const linkSize = 25;
+    const linkSpacing = 45;
+    // Top and bottom chains
+    for (let x = 25; x < w; x += linkSpacing) {
+      ctx.beginPath();
+      ctx.arc(x, 20, linkSize / 2, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x, h - 20, linkSize / 2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // Left and right chains
+    for (let y = 50; y < h - 50; y += linkSpacing) {
+      ctx.beginPath();
+      ctx.arc(20, y, linkSize / 2, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(w - 20, y, linkSize / 2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
 
-  return <canvas ref={canvasRef} className="w-full rounded-xl shadow-2xl" />;
+  ctx.restore();
 }
 
 function PhotoPrintCreator({
@@ -133,9 +341,24 @@ function PhotoPrintCreator({
   const [settings, setSettings] = useState<PrintSettings>(defaultPrintSettings);
   const [previewUrl, setPreviewUrl] = useState<string>('');
   const [rendering, setRendering] = useState(false);
-  const [selectedTheme, setSelectedTheme] = useState<string>('classic');
-  const [customizing, setCustomizing] = useState(false);
-  const [currentTheme, setCurrentTheme] = useState<PrintTheme>(PRESET_THEMES.classic);
+
+  // Helper to calculate target canvas size based on print settings
+  const getTargetCanvasSize = (imgWidth: number, imgHeight: number): { w: number; h: number; scale: number } => {
+    if (settings.printSize === '2048') {
+      const maxDim = 2048;
+      const scale = Math.min(maxDim / imgWidth, maxDim / imgHeight);
+      return { w: 2048, h: 2048, scale };
+    } else if (settings.printSize === '1024') {
+      const maxDim = 1024;
+      const scale = Math.min(maxDim / imgWidth, maxDim / imgHeight);
+      return { w: 1024, h: 1024, scale };
+    } else if (settings.printSize === 'custom' && settings.customPrintSize) {
+      const scale = Math.min(settings.customPrintSize.width / imgWidth, settings.customPrintSize.height / imgHeight);
+      return { w: settings.customPrintSize.width, h: settings.customPrintSize.height, scale };
+    }
+    // 'fit' mode: calculate based on style
+    return { w: 0, h: 0, scale: 1 };
+  };
 
   const renderPrint = useCallback(async () => {
     const canvas = canvasRef.current;
@@ -152,7 +375,93 @@ function PhotoPrintCreator({
     });
 
     const ctx = canvas.getContext('2d')!;
+    const targetSize = getTargetCanvasSize(img.width, img.height);
+    const isFixedSize = settings.printSize !== 'fit';
 
+    if (isFixedSize) {
+      // Fixed size mode: center image in canvas
+      canvas.width = targetSize.w;
+      canvas.height = targetSize.h;
+
+      const scaledImgWidth = img.width * targetSize.scale;
+      const scaledImgHeight = img.height * targetSize.scale;
+      const offsetX = (canvas.width - scaledImgWidth) / 2;
+      const offsetY = (canvas.height - scaledImgHeight) / 2;
+
+      // Draw background
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Draw scaled image
+      ctx.drawImage(img, offsetX, offsetY, scaledImgWidth, scaledImgHeight);
+
+      // Draw border on fixed canvas
+      drawBorder(ctx, canvas.width, canvas.height, settings.border);
+
+      // Draw text overlay for fixed size
+      const lines: string[] = [];
+      if (settings.showUsername && user?.displayName) lines.push(user.displayName);
+      if (settings.showWorldName && screenshot.worldName) lines.push(`📍 ${screenshot.worldName}`);
+      if (settings.showDate) lines.push(format(screenshot.takenAt, 'MMM d, yyyy  HH:mm'));
+      if (settings.showCustomText && settings.customText) lines.push(settings.customText);
+
+      if (lines.length > 0) {
+        ctx.font = `bold ${settings.fontSize}px 'Segoe UI', sans-serif`;
+        const maxW = Math.max(...lines.map(l => ctx.measureText(l).width));
+        const blockH = lines.length * (settings.fontSize + 10) + 20;
+        const pad = 16;
+
+        let bx: number, by: number;
+        if (settings.position === 'bottom-right') {
+          bx = canvas.width - maxW - pad * 2 - 20;
+          by = canvas.height - blockH - 20;
+        } else if (settings.position === 'top-left') {
+          bx = 20;
+          by = 20;
+        } else if (settings.position === 'top-right') {
+          bx = canvas.width - maxW - pad * 2 - 20;
+          by = 20;
+        } else {
+          bx = 20;
+          by = canvas.height - blockH - 20;
+        }
+
+        // Background
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        const radius = 12;
+        ctx.beginPath();
+        ctx.moveTo(bx + radius, by);
+        ctx.lineTo(bx + maxW + pad * 2 - radius, by);
+        ctx.quadraticCurveTo(bx + maxW + pad * 2, by, bx + maxW + pad * 2, by + radius);
+        ctx.lineTo(bx + maxW + pad * 2, by + blockH - radius);
+        ctx.quadraticCurveTo(bx + maxW + pad * 2, by + blockH, bx + maxW + pad * 2 - radius, by + blockH);
+        ctx.lineTo(bx + radius, by + blockH);
+        ctx.quadraticCurveTo(bx, by + blockH, bx, by + blockH - radius);
+        ctx.lineTo(bx, by + radius);
+        ctx.quadraticCurveTo(bx, by, bx + radius, by);
+        ctx.closePath();
+        ctx.fill();
+
+        // Text
+        ctx.fillStyle = '#ffffff';
+        ctx.font = `bold ${settings.fontSize}px 'Segoe UI', sans-serif`;
+        let ty = by + pad + settings.fontSize;
+        for (let i = 0; i < lines.length; i++) {
+          if (i > 0) {
+            ctx.font = `${settings.fontSize - 4}px 'Segoe UI', sans-serif`;
+            ctx.fillStyle = 'rgba(255,255,255,0.85)';
+          }
+          ctx.fillText(lines[i], bx + pad, ty);
+          ty += settings.fontSize + 10;
+        }
+      }
+
+      setPreviewUrl(canvas.toDataURL('image/png'));
+      setRendering(false);
+      return;
+    }
+
+    // Original fit mode for different styles
     if (settings.style === 'polaroid') {
       const padding = 40;
       const bottomPadding = 120;
@@ -171,7 +480,7 @@ function PhotoPrintCreator({
       ctx.drawImage(img, padding, padding, img.width, img.height);
       ctx.shadowColor = 'transparent';
 
-      // Text on polaroid bottom
+      // Text on polaroid
       ctx.fillStyle = '#333333';
       ctx.font = `${settings.fontSize}px 'Segoe UI', sans-serif`;
       const lines: string[] = [];
@@ -180,7 +489,14 @@ function PhotoPrintCreator({
       if (settings.showDate) lines.push(format(screenshot.takenAt, 'MMM d, yyyy'));
       if (settings.showCustomText && settings.customText) lines.push(settings.customText);
 
-      let ty = img.height + padding + 40;
+      // Position text based on setting
+      let ty: number;
+      if (settings.position === 'top-left' || settings.position === 'top-right') {
+        ty = padding + 20;
+      } else {
+        ty = img.height + padding + 40;
+      }
+
       for (const line of lines) {
         ctx.fillText(line, padding + 10, ty);
         ty += settings.fontSize + 8;
@@ -189,11 +505,22 @@ function PhotoPrintCreator({
       const stripH = 60;
       canvas.width = img.width;
       canvas.height = img.height + stripH;
-      ctx.drawImage(img, 0, 0);
 
-      // Dark strip at bottom
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
-      ctx.fillRect(0, img.height, img.width, stripH);
+      // Position strip based on settings
+      const stripAtTop = settings.position === 'top-left' || settings.position === 'top-right';
+
+      // Draw image with appropriate positioning
+      if (stripAtTop) {
+        // Dark strip at top
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+        ctx.fillRect(0, 0, img.width, stripH);
+        ctx.drawImage(img, 0, stripH);
+      } else {
+        // Dark strip at bottom (default)
+        ctx.drawImage(img, 0, 0);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+        ctx.fillRect(0, img.height, img.width, stripH);
+      }
 
       ctx.fillStyle = '#ffffff';
       ctx.font = `${settings.fontSize - 4}px 'Segoe UI', sans-serif`;
@@ -205,7 +532,8 @@ function PhotoPrintCreator({
       if (settings.showCustomText && settings.customText) parts.push(settings.customText);
 
       const text = parts.join('  •  ');
-      ctx.fillText(text, 20, img.height + 38);
+      const textY = stripAtTop ? 38 : img.height + 38;
+      ctx.fillText(text, 20, textY);
     } else if (settings.style === 'minimal') {
       canvas.width = img.width;
       canvas.height = img.height;
@@ -304,14 +632,17 @@ function PhotoPrintCreator({
       }
     }
 
+    // Draw border on top
+    drawBorder(ctx, canvas.width, canvas.height, settings.border);
+
     setPreviewUrl(canvas.toDataURL('image/png'));
     setRendering(false);
   }, [screenshot, settings, user]);
 
-  // Auto-render on settings change or theme change
-  useEffect(() => {
+  // Auto-render on settings change
+  useState(() => {
     setTimeout(renderPrint, 100);
-  }, [renderPrint, settings, currentTheme]);
+  });
 
   const handleDownload = () => {
     if (!previewUrl) return;
@@ -343,119 +674,9 @@ function PhotoPrintCreator({
             <button onClick={onClose} className="btn-ghost p-1"><X size={14} /></button>
           </div>
 
-          {/* Theme Selection */}
+          {/* Style */}
           <div>
-            <label className="text-xs text-surface-500 block mb-1.5">Preset Themes</label>
-            <div className="grid grid-cols-2 gap-1.5">
-              {getThemeNames().map(({ id, name }) => (
-                <button
-                  key={id}
-                  onClick={() => {
-                    setSelectedTheme(id);
-                    setCurrentTheme(PRESET_THEMES[id]);
-                    setCustomizing(false);
-                  }}
-                  className={`px-2 py-1.5 rounded text-xs font-medium transition-colors ${
-                    selectedTheme === id && !customizing
-                      ? 'bg-accent-600 text-white'
-                      : 'bg-surface-800 text-surface-400 hover:bg-surface-700'
-                  }`}
-                >
-                  {name}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Customize Theme */}
-          <div>
-            <button
-              onClick={() => setCustomizing(!customizing)}
-              className="w-full btn-secondary text-xs flex items-center justify-center gap-1.5"
-            >
-              <Palette size={12} /> {customizing ? 'Done Customizing' : 'Customize Theme'}
-            </button>
-          </div>
-
-          {customizing && (
-            <div className="space-y-2">
-              <div>
-                <label className="text-xs text-surface-500 block mb-1">Background Color</label>
-                <input
-                  type="color"
-                  value={currentTheme.backgroundColor === 'transparent' ? '#000000' : currentTheme.backgroundColor}
-                  onChange={e => setCurrentTheme(t => ({ ...t, backgroundColor: e.target.value }))}
-                  className="w-full h-6 rounded cursor-pointer"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs text-surface-500 block mb-1">Border Width</label>
-                <input
-                  type="range"
-                  min={0}
-                  max={10}
-                  value={currentTheme.borderWidth}
-                  onChange={e => setCurrentTheme(t => ({ ...t, borderWidth: Number(e.target.value) }))}
-                  className="w-full accent-accent-500"
-                />
-                <div className="text-[10px] text-surface-600 mt-0.5">{currentTheme.borderWidth}px</div>
-              </div>
-
-              <div>
-                <label className="text-xs text-surface-500 block mb-1">Border Color</label>
-                <input
-                  type="color"
-                  value={currentTheme.borderColor}
-                  onChange={e => setCurrentTheme(t => ({ ...t, borderColor: e.target.value }))}
-                  className="w-full h-6 rounded cursor-pointer"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs text-surface-500 block mb-1">Border Radius</label>
-                <input
-                  type="range"
-                  min={0}
-                  max={20}
-                  value={currentTheme.borderRadius}
-                  onChange={e => setCurrentTheme(t => ({ ...t, borderRadius: Number(e.target.value) }))}
-                  className="w-full accent-accent-500"
-                />
-                <div className="text-[10px] text-surface-600 mt-0.5">{currentTheme.borderRadius}px</div>
-              </div>
-
-              <div>
-                <label className="text-xs text-surface-500 block mb-1">Text Color</label>
-                <input
-                  type="color"
-                  value={currentTheme.usernameStyle.color}
-                  onChange={e => setCurrentTheme(t => ({
-                    ...t,
-                    usernameStyle: { ...t.usernameStyle, color: e.target.value },
-                  }))}
-                  className="w-full h-6 rounded cursor-pointer"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs text-surface-500 block mb-1">Padding</label>
-                <input
-                  type="range"
-                  min={0}
-                  max={40}
-                  value={currentTheme.padding}
-                  onChange={e => setCurrentTheme(t => ({ ...t, padding: Number(e.target.value) }))}
-                  className="w-full accent-accent-500"
-                />
-                <div className="text-[10px] text-surface-600 mt-0.5">{currentTheme.padding}px</div>
-              </div>
-            </div>
-          )}
-
-          {/* Original Style */}
-          <div>
-            <label className="text-xs text-surface-500 block mb-1.5">Original Layout</label>
+            <label className="text-xs text-surface-500 block mb-1.5">Style</label>
             <div className="grid grid-cols-2 gap-1.5">
               {(['classic', 'polaroid', 'strip', 'minimal'] as const).map(style => (
                 <button
@@ -474,10 +695,9 @@ function PhotoPrintCreator({
           </div>
 
           {/* Position */}
-          {settings.style !== 'polaroid' && settings.style !== 'strip' && (
-            <div>
-              <label className="text-xs text-surface-500 block mb-1.5">Position</label>
-              <div className="grid grid-cols-2 gap-1.5">
+          <div>
+            <label className="text-xs text-surface-500 block mb-1.5">Position</label>
+            <div className="grid grid-cols-2 gap-1.5">
                 {([
                   { key: 'bottom-left' as const, label: '↙ Bottom Left' },
                   { key: 'bottom-right' as const, label: '↘ Bottom Right' },
@@ -498,7 +718,6 @@ function PhotoPrintCreator({
                 ))}
               </div>
             </div>
-          )}
 
           {/* Toggle options */}
           <div className="space-y-2">
@@ -546,6 +765,70 @@ function PhotoPrintCreator({
             />
           </div>
 
+          {/* Print Size */}
+          <div>
+            <label className="text-xs text-surface-500 block mb-1.5">Print Size</label>
+            <div className="grid grid-cols-2 gap-1">
+              {([
+                { key: 'fit' as const, label: 'Fit to Image' },
+                { key: '2048' as const, label: '2048x2048' },
+                { key: '1024' as const, label: '1024x1024' },
+                { key: 'custom' as const, label: 'Custom' },
+              ]).map(({ key, label }) => (
+                <button
+                  key={key}
+                  onClick={() => setSettings(s => ({ ...s, printSize: key }))}
+                  className={`px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${
+                    settings.printSize === key
+                      ? 'bg-accent-600 text-white'
+                      : 'bg-surface-800 text-surface-400 hover:bg-surface-700'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {settings.printSize === 'custom' && (
+              <div className="mt-2 grid grid-cols-2 gap-1.5">
+                <input
+                  type="number"
+                  placeholder="Width"
+                  defaultValue={settings.customPrintSize?.width || 2048}
+                  onChange={e => setSettings(s => ({ ...s, customPrintSize: { width: Number(e.target.value), height: s.customPrintSize?.height || 2048 } }))}
+                  className="input-field text-xs"
+                />
+                <input
+                  type="number"
+                  placeholder="Height"
+                  defaultValue={settings.customPrintSize?.height || 2048}
+                  onChange={e => setSettings(s => ({ ...s, customPrintSize: { width: s.customPrintSize?.width || 2048, height: Number(e.target.value) } }))}
+                  className="input-field text-xs"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Border */}
+          <div>
+            <label className="text-xs text-surface-500 block mb-1.5">Border</label>
+            <div className="grid grid-cols-4 gap-1">
+              {(['none', 'simple', 'thick', 'shadow', 'neon', 'grunge', 'pixel', 'hearts', 'stars', 'glitch', 'fire', 'rainbow', 'metallic', 'soft-glow', 'film-strip', 'neon-tube', 'hologram', 'retro-pixel', 'watercolor', 'chain-link'] as const).map(border => (
+                <button
+                  key={border}
+                  onClick={() => setSettings(s => ({ ...s, border }))}
+                  className={`px-2 py-1 rounded text-[9px] font-medium transition-colors ${
+                    settings.border === border
+                      ? 'bg-accent-600 text-white'
+                      : 'bg-surface-800 text-surface-400 hover:bg-surface-700'
+                  }`}
+                  title={border}
+                >
+                  {border.replace('-', ' ').split(' ').map((w, i) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ').substring(0, 8)}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Actions */}
           <div className="space-y-2 pt-2 border-t border-surface-800">
             <button
@@ -581,15 +864,36 @@ export default function ScreenshotsPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [meta, setMeta] = useState(loadMeta());
   const [isPhotoEditing, setIsPhotoEditing] = useState(false);
-  const [editState, setEditState] = useState<CanvasEditState>({
-    brightness: 100,
-    contrast: 100,
-    saturation: 100,
-    filters: { grayscale: 0, sepia: 0, blur: 0, temperature: 0 },
-    borderStyle: { width: 0, color: '#ffffff', style: 'solid', radius: 0 },
-  });
-  const photoCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [brightness, setBrightness] = useState(100);
+  const [contrast, setContrast] = useState(100);
+  const [saturation, setSaturation] = useState(100);
+  const [hueRotate, setHueRotate] = useState(0);
+  const [blur, setBlur] = useState(0);
+  const [grayscaleAmt, setGrayscaleAmt] = useState(0);
+  const [sepiaAmt, setSepiaAmt] = useState(0);
+  const [invertAmt, setInvertAmt] = useState(0);
+  const [opacityAmt, setOpacityAmt] = useState(100);
+  const [filterPreset, setFilterPreset] = useState('none');
   const fileRef = useRef<HTMLInputElement>(null);
+  const photoEditCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  const filterPresets: Record<string, { brightness: number; contrast: number; saturation: number; hueRotate: number }> = {
+    grayscale: { brightness: 100, contrast: 110, saturation: 0, hueRotate: 0 },
+    sepia: { brightness: 100, contrast: 110, saturation: 30, hueRotate: -10 },
+    cool: { brightness: 95, contrast: 105, saturation: 110, hueRotate: -20 },
+    warm: { brightness: 110, contrast: 95, saturation: 120, hueRotate: 15 },
+    vintage: { brightness: 105, contrast: 90, saturation: 80, hueRotate: -5 },
+    noir: { brightness: 80, contrast: 130, saturation: 0, hueRotate: 0 },
+    neon: { brightness: 110, contrast: 120, saturation: 150, hueRotate: 0 },
+    vibrant: { brightness: 100, contrast: 115, saturation: 140, hueRotate: 0 },
+    soft: { brightness: 110, contrast: 85, saturation: 90, hueRotate: 0 },
+    dreamy: { brightness: 115, contrast: 85, saturation: 110, hueRotate: 10 },
+    dramatic: { brightness: 90, contrast: 140, saturation: 120, hueRotate: 0 },
+    faded: { brightness: 110, contrast: 90, saturation: 70, hueRotate: 0 },
+    cyberpunk: { brightness: 105, contrast: 125, saturation: 150, hueRotate: -30 },
+    retro: { brightness: 105, contrast: 95, saturation: 80, hueRotate: 10 },
+    film: { brightness: 95, contrast: 110, saturation: 85, hueRotate: -5 },
+  };
 
   const processFiles = useCallback(async (files: FileList | File[]) => {
     const arr = Array.from(files);
@@ -759,46 +1063,26 @@ export default function ScreenshotsPage() {
       {selected && !printTarget && (
         <div
           className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex items-center justify-center"
-          onClick={() => { setSelected(null); setIsEditing(false); setIsPhotoEditing(false); }}
+          onClick={() => { setSelected(null); setIsEditing(false); }}
         >
-          <div className="relative max-w-6xl w-full mx-4 flex gap-4 items-start max-h-[90vh]" onClick={e => e.stopPropagation()}>
-            {/* Image / Editor */}
-            <div className="flex-1 flex items-center justify-center overflow-auto">
-              {isPhotoEditing ? (
-                <div className="flex flex-col gap-3 w-full">
-                  <PhotoEditorCanvas
-                    imageSrc={selected.src}
-                    editState={editState}
-                    canvasRef={photoCanvasRef}
-                  />
-                  <div className="flex gap-2 justify-center">
-                    <button className="btn-secondary text-xs flex items-center gap-1" disabled>
-                      <Undo size={12} /> Undo
-                    </button>
-                    <button className="btn-secondary text-xs flex items-center gap-1" disabled>
-                      <Redo size={12} /> Redo
-                    </button>
-                    <button
-                      onClick={() => setIsPhotoEditing(false)}
-                      className="btn-primary text-xs flex items-center gap-1"
-                    >
-                      Done Editing
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <img src={selected.src} alt="" className="w-full rounded-xl shadow-2xl" />
-              )}
+          <div className="relative max-w-5xl w-full mx-4 flex gap-4 items-start" onClick={e => e.stopPropagation()}>
+            {/* Image */}
+            <div className="flex-1">
+              <img
+                src={selected.src}
+                alt=""
+                className="w-full rounded-xl shadow-2xl"
+                style={{
+                  filter: `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%) hue-rotate(${hueRotate}deg) blur(${blur}px) grayscale(${grayscaleAmt}%) sepia(${sepiaAmt}%) invert(${invertAmt}%)`,
+                  opacity: opacityAmt / 100,
+                  transition: 'filter 0.1s ease-out, opacity 0.1s ease-out',
+                }}
+              />
             </div>
 
             {/* Info panel */}
-            <div className="w-72 flex-shrink-0 glass-panel p-4 space-y-3 overflow-y-auto max-h-full">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold truncate flex-1">{selected.name}</h3>
-                <button onClick={() => { setSelected(null); setIsEditing(false); setIsPhotoEditing(false); }} className="btn-ghost p-1">
-                  <X size={14} />
-                </button>
-              </div>
+            <div className="w-64 flex-shrink-0 glass-panel p-4 space-y-3">
+              <h3 className="text-sm font-semibold truncate">{selected.name}</h3>
               <div className="text-xs text-surface-400 space-y-1">
                 <div className="flex items-center gap-1.5">
                   <Calendar size={12} />
@@ -807,83 +1091,7 @@ export default function ScreenshotsPage() {
                 <div>{(selected.size / 1024).toFixed(0)} KB</div>
               </div>
 
-              {isPhotoEditing ? (
-                <div className="space-y-3">
-                  <div>
-                    <label className="text-xs text-surface-500 block mb-1.5">Brightness</label>
-                    <input
-                      type="range"
-                      min={0}
-                      max={200}
-                      value={editState.brightness}
-                      onChange={e => setEditState(prev => ({ ...prev, brightness: Number(e.target.value) }))}
-                      className="w-full accent-accent-500 text-xs"
-                    />
-                    <div className="text-[10px] text-surface-600 mt-1">{editState.brightness}%</div>
-                  </div>
-
-                  <div>
-                    <label className="text-xs text-surface-500 block mb-1.5">Contrast</label>
-                    <input
-                      type="range"
-                      min={0}
-                      max={200}
-                      value={editState.contrast}
-                      onChange={e => setEditState(prev => ({ ...prev, contrast: Number(e.target.value) }))}
-                      className="w-full accent-accent-500 text-xs"
-                    />
-                    <div className="text-[10px] text-surface-600 mt-1">{editState.contrast}%</div>
-                  </div>
-
-                  <div>
-                    <label className="text-xs text-surface-500 block mb-1.5">Saturation</label>
-                    <input
-                      type="range"
-                      min={0}
-                      max={200}
-                      value={editState.saturation}
-                      onChange={e => setEditState(prev => ({ ...prev, saturation: Number(e.target.value) }))}
-                      className="w-full accent-accent-500 text-xs"
-                    />
-                    <div className="text-[10px] text-surface-600 mt-1">{editState.saturation}%</div>
-                  </div>
-
-                  <div>
-                    <label className="text-xs text-surface-500 block mb-1.5">Filters</label>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {Object.entries(PRESET_FILTERS).map(([key, filter]) => (
-                        <button
-                          key={key}
-                          onClick={() => setEditState(prev => ({
-                            ...prev,
-                            filters: filter.state,
-                          }))}
-                          className="px-2 py-1 rounded text-[10px] font-medium bg-surface-800 text-surface-400 hover:bg-surface-700 transition-colors"
-                          title={filter.name}
-                        >
-                          {filter.name}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-xs text-surface-500 block mb-1.5">Border</label>
-                    <input
-                      type="range"
-                      min={0}
-                      max={20}
-                      value={editState.borderStyle.width}
-                      onChange={e => setEditState(prev => ({
-                        ...prev,
-                        borderStyle: { ...prev.borderStyle, width: Number(e.target.value) },
-                      }))}
-                      className="w-full accent-accent-500 text-xs"
-                    />
-                    <div className="text-[10px] text-surface-600 mt-1">{editState.borderStyle.width}px</div>
-                  </div>
-                </div>
-              ) : isEditing ? (
+              {isEditing ? (
                 <div className="space-y-2">
                   <input
                     type="text"
@@ -921,24 +1129,193 @@ export default function ScreenshotsPage() {
                   <button onClick={() => openEdit(selected)} className="btn-secondary text-xs w-full">
                     {selected.worldName || selected.notes ? 'Edit Info' : 'Add World / Notes'}
                   </button>
-
-                  <button
-                    onClick={() => setIsPhotoEditing(true)}
-                    className="btn-secondary text-xs w-full flex items-center justify-center gap-1.5"
-                  >
-                    <Paintbrush size={12} /> Photo Editor
-                  </button>
                 </>
               )}
 
-              {!isPhotoEditing && (
-                <button
-                  onClick={() => setPrintTarget(selected)}
-                  className="btn-primary text-xs w-full flex items-center justify-center gap-1.5"
-                >
-                  <Printer size={12} /> Create Print
-                </button>
+              <button
+                onClick={() => setIsPhotoEditing(!isPhotoEditing)}
+                className="btn-secondary text-xs w-full flex items-center justify-center gap-1.5"
+              >
+                <Paintbrush size={12} /> {isPhotoEditing ? 'Done Editing' : 'Photo Editor'}
+              </button>
+
+              {isPhotoEditing && (
+                <div className="space-y-2 bg-surface-800/30 p-3 rounded">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] text-surface-500 block font-semibold">Filter Presets</label>
+                    <div className="grid grid-cols-4 gap-1">
+                      {['none', 'grayscale', 'sepia', 'cool', 'warm', 'vintage', 'noir', 'neon', 'vibrant', 'soft', 'dreamy', 'dramatic', 'faded', 'cyberpunk', 'retro', 'film'].map(preset => (
+                        <button
+                          key={preset}
+                          onClick={() => {
+                            setFilterPreset(preset as any);
+                            if (preset === 'none') {
+                              setBrightness(100);
+                              setContrast(100);
+                              setSaturation(100);
+                              setHueRotate(0);
+                            } else {
+                              const p = filterPresets[preset];
+                              setBrightness(p.brightness);
+                              setContrast(p.contrast);
+                              setSaturation(p.saturation);
+                              setHueRotate(p.hueRotate);
+                            }
+                          }}
+                          className={`px-2 py-1 text-[10px] rounded font-medium transition-all ${
+                            filterPreset === preset
+                              ? 'bg-blue-500/80 text-white'
+                              : 'bg-surface-700 text-surface-300 hover:bg-surface-600'
+                          }`}
+                        >
+                          {preset.charAt(0).toUpperCase() + preset.slice(1)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="border-t border-surface-700/50 pt-2 space-y-1.5">
+                    <label className="text-[10px] text-surface-500 block font-semibold">Manual Adjustments</label>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Brightness: {brightness}%</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={200}
+                        value={brightness}
+                        onChange={e => {
+                          setBrightness(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Contrast: {contrast}%</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={200}
+                        value={contrast}
+                        onChange={e => {
+                          setContrast(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Saturation: {saturation}%</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={200}
+                        value={saturation}
+                        onChange={e => {
+                          setSaturation(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Hue Shift: {hueRotate}°</label>
+                      <input
+                        type="range"
+                        min={-180}
+                        max={180}
+                        value={hueRotate}
+                        onChange={e => {
+                          setHueRotate(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Blur: {blur}px</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={10}
+                        value={blur}
+                        onChange={e => {
+                          setBlur(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Grayscale: {grayscaleAmt}%</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={grayscaleAmt}
+                        onChange={e => {
+                          setGrayscaleAmt(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Sepia: {sepiaAmt}%</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={sepiaAmt}
+                        onChange={e => {
+                          setSepiaAmt(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Invert: {invertAmt}%</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={invertAmt}
+                        onChange={e => {
+                          setInvertAmt(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-surface-500 block mb-0.5">Opacity: {opacityAmt}%</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={opacityAmt}
+                        onChange={e => {
+                          setOpacityAmt(Number(e.target.value));
+                          setFilterPreset('none');
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                  </div>
+                </div>
               )}
+
+              <button
+                onClick={() => setPrintTarget(selected)}
+                className="btn-primary text-xs w-full flex items-center justify-center gap-1.5"
+              >
+                <Printer size={12} /> Create Print
+              </button>
+
+              <button onClick={() => { setSelected(null); setIsEditing(false); setIsPhotoEditing(false); }} className="btn-ghost text-xs w-full">
+                Close
+              </button>
             </div>
           </div>
         </div>

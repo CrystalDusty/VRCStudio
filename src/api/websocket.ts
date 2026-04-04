@@ -1,6 +1,7 @@
 import api from './vrchat';
 import { useFeedStore } from '../stores/feedStore';
 import { useFriendStore } from '../stores/friendStore';
+import { logWorldVisit, logWorldExit } from '../utils/worldAnalytics';
 
 type WSEventType =
   | 'friend-online'
@@ -117,15 +118,30 @@ class VRChatWebSocket {
 
       case 'friend-location':
         if (data.location && data.location !== 'private') {
+          const worldId = data.worldId || data.location?.split(':')[0];
+          const worldName = data.world?.name || worldId;
+
           feed.addEvent({
             type: 'friend_location',
             userId: data.userId,
             userName: data.user?.displayName || data.userId,
             userAvatar: data.user?.currentAvatarThumbnailImageUrl,
-            worldId: data.worldId || data.location?.split(':')[0],
+            worldId,
             details: data.world?.name ? `Joined ${data.world.name}` : 'Changed location',
             newValue: data.location,
           });
+
+          // Track world visit (non-blocking)
+          logWorldVisit(worldId, worldName, Date.now())
+            .catch(e => console.warn('[Analytics] Failed to track world visit:', e));
+        } else if (data.location === 'private' || !data.location) {
+          // User went offline or private - log exit from previous world
+          const previousFriend = friendStore.getFriend(data.userId);
+          if (previousFriend?.location && previousFriend.location !== 'private') {
+            const previousWorldId = previousFriend.location.split(':')[0];
+            logWorldExit(previousWorldId)
+              .catch(e => console.warn('[Analytics] Failed to track world exit:', e));
+          }
         }
         break;
 
