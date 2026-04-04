@@ -60,6 +60,47 @@ let rpcConnected = false;
 let minimizeToTray = true;
 let isQuitting = false;
 
+const UNITY_BUNDLE_SIGNATURE = 'UnityFS';
+const SOURCE_ENGINE_VERSION_PREFIX = '2022.3.22f2';
+const TARGET_ENGINE_VERSION_PREFIX = '2022.3.22f1';
+
+function readNullTerminatedString(buffer: Buffer, offset: number): { value: string; nextOffset: number } {
+  let end = offset;
+  while (end < buffer.length && buffer[end] !== 0) {
+    end += 1;
+  }
+  return {
+    value: buffer.toString('utf8', offset, end),
+    nextOffset: end + 1,
+  };
+}
+
+function patchUnityFsEngineVersion(bundleBytes: Buffer): { patchedBytes: Buffer; patched: boolean; originalVersion?: string; patchedVersion?: string } {
+  const patchedBytes = Buffer.from(bundleBytes);
+  const signature = readNullTerminatedString(patchedBytes, 0);
+
+  if (signature.value !== UNITY_BUNDLE_SIGNATURE) {
+    return { patchedBytes, patched: false };
+  }
+
+  const formatVersion = readNullTerminatedString(patchedBytes, signature.nextOffset);
+  const playerVersion = readNullTerminatedString(patchedBytes, formatVersion.nextOffset);
+  const engineVersionStartOffset = playerVersion.nextOffset;
+  const engineVersion = readNullTerminatedString(patchedBytes, engineVersionStartOffset);
+  const originalVersion = engineVersion.value;
+
+  if (!originalVersion.startsWith(SOURCE_ENGINE_VERSION_PREFIX)) {
+    return { patchedBytes, patched: false, originalVersion };
+  }
+
+  const replacementBytes = Buffer.from(TARGET_ENGINE_VERSION_PREFIX, 'utf8');
+  const maxReplaceLength = Math.min(replacementBytes.length, originalVersion.length);
+  replacementBytes.copy(patchedBytes, engineVersionStartOffset, 0, maxReplaceLength);
+
+  const patchedVersion = patchedBytes.toString('utf8', engineVersionStartOffset, engineVersionStartOffset + originalVersion.length);
+  return { patchedBytes, patched: true, originalVersion, patchedVersion };
+}
+
 // ─── Window ──────────────────────────────────────────────────────────────────
 
 function createWindow() {
