@@ -409,7 +409,7 @@ ipcMain.handle('fs:browseCacheFolder', async (_e) => {
   }
 });
 
-function scoreCacheBundleCandidate(bundlePath: string, avatarId?: string): number {
+function scoreCacheBundleCandidate(bundlePath: string, avatarId?: string, packageId?: string): number {
   let score = 0;
 
   try {
@@ -422,7 +422,7 @@ function scoreCacheBundleCandidate(bundlePath: string, avatarId?: string): numbe
     // ignore stat issues
   }
 
-  if (!avatarId) return score;
+  if (!avatarId && !packageId) return score;
 
   const dir = path.dirname(bundlePath);
   const siblingCandidates = ['__info', '__metadata', '_info', 'info', '__data'];
@@ -434,10 +434,14 @@ function scoreCacheBundleCandidate(bundlePath: string, avatarId?: string): numbe
       const raw = fs.readFileSync(filePath);
       const textUtf8 = raw.toString('utf8');
       const textUtf16 = raw.toString('utf16le');
-      const hasAvatarId = textUtf8.includes(avatarId) || textUtf16.includes(avatarId);
+      const hasAvatarId = !!avatarId && (textUtf8.includes(avatarId) || textUtf16.includes(avatarId));
+      const hasPackageId = !!packageId && (textUtf8.includes(packageId) || textUtf16.includes(packageId));
 
       if (hasAvatarId) {
         score += 1000;
+      }
+      if (hasPackageId) {
+        score += 1400;
       }
       if (
         textUtf8.includes('/avatar/') || textUtf8.includes('avatar') || textUtf8.includes('avtr_') ||
@@ -452,7 +456,8 @@ function scoreCacheBundleCandidate(bundlePath: string, avatarId?: string): numbe
   }
 
   // Weak fallback heuristics
-  if (bundlePath.includes(avatarId)) score += 200;
+  if (avatarId && bundlePath.includes(avatarId)) score += 200;
+  if (packageId && bundlePath.includes(packageId)) score += 300;
 
   return score;
 }
@@ -523,7 +528,7 @@ function validateUnityFsIntegrity(input: Buffer): { valid: boolean; reason?: str
 }
 
 // Search for _data files (avatar bundles) in VRChat cache
-ipcMain.handle('fs:searchCacheForDataFiles', async (_e, avatarId?: string) => {
+ipcMain.handle('fs:searchCacheForDataFiles', async (_e, avatarId?: string, packageId?: string) => {
   try {
     if (process.platform !== 'win32') {
       return { success: false, error: 'Only supported on Windows' };
@@ -576,7 +581,7 @@ ipcMain.handle('fs:searchCacheForDataFiles', async (_e, avatarId?: string) => {
               console.log(`[SearchCache] ⚠ Skipping invalid bundle candidate: ${fullPath} (${integrity.reason})`);
               continue;
             }
-            const score = scoreCacheBundleCandidate(fullPath, avatarId);
+            const score = scoreCacheBundleCandidate(fullPath, avatarId, packageId);
             console.log(`[SearchCache] ✓ FOUND BUNDLE: ${fullPath} (${stat.size} bytes, score=${score})`);
             foundPaths.push(fullPath);
           }
@@ -599,20 +604,21 @@ ipcMain.handle('fs:searchCacheForDataFiles', async (_e, avatarId?: string) => {
     }
 
     let ranked = foundPaths
-      .map(p => ({ path: p, score: scoreCacheBundleCandidate(p, avatarId) }))
+      .map(p => ({ path: p, score: scoreCacheBundleCandidate(p, avatarId, packageId) }))
       .sort((a, b) => b.score - a.score);
 
-    // If we found strong metadata matches for this avatar, only return those.
-    if (avatarId) {
-      const strongMatches = ranked.filter(r => r.score >= 900);
+    // If we found strong metadata matches for avatar/package, only return those.
+    if (avatarId || packageId) {
+      const strongThreshold = packageId ? 1300 : 900;
+      const strongMatches = ranked.filter(r => r.score >= strongThreshold);
       if (strongMatches.length > 0) {
         ranked = strongMatches;
       }
     }
 
     console.log(`[SearchCache] Search complete. Scanned ${scannedDirs} dirs, found ${foundPaths.length} bundle(s)`);
-    if (avatarId && ranked.length > 0) {
-      console.log(`[SearchCache] Top match for ${avatarId}: ${ranked[0].path} (score=${ranked[0].score})`);
+    if ((avatarId || packageId) && ranked.length > 0) {
+      console.log(`[SearchCache] Top match for avatar=${avatarId || 'n/a'} package=${packageId || 'n/a'}: ${ranked[0].path} (score=${ranked[0].score})`);
     }
 
     return {
@@ -1487,6 +1493,36 @@ public class VRCStudioBundleLoader : EditorWindow
     `fileFormatVersion: 2\nguid: ${scriptGuid}\nMonoImporter:\n  serializedVersion: 2\n  defaultReferences: []\n  executionOrder: 0\n  icon: {instanceID: 0}\n  userData:\n  assetBundleName:\n  assetBundleVariant:\n`
   );
 
+  // --- Recovery assets: include raw cache siblings as .bytes so users always
+  // have importable files in Unity even when bundle decompression is unsupported.
+  const recoveryAssets: Array<{ guid: string; pathname: Buffer; asset: Buffer; meta: Buffer }> = [];
+  try {
+    const sourceName = path.basename(sourcePath).toLowerCase();
+    if (sourceName === '_data') {
+      const sourceDir = path.dirname(sourcePath);
+      const entries = fs.readdirSync(sourceDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        const fullPath = path.join(sourceDir, entry.name);
+        const bytes = fs.readFileSync(fullPath);
+        const recoveryGuid = crypto.randomBytes(16).toString('hex');
+        const recoveryPathname = Buffer.from(`Assets/VRCStudioRaw/${avatarId}/${entry.name}.bytes`);
+        const recoveryMeta = Buffer.from(
+          `fileFormatVersion: 2\nguid: ${recoveryGuid}\nDefaultImporter:\n  userData:\n  assetBundleName:\n  assetBundleVariant:\n`
+        );
+        recoveryAssets.push({
+          guid: recoveryGuid,
+          pathname: recoveryPathname,
+          asset: bytes,
+          meta: recoveryMeta,
+        });
+      }
+      logDiagnostic(`[UnityPackage] Added ${recoveryAssets.length} recovery cache file(s) as .bytes assets`);
+    }
+  } catch (err) {
+    logDiagnostic(`[UnityPackage] Recovery asset packaging skipped: ${err instanceof Error ? err.message : 'Unknown error'}`);
+  }
+
   // Build tar archive in memory
   const parts: Buffer[] = [];
 
@@ -1519,6 +1555,23 @@ public class VRCStudioBundleLoader : EditorWindow
   parts.push(buildTarHeader(`${scriptGuid}/asset.meta`, scriptMeta.length, false));
   parts.push(scriptMeta);
   parts.push(tarPad(scriptMeta.length));
+
+  // --- Recovery files entries ---
+  for (const rec of recoveryAssets) {
+    parts.push(buildTarHeader(rec.guid, 0, true));
+
+    parts.push(buildTarHeader(`${rec.guid}/pathname`, rec.pathname.length, false));
+    parts.push(rec.pathname);
+    parts.push(tarPad(rec.pathname.length));
+
+    parts.push(buildTarHeader(`${rec.guid}/asset`, rec.asset.length, false));
+    parts.push(rec.asset);
+    parts.push(tarPad(rec.asset.length));
+
+    parts.push(buildTarHeader(`${rec.guid}/asset.meta`, rec.meta.length, false));
+    parts.push(rec.meta);
+    parts.push(tarPad(rec.meta.length));
+  }
 
   // End-of-archive marker (two 512-byte zero blocks)
   parts.push(Buffer.alloc(1024, 0));

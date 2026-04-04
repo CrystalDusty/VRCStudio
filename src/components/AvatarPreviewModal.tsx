@@ -43,7 +43,7 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
       // If no cache file selected, try auto-search
       if (!cacheFile) {
         console.log('[AvatarPreview] No cache file selected, searching cache...');
-        const searchResult = await electronAPI.searchCacheForDataFiles(avatar.id);
+        const searchResult = await electronAPI.searchCacheForDataFiles(avatar.id, selectedPackageId || undefined);
 
         if (searchResult.success && searchResult.bundles && searchResult.bundles.length > 0) {
           cacheFile = searchResult.bundles[0];
@@ -240,7 +240,7 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
 
       let bundlePath = selectedCacheFile;
       if (!bundlePath) {
-        const searchResult = await electronAPI.searchCacheForDataFiles(avatar.id);
+        const searchResult = await electronAPI.searchCacheForDataFiles(avatar.id, selectedPackageId || undefined);
         if (searchResult.success && searchResult.bundles?.length) {
           bundlePath = searchResult.bundles[0];
         }
