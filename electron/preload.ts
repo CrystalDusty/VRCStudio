@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   searchCacheForDataFiles: () => ipcRenderer.invoke('fs:searchCacheForDataFiles'),
   browseCacheFolder: () => ipcRenderer.invoke('fs:browseCacheFolder'),
   extractAvatarToDownloads: (cacheDataPath: string, avatarId: string) => ipcRenderer.invoke('fs:extractAvatarToDownloads', cacheDataPath, avatarId),
+  getDiagnosticLog: () => ipcRenderer.invoke('fs:getDiagnosticLog'),
   getVRChatLogPath: () => ipcRenderer.invoke('fs:getVRChatLogPath'),
   getVRChatScreenshotPath: () => ipcRenderer.invoke('fs:getVRChatScreenshotPath'),
 

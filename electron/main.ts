@@ -8,6 +8,20 @@ import https from 'https';
 import tar from 'tar';
 import { promisify } from 'util';
 
+// Create diagnostic log file
+const logDir = path.join(app.getPath('userData'), 'logs');
+if (!fs.existsSync(logDir)) {
+  fs.mkdirSync(logDir, { recursive: true });
+}
+const logFile = path.join(logDir, 'vrc-studio-diagnostic.log');
+
+function logDiagnostic(message: string) {
+  const timestamp = new Date().toISOString();
+  const logMessage = `[${timestamp}] ${message}\n`;
+  console.log(logMessage);
+  fs.appendFileSync(logFile, logMessage);
+}
+
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let discordRPC: any = null;
@@ -193,71 +207,96 @@ ipcMain.handle('fs:readFile', async (_e, filePath: string, autoDecompress: boole
 // Extract avatar bundle directly from cache and save to Downloads
 ipcMain.handle('fs:extractAvatarToDownloads', async (_e, cacheDataPath: string, avatarId: string) => {
   try {
-    console.log(`\n[ExtractToDownloads] ========== EXTRACTING BUNDLE ==========`);
-    console.log(`[ExtractToDownloads] Source: ${cacheDataPath}`);
+    logDiagnostic('\n========== AVATAR EXTRACTION START ==========');
+    logDiagnostic(`Cache file: ${cacheDataPath}`);
+    logDiagnostic(`Avatar ID: ${avatarId}`);
 
     // Verify cache file exists
     if (!fs.existsSync(cacheDataPath)) {
-      throw new Error(`Cache file not found: ${cacheDataPath}`);
+      const errorMsg = `Cache file not found: ${cacheDataPath}`;
+      logDiagnostic(`ERROR: ${errorMsg}`);
+      throw new Error(errorMsg);
     }
 
     const cacheStats = fs.statSync(cacheDataPath);
-    console.log(`[ExtractToDownloads] Source file size: ${cacheStats.size} bytes`);
+    logDiagnostic(`File size: ${cacheStats.size} bytes (${(cacheStats.size / 1024 / 1024).toFixed(2)} MB)`);
 
-    // Read first bytes to detect format
+    // Read the entire file
     const buffer = fs.readFileSync(cacheDataPath);
-    const header = buffer.slice(0, 32).toString('hex');
-    console.log(`[ExtractToDownloads] File header (first 32 bytes hex): ${header}`);
+    logDiagnostic(`Read successful: ${buffer.length} bytes`);
 
-    // Detect file format
-    let fileFormat = 'UNKNOWN';
-    let isGzipped = false;
-    let isUnityBundle = false;
+    // Analyze header
+    const hexHeader = buffer.slice(0, 16).toString('hex');
+    const asciiHeader = buffer.slice(0, 6).toString('utf8');
+    logDiagnostic(`Header (hex): ${hexHeader}`);
+    logDiagnostic(`Header (ascii): "${asciiHeader}"`);
 
-    if (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b) {
-      fileFormat = 'GZIP';
-      isGzipped = true;
-      console.log(`[ExtractToDownloads] ✓ Detected: GZIP (1f 8b)`);
-    } else if (buffer.length >= 6 && buffer.toString('utf8', 0, 6) === 'UnityFS') {
-      fileFormat = 'UNITY_BUNDLE';
-      isUnityBundle = true;
-      console.log(`[ExtractToDownloads] ✓ Detected: Unity AssetBundle`);
-    } else if (buffer.length >= 4 && buffer.toString('utf8', 0, 2) === 'PK') {
-      fileFormat = 'ZIP';
-      console.log(`[ExtractToDownloads] ✓ Detected: ZIP (unitypackage)`);
+    // Detect format - save as .unitypackage by default
+    let detectedFormat = 'UNKNOWN';
+    if (buffer[0] === 0x1f && buffer[1] === 0x8b) {
+      detectedFormat = 'GZIP_COMPRESSED';
+      logDiagnostic('✓ Detected: GZIP compression');
+    } else if (asciiHeader === 'UnityFS') {
+      detectedFormat = 'UNITYFS_BUNDLE';
+      logDiagnostic('✓ Detected: Raw UnityFS bundle');
+    } else if (buffer[0] === 0x50 && buffer[1] === 0x4b) {
+      detectedFormat = 'ZIP_UNITYPACKAGE';
+      logDiagnostic('✓ Detected: ZIP (.unitypackage)');
     } else {
-      console.log(`[ExtractToDownloads] ⚠ Unknown format, treating as raw data`);
+      logDiagnostic(`⚠ Unknown format, treating as raw data`);
     }
 
-    // Get Downloads folder
+    // Get Downloads folder and save file
     const downloadsPath = app.getPath('downloads');
-    let outputPath: string;
-    let finalBuffer = buffer;
+    const outputPath = path.join(downloadsPath, `${avatarId}.unitypackage`);
 
-    // Save as .bundle - let Unity import it as an AssetBundle
-    // Don't try to force .unitypackage format as it's causing import errors
-    console.log(`[ExtractToDownloads] Saving as Unity AssetBundle (.bundle)`);
-    outputPath = path.join(downloadsPath, `${avatarId}.bundle`);
-    finalBuffer = buffer;
+    logDiagnostic(`Writing to: ${outputPath}`);
 
-    console.log(`[ExtractToDownloads] Target: ${outputPath}`);
+    // Write file
+    fs.writeFileSync(outputPath, buffer);
 
-    // Save the file
-    fs.writeFileSync(outputPath, finalBuffer);
+    // Verify
+    if (!fs.existsSync(outputPath)) {
+      throw new Error('File write failed - file does not exist after write');
+    }
 
     const outputStats = fs.statSync(outputPath);
-    console.log(`[ExtractToDownloads] ✓ File saved successfully`);
-    console.log(`[ExtractToDownloads] Output file size: ${outputStats.size} bytes`);
-    console.log(`[ExtractToDownloads] Output path: ${outputPath}`);
+    logDiagnostic(`✓ File written: ${outputStats.size} bytes`);
 
-    if (outputStats.size === 0) {
-      throw new Error('Output file is empty');
+    if (outputStats.size !== buffer.length) {
+      logDiagnostic(`⚠ WARNING: Size mismatch! Expected: ${buffer.length}, Got: ${outputStats.size}`);
     }
 
-    console.log(`[ExtractToDownloads] ========== EXTRACTION COMPLETE ==========\n`);
-    return { success: true, path: outputPath, size: outputStats.size };
+    logDiagnostic(`Format detected: ${detectedFormat}`);
+    logDiagnostic(`========== EXTRACTION SUCCESS ==========\n`);
+
+    return {
+      success: true,
+      path: outputPath,
+      size: outputStats.size,
+      format: detectedFormat,
+      logFile: logFile
+    };
   } catch (err: any) {
-    console.error(`[ExtractToDownloads] ✗ EXTRACTION FAILED:`, err.message);
+    logDiagnostic(`✗ FAILED: ${err.message}`);
+    logDiagnostic(`========== EXTRACTION FAILED ==========\n`);
+    return {
+      success: false,
+      error: err.message,
+      logFile: logFile
+    };
+  }
+});
+
+ipcMain.handle('fs:getDiagnosticLog', async () => {
+  try {
+    if (!fs.existsSync(logFile)) {
+      return { success: false, error: 'No diagnostic log found' };
+    }
+
+    const content = fs.readFileSync(logFile, 'utf8');
+    return { success: true, logFile, content };
+  } catch (err: any) {
     return { success: false, error: err.message };
   }
 });
