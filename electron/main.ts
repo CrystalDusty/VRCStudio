@@ -5,8 +5,8 @@ import {
 import path from 'path';
 import fs from 'fs';
 import https from 'https';
-import tar from 'tar';
 import crypto from 'crypto';
+import zlib from 'zlib';
 import { promisify } from 'util';
 
 // Initialize logging EARLY - use a simpler path
@@ -812,56 +812,139 @@ ipcMain.handle('fs:downloadFileNative', async (event, url: string, avatarId: str
 });
 
 /**
+ * Build a GNU tar header (512 bytes) for a single entry.
+ * Uses the old-style GNU/ustar format that Unity's importer can read.
+ */
+function buildTarHeader(fileName: string, fileSize: number, isDir: boolean): Buffer {
+  const header = Buffer.alloc(512, 0);
+  const mtime = Math.floor(Date.now() / 1000);
+
+  // name (0, 100) - use forward slashes, must end with / for dirs
+  const name = isDir ? fileName + '/' : fileName;
+  header.write(name, 0, Math.min(name.length, 100), 'utf8');
+
+  // mode (100, 8) - octal, null-terminated
+  header.write(isDir ? '0000755' : '0000644', 100, 7, 'utf8');
+  header[107] = 0;
+
+  // uid (108, 8)
+  header.write('0001750', 108, 7, 'utf8');
+  header[115] = 0;
+
+  // gid (116, 8)
+  header.write('0001750', 116, 7, 'utf8');
+  header[123] = 0;
+
+  // size (124, 12) - octal, null-terminated
+  const sizeStr = fileSize.toString(8).padStart(11, '0');
+  header.write(sizeStr, 124, 11, 'utf8');
+  header[135] = 0;
+
+  // mtime (136, 12) - octal, null-terminated
+  const mtimeStr = mtime.toString(8).padStart(11, '0');
+  header.write(mtimeStr, 136, 11, 'utf8');
+  header[147] = 0;
+
+  // typeflag (156, 1) - '5' for directory, '0' for regular file
+  header[156] = isDir ? 0x35 : 0x30;
+
+  // magic (257, 6) - "ustar\0" for POSIX/GNU
+  header.write('ustar', 257, 5, 'utf8');
+  header[262] = 0;
+
+  // version (263, 2) - "00"
+  header.write('00', 263, 2, 'utf8');
+
+  // uname (265, 32)
+  header.write('root', 265, 4, 'utf8');
+
+  // gname (297, 32)
+  header.write('root', 297, 4, 'utf8');
+
+  // Compute checksum: sum of all bytes with checksum field treated as spaces
+  // First fill checksum field (148-155) with spaces for calculation
+  for (let i = 148; i < 156; i++) header[i] = 0x20;
+  let checksum = 0;
+  for (let i = 0; i < 512; i++) checksum += header[i];
+  // Write checksum as 6-digit octal + null + space
+  const csStr = checksum.toString(8).padStart(6, '0');
+  header.write(csStr, 148, 6, 'utf8');
+  header[154] = 0;
+  header[155] = 0x20;
+
+  return header;
+}
+
+/**
+ * Pad data to a 512-byte boundary for tar format.
+ */
+function tarPad(dataLength: number): Buffer {
+  const remainder = dataLength % 512;
+  if (remainder === 0) return Buffer.alloc(0);
+  return Buffer.alloc(512 - remainder, 0);
+}
+
+/**
  * Create a valid .unitypackage (tar.gz) from a raw AssetBundle file.
- * A .unitypackage is a tar.gz containing: <GUID>/asset, <GUID>/pathname, <GUID>/asset.meta
+ * Uses manual GNU tar construction for maximum Unity compatibility.
+ * Structure: <GUID>/asset, <GUID>/pathname, <GUID>/asset.meta
  */
 async function createUnityPackage(sourcePath: string, avatarId: string, outputPath: string): Promise<void> {
   const guid = crypto.randomBytes(16).toString('hex');
-  const stagingDir = path.join(path.dirname(outputPath), `staging-${Date.now()}`);
-  const guidDir = path.join(stagingDir, guid);
+  logDiagnostic(`[UnityPackage] GUID: ${guid}`);
 
-  try {
-    // Create staging structure
-    fs.mkdirSync(guidDir, { recursive: true });
-    logDiagnostic(`[UnityPackage] Staging dir: ${guidDir}`);
+  // Read the source asset bundle
+  const assetData = fs.readFileSync(sourcePath);
+  logDiagnostic(`[UnityPackage] Asset size: ${assetData.length} bytes`);
 
-    // Write pathname file (tells Unity where to place the asset)
-    const pathname = `Assets/Avatar/${avatarId}.vrca`;
-    fs.writeFileSync(path.join(guidDir, 'pathname'), pathname + '\n');
-    logDiagnostic(`[UnityPackage] Pathname: ${pathname}`);
+  // Prepare file contents
+  const pathnameData = Buffer.from(`Assets/Avatar/${avatarId}.vrca`);
+  const metaData = Buffer.from(
+    `fileFormatVersion: 2\nguid: ${guid}\nNativeFormatImporter:\n  userData:\n  assetBundleName:\n  assetBundleVariant:\n`
+  );
 
-    // Copy the raw bundle as "asset"
-    fs.copyFileSync(sourcePath, path.join(guidDir, 'asset'));
-    const assetSize = fs.statSync(path.join(guidDir, 'asset')).size;
-    logDiagnostic(`[UnityPackage] Asset copied: ${assetSize} bytes`);
+  // Build tar archive in memory (directory + 3 files + end-of-archive)
+  const parts: Buffer[] = [];
 
-    // Write minimal Unity .meta file
-    const metaContent = [
-      'fileFormatVersion: 2',
-      `guid: ${guid}`,
-      'NativeFormatImporter:',
-      '  userData:',
-      '  assetBundleName:',
-      '  assetBundleVariant:',
-      '',
-    ].join('\n');
-    fs.writeFileSync(path.join(guidDir, 'asset.meta'), metaContent);
+  // 1. Directory entry for GUID folder
+  parts.push(buildTarHeader(guid, 0, true));
 
-    // Create tar.gz archive
-    await tar.create(
-      { gzip: true, file: outputPath, cwd: stagingDir },
-      [guid],
-    );
+  // 2. pathname file
+  parts.push(buildTarHeader(`${guid}/pathname`, pathnameData.length, false));
+  parts.push(pathnameData);
+  parts.push(tarPad(pathnameData.length));
 
-    const outputSize = fs.statSync(outputPath).size;
-    logDiagnostic(`[UnityPackage] Created: ${outputPath} (${outputSize} bytes)`);
-  } finally {
-    // Clean up staging directory
-    if (fs.existsSync(stagingDir)) {
-      fs.rmSync(stagingDir, { recursive: true, force: true });
-      logDiagnostic(`[UnityPackage] Staging cleaned up`);
-    }
-  }
+  // 3. asset file (the actual bundle data)
+  parts.push(buildTarHeader(`${guid}/asset`, assetData.length, false));
+  parts.push(assetData);
+  parts.push(tarPad(assetData.length));
+
+  // 4. asset.meta file
+  parts.push(buildTarHeader(`${guid}/asset.meta`, metaData.length, false));
+  parts.push(metaData);
+  parts.push(tarPad(metaData.length));
+
+  // 5. End-of-archive marker (two 512-byte zero blocks)
+  parts.push(Buffer.alloc(1024, 0));
+
+  const tarData = Buffer.concat(parts);
+  logDiagnostic(`[UnityPackage] Tar size: ${tarData.length} bytes`);
+
+  // Gzip compress using Node.js built-in zlib
+  const gzipSync = promisify(zlib.gzip);
+  const gzippedData = await gzipSync(tarData, { level: 6 });
+  logDiagnostic(`[UnityPackage] Gzipped size: ${gzippedData.length} bytes`);
+
+  // Write final .unitypackage
+  fs.writeFileSync(outputPath, gzippedData);
+
+  // Verify the output starts with gzip magic bytes
+  const verify = Buffer.alloc(2);
+  const fd = fs.openSync(outputPath, 'r');
+  fs.readSync(fd, verify, 0, 2, 0);
+  fs.closeSync(fd);
+  logDiagnostic(`[UnityPackage] Output magic: ${verify.toString('hex')} (expect 1f8b for gzip)`);
+  logDiagnostic(`[UnityPackage] Created: ${outputPath} (${gzippedData.length} bytes)`);
 }
 
 // Detect file format by reading magic bytes (file signature)
