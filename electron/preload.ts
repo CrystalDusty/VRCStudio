@@ -17,7 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // File system
   readFile: (path: string) => ipcRenderer.invoke('fs:readFile', path),
   listDir: (path: string) => ipcRenderer.invoke('fs:listDir', path),
-  searchCacheForDataFiles: () => ipcRenderer.invoke('fs:searchCacheForDataFiles'),
+  searchCacheForDataFiles: (avatarId?: string) => ipcRenderer.invoke('fs:searchCacheForDataFiles', avatarId),
   browseCacheFolder: () => ipcRenderer.invoke('fs:browseCacheFolder'),
   extractAvatarToDownloads: (cacheDataPath: string, avatarId: string) => ipcRenderer.invoke('fs:extractAvatarToDownloads', cacheDataPath, avatarId),
   getDiagnosticLog: () => ipcRenderer.invoke('fs:getDiagnosticLog'),
@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   downloadFileNative: (url: string, avatarId: string) => ipcRenderer.invoke('fs:downloadFileNative', url, avatarId),
   extractBundle: (sourcePath: string, avatarId: string) => ipcRenderer.invoke('fs:extractBundle', sourcePath, avatarId),
   openBundleFolder: (folderPath: string) => ipcRenderer.invoke('fs:openBundleFolder', folderPath),
+  launchAssetRipper: (bundlePath: string, avatarId?: string) => ipcRenderer.invoke('fs:launchAssetRipper', bundlePath, avatarId),
   deleteBundleData: (avatarId: string) => ipcRenderer.invoke('fs:deleteBundleData', avatarId),
   openFileDialog: (options: { title?: string; message?: string; filters?: any[] }) => ipcRenderer.invoke('fs:openFileDialog', options),
 
