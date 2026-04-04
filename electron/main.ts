@@ -257,6 +257,13 @@ ipcMain.handle('fs:extractAvatarToDownloads', async (_e, cacheDataPath: string, 
     const buffer = fs.readFileSync(cacheDataPath);
     logDiagnostic(`Read successful: ${buffer.length} bytes`);
 
+    const integrity = validateUnityFsIntegrity(buffer);
+    if (!integrity.valid) {
+      const msg = `Cache bundle failed integrity check: ${integrity.reason}`;
+      logDiagnostic(`ERROR: ${msg}`);
+      throw new Error(`${msg} Please reload the avatar in VRChat and try again (cache file may be partial/corrupt).`);
+    }
+
     // Analyze header
     const hexHeader = buffer.slice(0, 16).toString('hex');
     const asciiHeader = buffer.slice(0, 6).toString('utf8');
@@ -450,6 +457,71 @@ function scoreCacheBundleCandidate(bundlePath: string, avatarId?: string): numbe
   return score;
 }
 
+function normalizeUnityFsBuffer(input: Buffer): Buffer | null {
+  let data = input;
+
+  // Gzip-wrapped cache artifact
+  if (data.length > 2 && data[0] === 0x1f && data[1] === 0x8b) {
+    try {
+      data = zlib.gunzipSync(data);
+    } catch {
+      return null;
+    }
+  }
+
+  // Find UnityFS marker
+  const marker = Buffer.from('UnityFS', 'utf8');
+  const idx = data.indexOf(marker);
+  if (idx < 0) return null;
+
+  if (idx > 0) {
+    data = data.subarray(idx);
+  }
+
+  return data;
+}
+
+function validateUnityFsIntegrity(input: Buffer): { valid: boolean; reason?: string } {
+  const data = normalizeUnityFsBuffer(input);
+  if (!data) {
+    return { valid: false, reason: 'Not a readable UnityFS buffer (or gzip wrapper failed).' };
+  }
+
+  // UnityFS header layout:
+  // "UnityFS\0"(8) + formatVersion(4) + playerVersion\0 + engineVersion\0 + fileSize(8) + ...
+  let offset = 12;
+  while (offset < data.length && data[offset] !== 0) offset++;
+  offset++;
+  while (offset < data.length && data[offset] !== 0) offset++;
+  offset++;
+
+  if (offset + 8 > data.length) {
+    return { valid: false, reason: 'Header truncated before declared bundle size.' };
+  }
+
+  const declaredFileSize = Number(data.readBigUInt64BE(offset));
+  if (!Number.isFinite(declaredFileSize) || declaredFileSize <= 0) {
+    return { valid: false, reason: 'Invalid declared UnityFS file size in header.' };
+  }
+
+  if (declaredFileSize > data.length) {
+    return {
+      valid: false,
+      reason: `Truncated UnityFS data: declared ${declaredFileSize} bytes, actual ${data.length} bytes.`,
+    };
+  }
+
+  // Strong mismatch can indicate extra wrapper/padding mismatch from cache.
+  if (data.length - declaredFileSize > 64 * 1024) {
+    return {
+      valid: false,
+      reason: `Unexpected trailing data: declared ${declaredFileSize} bytes, actual ${data.length} bytes.`,
+    };
+  }
+
+  return { valid: true };
+}
+
 // Search for _data files (avatar bundles) in VRChat cache
 ipcMain.handle('fs:searchCacheForDataFiles', async (_e, avatarId?: string) => {
   try {
@@ -498,6 +570,12 @@ ipcMain.handle('fs:searchCacheForDataFiles', async (_e, avatarId?: string) => {
           // Check for _data file
           if (entry.name === '_data' && entry.isFile()) {
             const stat = fs.statSync(fullPath);
+            const fileBuffer = fs.readFileSync(fullPath);
+            const integrity = validateUnityFsIntegrity(fileBuffer);
+            if (!integrity.valid) {
+              console.log(`[SearchCache] ⚠ Skipping invalid bundle candidate: ${fullPath} (${integrity.reason})`);
+              continue;
+            }
             const score = scoreCacheBundleCandidate(fullPath, avatarId);
             console.log(`[SearchCache] ✓ FOUND BUNDLE: ${fullPath} (${stat.size} bytes, score=${score})`);
             foundPaths.push(fullPath);
