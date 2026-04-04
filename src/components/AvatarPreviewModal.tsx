@@ -228,6 +228,40 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
     }
   };
 
+  const handleOpenInAssetRipper = async () => {
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      const electronAPI = (window as any).electronAPI;
+      if (!electronAPI?.launchAssetRipper) {
+        setError('AssetRipper launcher is not available in this build.');
+        return;
+      }
+
+      let bundlePath = selectedCacheFile;
+      if (!bundlePath) {
+        const searchResult = await electronAPI.searchCacheForDataFiles(avatar.id);
+        if (searchResult.success && searchResult.bundles?.length) {
+          bundlePath = searchResult.bundles[0];
+        }
+      }
+
+      if (!bundlePath) {
+        setError('No cache bundle found. Click "Browse Cache File" first.');
+        return;
+      }
+
+      const launchResult = await electronAPI.launchAssetRipper(bundlePath, avatar.id);
+      if (launchResult.success) {
+        setSuccessMessage(launchResult.message || 'AssetRipper launched.');
+      } else {
+        setError(launchResult.error || 'Failed to launch AssetRipper.');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to launch AssetRipper');
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-fade-in"
@@ -463,6 +497,14 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
                 <Save size={14} /> Save Raw Bundle (.vrca)
               </button>
             )}
+
+            <button
+              onClick={handleOpenInAssetRipper}
+              className="btn-secondary w-full text-sm flex items-center justify-center gap-2"
+              title="Launch AssetRipper directly from VRC Studio using the selected/auto-detected cache bundle"
+            >
+              <ExternalLink size={14} /> Open in AssetRipper
+            </button>
           </div>
 
           {/* Bundle Loader - Show after extraction */}

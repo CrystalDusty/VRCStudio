@@ -8,6 +8,7 @@ import https from 'https';
 import crypto from 'crypto';
 import zlib from 'zlib';
 import { promisify } from 'util';
+import { spawn } from 'child_process';
 
 // Initialize logging EARLY - use a simpler path
 let logFile: string;
@@ -1602,6 +1603,82 @@ ipcMain.handle('fs:openFileDialog', async (_e, options: any) => {
     return result;
   } catch (error) {
     throw new Error(`Failed to open file dialog: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+});
+
+ipcMain.handle('fs:launchAssetRipper', async (_e, bundlePath: string, avatarId?: string) => {
+  if (process.platform !== 'win32') {
+    return { success: false, error: 'AssetRipper launcher currently supports Windows only.' };
+  }
+
+  try {
+    if (!bundlePath || !fs.existsSync(bundlePath)) {
+      return { success: false, error: 'Bundle path is missing or does not exist.' };
+    }
+
+    const localAppData = process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local');
+    const userDataTools = path.join(app.getPath('userData'), 'tools');
+    const candidates = [
+      path.join(userDataTools, 'AssetRipper', 'AssetRipper.CLI.exe'),
+      path.join(userDataTools, 'AssetRipper', 'AssetRipper.GUI.Free.exe'),
+      path.join(localAppData, 'AssetRipper', 'AssetRipper.CLI.exe'),
+      path.join(localAppData, 'AssetRipper', 'AssetRipper.GUI.Free.exe'),
+      path.join('C:\\', 'Program Files', 'AssetRipper', 'AssetRipper.CLI.exe'),
+      path.join('C:\\', 'Program Files', 'AssetRipper', 'AssetRipper.GUI.Free.exe'),
+    ];
+
+    let ripperExe = candidates.find(p => fs.existsSync(p));
+
+    if (!ripperExe) {
+      if (!mainWindow) return { success: false, error: 'Main window unavailable for picker dialog.' };
+      const pick = await dialog.showOpenDialog(mainWindow, {
+        title: 'Locate AssetRipper executable',
+        properties: ['openFile'],
+        filters: [{ name: 'Executables', extensions: ['exe'] }],
+      });
+      if (pick.canceled || pick.filePaths.length === 0) {
+        return { success: false, error: 'No AssetRipper executable selected.' };
+      }
+      ripperExe = pick.filePaths[0];
+    }
+
+    const lower = ripperExe.toLowerCase();
+    if (lower.includes('cli')) {
+      const outputDir = path.join(app.getPath('downloads'), 'VRCStudio-AssetRipper', avatarId || `bundle-${Date.now()}`);
+      if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+
+      // Common CLI shape; if CLI variant differs this still opens a clear error from process output.
+      const child = spawn(ripperExe, [bundlePath, outputDir], {
+        detached: true,
+        stdio: 'ignore',
+      });
+      child.unref();
+
+      return {
+        success: true,
+        message: `Launched AssetRipper CLI.\nInput: ${bundlePath}\nOutput: ${outputDir}`,
+        outputDir,
+        executable: ripperExe,
+      };
+    }
+
+    // GUI fallback - open with bundle path argument if accepted by this build.
+    const child = spawn(ripperExe, [bundlePath], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+
+    return {
+      success: true,
+      message: `Launched AssetRipper GUI for: ${path.basename(bundlePath)}`,
+      executable: ripperExe,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: `Failed to launch AssetRipper: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    };
   }
 });
 

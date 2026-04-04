@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   downloadFileNative: (url: string, avatarId: string) => ipcRenderer.invoke('fs:downloadFileNative', url, avatarId),
   extractBundle: (sourcePath: string, avatarId: string) => ipcRenderer.invoke('fs:extractBundle', sourcePath, avatarId),
   openBundleFolder: (folderPath: string) => ipcRenderer.invoke('fs:openBundleFolder', folderPath),
+  launchAssetRipper: (bundlePath: string, avatarId?: string) => ipcRenderer.invoke('fs:launchAssetRipper', bundlePath, avatarId),
   deleteBundleData: (avatarId: string) => ipcRenderer.invoke('fs:deleteBundleData', avatarId),
   openFileDialog: (options: { title?: string; message?: string; filters?: any[] }) => ipcRenderer.invoke('fs:openFileDialog', options),
 
