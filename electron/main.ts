@@ -8,18 +8,48 @@ import https from 'https';
 import tar from 'tar';
 import { promisify } from 'util';
 
-// Create diagnostic log file
-const logDir = path.join(app.getPath('userData'), 'logs');
-if (!fs.existsSync(logDir)) {
-  fs.mkdirSync(logDir, { recursive: true });
+// Initialize logging EARLY - use a simpler path
+let logFile: string;
+
+// Set up logging before anything else
+function initializeLogging() {
+  try {
+    // Try to use user data path
+    let logsDir = path.join(app.getPath('userData'), 'logs');
+    if (!fs.existsSync(logsDir)) {
+      fs.mkdirSync(logsDir, { recursive: true });
+    }
+    logFile = path.join(logsDir, 'vrc-studio-diagnostic.log');
+  } catch (err) {
+    // Fallback to temp directory
+    try {
+      const tempDir = require('os').tmpdir();
+      logFile = path.join(tempDir, 'vrc-studio-diagnostic.log');
+    } catch {
+      // Last resort - use relative path
+      logFile = './vrc-studio-diagnostic.log';
+    }
+  }
+
+  logDiagnostic('=== VRC Studio Starting ===');
+  logDiagnostic(`Log file: ${logFile}`);
+  logDiagnostic(`Platform: ${process.platform}`);
+  logDiagnostic(`App version: ${app.getVersion()}`);
 }
-const logFile = path.join(logDir, 'vrc-studio-diagnostic.log');
 
 function logDiagnostic(message: string) {
   const timestamp = new Date().toISOString();
   const logMessage = `[${timestamp}] ${message}\n`;
   console.log(logMessage);
-  fs.appendFileSync(logFile, logMessage);
+
+  // Also log to a file if possible
+  try {
+    if (logFile) {
+      fs.appendFileSync(logFile, logMessage);
+    }
+  } catch (err) {
+    console.error('Failed to write to log file:', err);
+  }
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -1182,6 +1212,8 @@ ipcMain.handle('vrchat:request', async (_e, opts: {
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
+  initializeLogging();
+  logDiagnostic('App ready - creating window');
   createWindow();
   createTray();
 });
