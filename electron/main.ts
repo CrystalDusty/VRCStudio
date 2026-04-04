@@ -163,21 +163,28 @@ ipcMain.handle('fs:readFile', async (_e, filePath: string, autoDecompress: boole
     // Read as binary data (Buffer), then convert to base64 for transfer
     let buffer = fs.readFileSync(filePath);
 
+    console.log(`[ReadFile] Initial file size: ${buffer.length} bytes`);
+    console.log(`[ReadFile] First 16 bytes (hex):`, buffer.slice(0, 16).toString('hex'));
+
     // Check if the file is gzip-compressed and decompress if requested
     if (autoDecompress && buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b) {
-      console.log(`[ReadFile] File is gzip-compressed, decompressing...`);
+      console.log(`[ReadFile] File is gzip-compressed (magic bytes detected), decompressing...`);
       const zlib = require('zlib');
       try {
-        buffer = zlib.gunzipSync(buffer);
-        console.log(`[ReadFile] ✓ Decompressed to ${buffer.length} bytes`);
+        const decompressed = zlib.gunzipSync(buffer);
+        console.log(`[ReadFile] ✓ Successfully decompressed to ${decompressed.length} bytes`);
+        console.log(`[ReadFile] First 16 bytes of decompressed data (hex):`, decompressed.slice(0, 16).toString('hex'));
+        buffer = decompressed;
       } catch (decompressErr: any) {
-        console.error(`[ReadFile] Failed to decompress:`, decompressErr.message);
+        console.error(`[ReadFile] ✗ Failed to decompress:`, decompressErr.message);
         // If decompression fails, return the original compressed data
       }
+    } else {
+      console.log(`[ReadFile] File is NOT gzip-compressed`);
     }
 
     const base64Data = buffer.toString('base64');
-    console.log(`[ReadFile] Read ${buffer.length} bytes from ${filePath}`);
+    console.log(`[ReadFile] Returning ${buffer.length} bytes as base64`);
     return { success: true, content: base64Data, size: buffer.length };
   } catch (err: any) {
     return { success: false, error: err.message };
@@ -187,7 +194,8 @@ ipcMain.handle('fs:readFile', async (_e, filePath: string, autoDecompress: boole
 // Extract avatar bundle directly from cache and save to Downloads
 ipcMain.handle('fs:extractAvatarToDownloads', async (_e, cacheDataPath: string, avatarId: string) => {
   try {
-    console.log(`[ExtractToDownloads] Extracting ${cacheDataPath}`);
+    console.log(`\n[ExtractToDownloads] ========== EXTRACTING BUNDLE ==========`);
+    console.log(`[ExtractToDownloads] Source: ${cacheDataPath}`);
 
     // Verify cache file exists
     if (!fs.existsSync(cacheDataPath)) {
@@ -195,54 +203,59 @@ ipcMain.handle('fs:extractAvatarToDownloads', async (_e, cacheDataPath: string, 
     }
 
     const cacheStats = fs.statSync(cacheDataPath);
-    console.log(`[ExtractToDownloads] Cache file size: ${cacheStats.size} bytes`);
+    console.log(`[ExtractToDownloads] Source file size: ${cacheStats.size} bytes`);
+    console.log(`[ExtractToDownloads] Source file first 16 bytes (hex): ${fs.readFileSync(cacheDataPath).slice(0, 16).toString('hex')}`);
 
     // Get Downloads folder
     const downloadsPath = app.getPath('downloads');
     const bundleFileName = `${avatarId}.unitypackage`;
     const outputPath = path.join(downloadsPath, bundleFileName);
 
-    console.log(`[ExtractToDownloads] Copying to: ${outputPath}`);
+    console.log(`[ExtractToDownloads] Target: ${outputPath}`);
 
     // Read the file to check if it's gzip-compressed
     const buffer = fs.readFileSync(cacheDataPath);
 
     // Check for gzip magic bytes (1f 8b)
     const isGzipped = buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b;
-    console.log(`[ExtractToDownloads] File is ${isGzipped ? 'gzip-compressed' : 'not compressed'}`);
+    console.log(`[ExtractToDownloads] Compression: ${isGzipped ? '✓ GZIP (1f 8b detected)' : '✗ NOT GZIP'}`);
+
+    let finalBuffer = buffer;
 
     if (isGzipped) {
       // Decompress the gzip file
-      console.log(`[ExtractToDownloads] Decompressing gzip data...`);
+      console.log(`[ExtractToDownloads] Attempting decompression...`);
       const zlib = require('zlib');
-      const decompressed = zlib.gunzipSync(buffer);
-
-      // Save decompressed file as .unitypackage
-      fs.writeFileSync(outputPath, decompressed);
-
-      const outputStats = fs.statSync(outputPath);
-      console.log(`[ExtractToDownloads] ✓ File decompressed and saved (${outputStats.size} bytes)`);
-
-      return { success: true, path: outputPath, size: outputStats.size };
+      try {
+        const decompressed = zlib.gunzipSync(buffer);
+        console.log(`[ExtractToDownloads] ✓ Decompression successful!`);
+        console.log(`[ExtractToDownloads] Decompressed size: ${decompressed.length} bytes`);
+        console.log(`[ExtractToDownloads] Decompressed first 16 bytes (hex): ${decompressed.slice(0, 16).toString('hex')}`);
+        finalBuffer = decompressed;
+      } catch (decompressErr: any) {
+        console.error(`[ExtractToDownloads] ✗ Decompression FAILED:`, decompressErr.message);
+        throw decompressErr;
+      }
     } else {
-      // No compression - copy directly
-      fs.copyFileSync(cacheDataPath, outputPath);
-
-      const outputStats = fs.statSync(outputPath);
-      console.log(`[ExtractToDownloads] ✓ File copied successfully (${outputStats.size} bytes)`);
-
-      if (outputStats.size === 0) {
-        throw new Error('Output file is empty - copy may have failed');
-      }
-
-      if (outputStats.size !== cacheStats.size) {
-        console.warn(`[ExtractToDownloads] ⚠ Size mismatch: ${cacheStats.size} → ${outputStats.size}`);
-      }
-
-      return { success: true, path: outputPath, size: outputStats.size };
+      console.log(`[ExtractToDownloads] No decompression needed`);
     }
+
+    // Save the file
+    fs.writeFileSync(outputPath, finalBuffer);
+
+    const outputStats = fs.statSync(outputPath);
+    console.log(`[ExtractToDownloads] ✓ File saved successfully`);
+    console.log(`[ExtractToDownloads] Output file size: ${outputStats.size} bytes`);
+    console.log(`[ExtractToDownloads] Output file first 16 bytes (hex): ${fs.readFileSync(outputPath).slice(0, 16).toString('hex')}`);
+
+    if (outputStats.size === 0) {
+      throw new Error('Output file is empty - save may have failed');
+    }
+
+    console.log(`[ExtractToDownloads] ========== EXTRACTION COMPLETE ==========\n`);
+    return { success: true, path: outputPath, size: outputStats.size };
   } catch (err: any) {
-    console.error(`[ExtractToDownloads] ✗ Failed:`, err.message);
+    console.error(`[ExtractToDownloads] ✗ EXTRACTION FAILED:`, err.message);
     return { success: false, error: err.message };
   }
 });
