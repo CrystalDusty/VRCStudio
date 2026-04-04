@@ -1616,6 +1616,56 @@ ipcMain.handle('fs:launchAssetRipper', async (_e, bundlePath: string, avatarId?:
       return { success: false, error: 'Bundle path is missing or does not exist.' };
     }
 
+    // AssetRipper should consume the raw UnityFS bundle (.vrca/_data), not .unitypackage.
+    // If a .unitypackage is provided, extract the embedded .vrca first.
+    let ripperInputPath = bundlePath;
+    if (bundlePath.toLowerCase().endsWith('.unitypackage')) {
+      try {
+        const gz = fs.readFileSync(bundlePath);
+        const tar = zlib.gunzipSync(gz);
+        let offset = 0;
+        let pendingPathname: string | null = null;
+        let extracted = false;
+
+        while (offset + 512 <= tar.length) {
+          const header = tar.subarray(offset, offset + 512);
+          offset += 512;
+
+          // End-of-archive block
+          if (header.every(b => b === 0)) break;
+
+          const name = header.subarray(0, 100).toString('utf8').replace(/\0.*$/, '');
+          const sizeOct = header.subarray(124, 136).toString('utf8').replace(/\0.*$/, '').trim();
+          const size = parseInt(sizeOct || '0', 8) || 0;
+
+          const fileData = tar.subarray(offset, offset + size);
+          const padded = Math.ceil(size / 512) * 512;
+          offset += padded;
+
+          if (name.endsWith('/pathname')) {
+            pendingPathname = fileData.toString('utf8').replace(/\0.*$/, '');
+            continue;
+          }
+
+          if (name.endsWith('/asset') && pendingPathname && pendingPathname.toLowerCase().endsWith('.vrca')) {
+            const tempDir = path.join(app.getPath('temp'), 'VRCStudio-AssetRipper');
+            if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+            const outPath = path.join(tempDir, `${avatarId || path.basename(bundlePath, '.unitypackage')}.vrca`);
+            fs.writeFileSync(outPath, fileData);
+            ripperInputPath = outPath;
+            extracted = true;
+            break;
+          }
+        }
+
+        if (!extracted) {
+          return { success: false, error: 'Could not find embedded .vrca inside .unitypackage for AssetRipper.' };
+        }
+      } catch (e) {
+        return { success: false, error: `Failed to extract .vrca from unitypackage: ${e instanceof Error ? e.message : 'Unknown error'}` };
+      }
+    }
+
     const localAppData = process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local');
     const userDataTools = path.join(app.getPath('userData'), 'tools');
     const candidates = [
@@ -1648,7 +1698,7 @@ ipcMain.handle('fs:launchAssetRipper', async (_e, bundlePath: string, avatarId?:
       if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
       // Common CLI shape; if CLI variant differs this still opens a clear error from process output.
-      const child = spawn(ripperExe, [bundlePath, outputDir], {
+      const child = spawn(ripperExe, [ripperInputPath, outputDir], {
         detached: true,
         stdio: 'ignore',
       });
@@ -1656,14 +1706,14 @@ ipcMain.handle('fs:launchAssetRipper', async (_e, bundlePath: string, avatarId?:
 
       return {
         success: true,
-        message: `Launched AssetRipper CLI.\nInput: ${bundlePath}\nOutput: ${outputDir}`,
+        message: `Launched AssetRipper CLI.\nInput: ${ripperInputPath}\nOutput: ${outputDir}`,
         outputDir,
         executable: ripperExe,
       };
     }
 
     // GUI fallback - open with bundle path argument if accepted by this build.
-    const child = spawn(ripperExe, [bundlePath], {
+    const child = spawn(ripperExe, [ripperInputPath], {
       detached: true,
       stdio: 'ignore',
     });
@@ -1671,7 +1721,7 @@ ipcMain.handle('fs:launchAssetRipper', async (_e, bundlePath: string, avatarId?:
 
     return {
       success: true,
-      message: `Launched AssetRipper GUI for: ${path.basename(bundlePath)}`,
+      message: `Launched AssetRipper GUI for: ${path.basename(ripperInputPath)}`,
       executable: ripperExe,
     };
   } catch (error) {
