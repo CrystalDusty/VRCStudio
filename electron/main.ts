@@ -1692,17 +1692,27 @@ ipcMain.handle('fs:launchAssetRipper', async (_e, bundlePath: string, avatarId?:
       ripperExe = pick.filePaths[0];
     }
 
+    const startViaShell = (exePath: string, args: string[] = []) => {
+      // Use `start` through cmd to mirror Explorer launch behavior.
+      // This is more reliable for SmartScreen/UAC-prompted executables.
+      const quotedExe = `"${exePath}"`;
+      const quotedArgs = args.map(a => `"${a}"`).join(' ');
+      const cmdLine = `${quotedExe}${quotedArgs ? ` ${quotedArgs}` : ''}`;
+      const child = spawn('cmd.exe', ['/c', 'start', '', cmdLine], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      child.unref();
+    };
+
     const lower = ripperExe.toLowerCase();
     if (lower.includes('cli')) {
       const outputDir = path.join(app.getPath('downloads'), 'VRCStudio-AssetRipper', avatarId || `bundle-${Date.now()}`);
       if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
-      // Common CLI shape; if CLI variant differs this still opens a clear error from process output.
-      const child = spawn(ripperExe, [ripperInputPath, outputDir], {
-        detached: true,
-        stdio: 'ignore',
-      });
-      child.unref();
+      // Launch with shell semantics for better SmartScreen/UAC compatibility.
+      startViaShell(ripperExe, [ripperInputPath, outputDir]);
 
       return {
         success: true,
@@ -1712,16 +1722,13 @@ ipcMain.handle('fs:launchAssetRipper', async (_e, bundlePath: string, avatarId?:
       };
     }
 
-    // GUI fallback - open with bundle path argument if accepted by this build.
-    const child = spawn(ripperExe, [ripperInputPath], {
-      detached: true,
-      stdio: 'ignore',
-    });
-    child.unref();
+    // GUI fallback - launch through shell/start so users can approve SmartScreen prompts.
+    // Then pass the selected bundle path as an argument when supported by that build.
+    startViaShell(ripperExe, [ripperInputPath]);
 
     return {
       success: true,
-      message: `Launched AssetRipper GUI for: ${path.basename(ripperInputPath)}`,
+      message: `Launched AssetRipper GUI for: ${path.basename(ripperInputPath)}.\nIf SmartScreen appears, click More info > Run anyway.`,
       executable: ripperExe,
     };
   } catch (error) {
