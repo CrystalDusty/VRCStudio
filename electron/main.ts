@@ -281,25 +281,30 @@ ipcMain.handle('fs:extractAvatarToDownloads', async (_e, cacheDataPath: string, 
     const downloadsPath = app.getPath('downloads');
     const outputPath = path.join(downloadsPath, `${avatarId}.unitypackage`);
 
-    if (detectedFormat === 'GZIP_COMPRESSED' || detectedFormat === 'ZIP_UNITYPACKAGE') {
-      // Already a valid archive format - save as-is
-      logDiagnostic(`File is already an archive (${detectedFormat}), saving directly`);
-      fs.writeFileSync(outputPath, buffer);
-    } else {
-      // Raw UnityFS bundle or unknown - wrap in proper .unitypackage (tar.gz)
-      logDiagnostic(`Wrapping raw bundle in .unitypackage tar.gz format...`);
-
-      // Save raw bundle to a temp file first
-      const tempRawPath = path.join(downloadsPath, `${avatarId}-raw.tmp`);
-      fs.writeFileSync(tempRawPath, buffer);
-
+    // Decompress gzip if needed to get the raw bundle data
+    let rawBundleBuffer = buffer;
+    if (detectedFormat === 'GZIP_COMPRESSED') {
+      logDiagnostic('Decompressing gzip to get raw bundle...');
       try {
-        await createUnityPackage(tempRawPath, avatarId, outputPath);
-      } finally {
-        // Clean up temp file
-        if (fs.existsSync(tempRawPath)) {
-          fs.unlinkSync(tempRawPath);
-        }
+        rawBundleBuffer = zlib.gunzipSync(buffer);
+        logDiagnostic(`Decompressed: ${rawBundleBuffer.length} bytes`);
+        const innerHeader = rawBundleBuffer.slice(0, 7).toString('utf8');
+        logDiagnostic(`Inner format: "${innerHeader}"`);
+      } catch (decompErr: any) {
+        logDiagnostic(`Decompression failed: ${decompErr.message}, using raw buffer`);
+      }
+    }
+
+    // Always wrap in a proper .unitypackage tar.gz
+    logDiagnostic(`Creating .unitypackage tar.gz...`);
+    const tempRawPath = path.join(downloadsPath, `${avatarId}-raw.tmp`);
+    fs.writeFileSync(tempRawPath, rawBundleBuffer);
+
+    try {
+      await createUnityPackage(tempRawPath, avatarId, outputPath);
+    } finally {
+      if (fs.existsSync(tempRawPath)) {
+        fs.unlinkSync(tempRawPath);
       }
     }
 
@@ -887,52 +892,227 @@ function tarPad(dataLength: number): Buffer {
 /**
  * Create a valid .unitypackage (tar.gz) from a raw AssetBundle file.
  * Uses manual GNU tar construction for maximum Unity compatibility.
- * Structure: <GUID>/asset, <GUID>/pathname, <GUID>/asset.meta
+ *
+ * Includes:
+ *   - The raw AssetBundle as Assets/Avatar/<id>.vrca
+ *   - A Unity Editor script that loads and extracts assets from the bundle
  */
 async function createUnityPackage(sourcePath: string, avatarId: string, outputPath: string): Promise<void> {
-  const guid = crypto.randomBytes(16).toString('hex');
-  logDiagnostic(`[UnityPackage] GUID: ${guid}`);
+  const bundleGuid = crypto.randomBytes(16).toString('hex');
+  const scriptGuid = crypto.randomBytes(16).toString('hex');
+  logDiagnostic(`[UnityPackage] Bundle GUID: ${bundleGuid}`);
+  logDiagnostic(`[UnityPackage] Script GUID: ${scriptGuid}`);
 
   // Read the source asset bundle
   const assetData = fs.readFileSync(sourcePath);
   logDiagnostic(`[UnityPackage] Asset size: ${assetData.length} bytes`);
 
-  // Prepare file contents
-  const pathnameData = Buffer.from(`Assets/Avatar/${avatarId}.vrca`);
-  const metaData = Buffer.from(
-    `fileFormatVersion: 2\nguid: ${guid}\nNativeFormatImporter:\n  userData:\n  assetBundleName:\n  assetBundleVariant:\n`
+  // --- Asset 1: The raw bundle file ---
+  const bundlePathname = Buffer.from(`Assets/Avatar/${avatarId}.vrca`);
+  const bundleMeta = Buffer.from(
+    `fileFormatVersion: 2\nguid: ${bundleGuid}\nDefaultImporter:\n  userData:\n  assetBundleName:\n  assetBundleVariant:\n`
   );
 
-  // Build tar archive in memory (directory + 3 files + end-of-archive)
+  // --- Asset 2: Unity Editor script to load the AssetBundle ---
+  const safeAvatarId = avatarId.replace(/[^a-zA-Z0-9_]/g, '_');
+  const editorScript = Buffer.from(`using UnityEngine;
+using UnityEditor;
+using System.IO;
+
+/// <summary>
+/// VRC Studio - AssetBundle Loader
+/// Loads avatar assets from the included .vrca bundle file.
+/// </summary>
+public class VRCStudioBundleLoader_${safeAvatarId} : EditorWindow
+{
+    [MenuItem("VRC Studio/Load Avatar Bundle")]
+    static void LoadBundle()
+    {
+        string bundlePath = FindBundleFile();
+        if (string.IsNullOrEmpty(bundlePath))
+        {
+            EditorUtility.DisplayDialog("VRC Studio",
+                "Could not find .vrca bundle file.\\nMake sure it was imported correctly.", "OK");
+            return;
+        }
+
+        AssetBundle bundle = AssetBundle.LoadFromFile(bundlePath);
+        if (bundle == null)
+        {
+            EditorUtility.DisplayDialog("VRC Studio",
+                "Failed to load AssetBundle.\\nThe file may be corrupted or incompatible.", "OK");
+            return;
+        }
+
+        // Extract all assets
+        string outputDir = "Assets/VRCStudio_Extracted/${avatarId}";
+        if (!Directory.Exists(outputDir))
+            Directory.CreateDirectory(outputDir);
+
+        string[] assetNames = bundle.GetAllAssetNames();
+        int count = 0;
+
+        foreach (string assetName in assetNames)
+        {
+            Object asset = bundle.LoadAsset(assetName);
+            if (asset != null)
+            {
+                string fileName = Path.GetFileName(assetName);
+                string outputPath = Path.Combine(outputDir, fileName);
+
+                // Handle different asset types
+                if (asset is GameObject go)
+                {
+                    string prefabPath = outputDir + "/" + fileName + ".prefab";
+                    PrefabUtility.SaveAsPrefabAsset(go, prefabPath);
+                    count++;
+                    Debug.Log("[VRC Studio] Saved prefab: " + prefabPath);
+                }
+                else if (asset is Texture2D tex)
+                {
+                    byte[] png = tex.EncodeToPNG();
+                    if (png != null)
+                    {
+                        File.WriteAllBytes(outputDir + "/" + fileName + ".png", png);
+                        count++;
+                    }
+                }
+                else if (asset is Material || asset is Mesh || asset is AnimationClip)
+                {
+                    // For materials, meshes, animations - instantiate and save
+                    Object copy = Object.Instantiate(asset);
+                    AssetDatabase.CreateAsset(copy, outputDir + "/" + fileName + ".asset");
+                    count++;
+                }
+                else
+                {
+                    Debug.Log("[VRC Studio] Skipped: " + assetName + " (" + asset.GetType().Name + ")");
+                }
+            }
+        }
+
+        bundle.Unload(false);
+        AssetDatabase.Refresh();
+
+        EditorUtility.DisplayDialog("VRC Studio",
+            "Extracted " + count + " assets to:\\n" + outputDir +
+            "\\n\\nAsset names found: " + assetNames.Length, "OK");
+
+        // Select the output folder
+        Object folder = AssetDatabase.LoadAssetAtPath<Object>(outputDir);
+        if (folder != null) Selection.activeObject = folder;
+    }
+
+    [MenuItem("VRC Studio/Load Avatar Into Scene")]
+    static void LoadIntoScene()
+    {
+        string bundlePath = FindBundleFile();
+        if (string.IsNullOrEmpty(bundlePath))
+        {
+            EditorUtility.DisplayDialog("VRC Studio",
+                "Could not find .vrca bundle file.", "OK");
+            return;
+        }
+
+        AssetBundle bundle = AssetBundle.LoadFromFile(bundlePath);
+        if (bundle == null)
+        {
+            EditorUtility.DisplayDialog("VRC Studio",
+                "Failed to load AssetBundle.", "OK");
+            return;
+        }
+
+        // Try to load the main avatar prefab
+        GameObject[] prefabs = bundle.LoadAllAssets<GameObject>();
+        if (prefabs.Length > 0)
+        {
+            foreach (GameObject prefab in prefabs)
+            {
+                GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(
+                    Object.Instantiate(prefab));
+                instance.name = prefab.name;
+                Undo.RegisterCreatedObjectUndo(instance, "Load VRC Avatar");
+                Selection.activeGameObject = instance;
+                Debug.Log("[VRC Studio] Loaded avatar: " + prefab.name);
+            }
+            EditorUtility.DisplayDialog("VRC Studio",
+                "Avatar loaded into scene!\\nCheck the Hierarchy window.", "OK");
+        }
+        else
+        {
+            EditorUtility.DisplayDialog("VRC Studio",
+                "No GameObjects found in bundle.\\nTry 'Load Avatar Bundle' to extract raw assets.", "OK");
+        }
+
+        bundle.Unload(false);
+    }
+
+    static string FindBundleFile()
+    {
+        // Search for .vrca files in Assets
+        string[] guids = AssetDatabase.FindAssets("", new[] { "Assets/Avatar" });
+        foreach (string guid in guids)
+        {
+            string p = AssetDatabase.GUIDToAssetPath(guid);
+            if (p.EndsWith(".vrca")) return Path.GetFullPath(p);
+        }
+
+        // Fallback: search entire Assets folder
+        string[] files = Directory.GetFiles(Application.dataPath, "*.vrca", SearchOption.AllDirectories);
+        if (files.Length > 0) return files[0];
+
+        return null;
+    }
+}
+`);
+
+  const scriptPathname = Buffer.from(`Assets/Editor/VRCStudioBundleLoader.cs`);
+  const scriptMeta = Buffer.from(
+    `fileFormatVersion: 2\nguid: ${scriptGuid}\nMonoImporter:\n  serializedVersion: 2\n  defaultReferences: []\n  executionOrder: 0\n  icon: {instanceID: 0}\n  userData:\n  assetBundleName:\n  assetBundleVariant:\n`
+  );
+
+  // Build tar archive in memory
   const parts: Buffer[] = [];
 
-  // 1. Directory entry for GUID folder
-  parts.push(buildTarHeader(guid, 0, true));
+  // --- Bundle asset entry ---
+  parts.push(buildTarHeader(bundleGuid, 0, true));
 
-  // 2. pathname file
-  parts.push(buildTarHeader(`${guid}/pathname`, pathnameData.length, false));
-  parts.push(pathnameData);
-  parts.push(tarPad(pathnameData.length));
+  parts.push(buildTarHeader(`${bundleGuid}/pathname`, bundlePathname.length, false));
+  parts.push(bundlePathname);
+  parts.push(tarPad(bundlePathname.length));
 
-  // 3. asset file (the actual bundle data)
-  parts.push(buildTarHeader(`${guid}/asset`, assetData.length, false));
+  parts.push(buildTarHeader(`${bundleGuid}/asset`, assetData.length, false));
   parts.push(assetData);
   parts.push(tarPad(assetData.length));
 
-  // 4. asset.meta file
-  parts.push(buildTarHeader(`${guid}/asset.meta`, metaData.length, false));
-  parts.push(metaData);
-  parts.push(tarPad(metaData.length));
+  parts.push(buildTarHeader(`${bundleGuid}/asset.meta`, bundleMeta.length, false));
+  parts.push(bundleMeta);
+  parts.push(tarPad(bundleMeta.length));
 
-  // 5. End-of-archive marker (two 512-byte zero blocks)
+  // --- Editor script entry ---
+  parts.push(buildTarHeader(scriptGuid, 0, true));
+
+  parts.push(buildTarHeader(`${scriptGuid}/pathname`, scriptPathname.length, false));
+  parts.push(scriptPathname);
+  parts.push(tarPad(scriptPathname.length));
+
+  parts.push(buildTarHeader(`${scriptGuid}/asset`, editorScript.length, false));
+  parts.push(editorScript);
+  parts.push(tarPad(editorScript.length));
+
+  parts.push(buildTarHeader(`${scriptGuid}/asset.meta`, scriptMeta.length, false));
+  parts.push(scriptMeta);
+  parts.push(tarPad(scriptMeta.length));
+
+  // End-of-archive marker (two 512-byte zero blocks)
   parts.push(Buffer.alloc(1024, 0));
 
   const tarData = Buffer.concat(parts);
   logDiagnostic(`[UnityPackage] Tar size: ${tarData.length} bytes`);
 
-  // Gzip compress using Node.js built-in zlib
-  const gzipSync = promisify(zlib.gzip);
-  const gzippedData = await gzipSync(tarData, { level: 6 });
+  // Gzip compress
+  const gzipAsync = promisify(zlib.gzip);
+  const gzippedData = await gzipAsync(tarData, { level: 6 });
   logDiagnostic(`[UnityPackage] Gzipped size: ${gzippedData.length} bytes`);
 
   // Write final .unitypackage
