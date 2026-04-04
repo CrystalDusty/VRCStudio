@@ -26,7 +26,7 @@ export async function findAvatarBundleInCache(
 
     // Use the main process to search - it's much faster and more reliable
     console.log('[VRChatCache] Calling main process to search cache...');
-    const searchResult = await electronAPI.searchCacheForDataFiles();
+    const searchResult = await electronAPI.searchCacheForDataFiles(avatarId);
 
     if (!searchResult.success) {
       console.error('[VRChatCache] ✗ Search failed:', searchResult.error);
