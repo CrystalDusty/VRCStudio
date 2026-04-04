@@ -134,7 +134,15 @@ public class ${sanitizeClassName(avatarName)}Importer : EditorWindow
                 "OK"
             );
 
-            EditorUtility.RevealProjectFolder(Path.Combine(Application.dataPath, "VRCStudio/Avatars/${avatarId}"));
+            // Open folder - use compatible method
+            string folderPath = Path.Combine(Application.dataPath, "VRCStudio/Avatars/${avatarId}");
+            #if UNITY_EDITOR_WIN
+                System.Diagnostics.Process.Start("explorer.exe", folderPath.Replace("/", "\\\\"));
+            #elif UNITY_EDITOR_OSX
+                System.Diagnostics.Process.Start("open", folderPath);
+            #else
+                EditorUtility.RevealInFinder(folderPath);
+            #endif
         }
         catch (System.Exception e)
         {
@@ -182,7 +190,15 @@ public class VRCStudioSetup : EditorWindow
             "OK"
         );
 
-        EditorUtility.RevealProjectFolder(Path.Combine(Application.dataPath, "VRCStudio"));
+        // Open folder - use compatible method
+        string folderPath = Path.Combine(Application.dataPath, "VRCStudio");
+        #if UNITY_EDITOR_WIN
+            System.Diagnostics.Process.Start("explorer.exe", folderPath.Replace("/", "\\\\"));
+        #elif UNITY_EDITOR_OSX
+            System.Diagnostics.Process.Start("open", folderPath);
+        #else
+            EditorUtility.RevealInFinder(folderPath);
+        #endif
     }
 
     private static void CreateFolder(string parent, string name)
