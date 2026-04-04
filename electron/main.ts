@@ -227,6 +227,41 @@ ipcMain.handle('fs:listDir', async (_e, dirPath: string) => {
   }
 });
 
+// Open cache folder browser
+ipcMain.handle('fs:browseCacheFolder', async (_e) => {
+  try {
+    const homeDir = app.getPath('home');
+    const cacheRoot = path.join(homeDir, 'AppData', 'LocalLow', 'VRChat', 'VRChat', 'Cache-WindowsPlayer');
+
+    // Open file dialog to let user select a file
+    const result = await dialog.showOpenDialog({
+      title: 'Select _data file from VRChat cache',
+      defaultPath: fs.existsSync(cacheRoot) ? cacheRoot : homeDir,
+      filters: [
+        { name: 'Data Files', extensions: ['_data', '*'] }
+      ],
+      properties: ['openFile']
+    });
+
+    if (result.canceled) {
+      return { success: false, error: 'Canceled' };
+    }
+
+    const selectedPath = result.filePaths[0];
+
+    // Verify it's a file
+    if (!fs.statSync(selectedPath).isFile()) {
+      return { success: false, error: 'Selected item is not a file' };
+    }
+
+    console.log(`[BrowseCache] User selected: ${selectedPath}`);
+    return { success: true, path: selectedPath };
+  } catch (err: any) {
+    console.error(`[BrowseCache] Error:`, err.message);
+    return { success: false, error: err.message };
+  }
+});
+
 // Search for _data files (avatar bundles) in VRChat cache
 ipcMain.handle('fs:searchCacheForDataFiles', async (_e) => {
   try {

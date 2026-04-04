@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { X, Download, Copy, Check, ExternalLink, Folder, AlertCircle, Loader, Archive } from 'lucide-react';
+import { X, Download, Copy, Check, ExternalLink, Folder, AlertCircle, Loader, Archive, FolderOpen } from 'lucide-react';
 import type { VRCAvatar } from '../types/vrchat';
 import { extractAvatarBundle, openBundleFolder, isBundleDownloaded, addBundleToStore } from '../utils/avatarBundle';
 import { downloadBundleDirectly } from '../utils/directDownload';
-import { downloadAvatarExtract } from '../utils/avatarExtractor';
+import { downloadAvatarExtract, browseCacheFile } from '../utils/avatarExtractor';
 import BundleLoader from './BundleLoader';
 
 interface AvatarPreviewModalProps {
@@ -146,6 +146,38 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
       await openBundleFolder(avatar.id);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to open folder');
+    }
+  };
+
+  const handleBrowseCache = async () => {
+    setIsExtracting2(true);
+    setError(null);
+
+    try {
+      const browseResult = await browseCacheFile();
+      if (!browseResult.success || !browseResult.path) {
+        setError(browseResult.error || 'No file selected');
+        setIsExtracting2(false);
+        return;
+      }
+
+      console.log('[AvatarPreview] User selected file:', browseResult.path);
+
+      // Extract the selected file to Downloads
+      const electronAPI = (window as any).electronAPI;
+      const extractResult = await electronAPI.extractAvatarToDownloads(browseResult.path, avatar.id);
+
+      if (extractResult.success) {
+        setError(null);
+        console.log('[AvatarPreview] Successfully extracted bundle to:', extractResult.path);
+      } else {
+        setError(extractResult.error || 'Failed to extract bundle');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      setError(`Browse failed: ${errorMsg}`);
+    } finally {
+      setIsExtracting2(false);
     }
   };
 
@@ -338,6 +370,23 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
               ) : (
                 <>
                   <Archive size={14} /> Extract Avatar Data
+                </>
+              )}
+            </button>
+
+            <button
+              onClick={handleBrowseCache}
+              disabled={isExtracting2}
+              className="btn-secondary w-full text-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Manually select _data file from VRChat cache"
+            >
+              {isExtracting2 ? (
+                <>
+                  <Loader size={14} className="animate-spin" /> Processing...
+                </>
+              ) : (
+                <>
+                  <FolderOpen size={14} /> Browse Cache File
                 </>
               )}
             </button>

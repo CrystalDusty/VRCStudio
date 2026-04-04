@@ -230,6 +230,33 @@ export async function generateDownloadablePackage(
 }
 
 /**
+ * Browse for cache file manually
+ */
+export async function browseCacheFile(): Promise<{
+  success: boolean;
+  path?: string;
+  error?: string;
+}> {
+  if (typeof window === 'undefined' || !(window as any).electronAPI) {
+    return { success: false, error: 'Not in Electron environment' };
+  }
+
+  try {
+    const electronAPI = (window as any).electronAPI;
+    const result = await electronAPI.browseCacheFolder();
+
+    if (!result.success) {
+      return { success: false, error: result.error };
+    }
+
+    return { success: true, path: result.path };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMsg };
+  }
+}
+
+/**
  * Trigger browser download of extracted avatar data
  */
 export async function downloadAvatarExtract(avatar: VRCAvatar): Promise<{
