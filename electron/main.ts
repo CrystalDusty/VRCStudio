@@ -8,6 +8,7 @@ import https from 'https';
 import crypto from 'crypto';
 import zlib from 'zlib';
 import { promisify } from 'util';
+import { spawn } from 'child_process';
 
 // Initialize logging EARLY - use a simpler path
 let logFile: string;
@@ -256,6 +257,13 @@ ipcMain.handle('fs:extractAvatarToDownloads', async (_e, cacheDataPath: string, 
     const buffer = fs.readFileSync(cacheDataPath);
     logDiagnostic(`Read successful: ${buffer.length} bytes`);
 
+    const integrity = validateUnityFsIntegrity(buffer);
+    if (!integrity.valid) {
+      const msg = `Cache bundle failed integrity check: ${integrity.reason}`;
+      logDiagnostic(`ERROR: ${msg}`);
+      throw new Error(`${msg} Please reload the avatar in VRChat and try again (cache file may be partial/corrupt).`);
+    }
+
     // Analyze header
     const hexHeader = buffer.slice(0, 16).toString('hex');
     const asciiHeader = buffer.slice(0, 6).toString('utf8');
@@ -401,8 +409,126 @@ ipcMain.handle('fs:browseCacheFolder', async (_e) => {
   }
 });
 
+function scoreCacheBundleCandidate(bundlePath: string, avatarId?: string, packageId?: string): number {
+  let score = 0;
+
+  try {
+    const stat = fs.statSync(bundlePath);
+    // Favor realistic avatar bundle sizes and more recent files.
+    if (stat.size > 5 * 1024 * 1024) score += 20;
+    if (stat.size > 20 * 1024 * 1024) score += 20;
+    score += Math.min(20, Math.floor((Date.now() - stat.mtimeMs) / (1000 * 60 * 10)) * -1 + 20);
+  } catch {
+    // ignore stat issues
+  }
+
+  if (!avatarId && !packageId) return score;
+
+  const dir = path.dirname(bundlePath);
+  const siblingCandidates = ['__info', '__metadata', '_info', 'info', '__data'];
+
+  for (const fileName of siblingCandidates) {
+    const filePath = path.join(dir, fileName);
+    if (!fs.existsSync(filePath)) continue;
+    try {
+      const raw = fs.readFileSync(filePath);
+      const textUtf8 = raw.toString('utf8');
+      const textUtf16 = raw.toString('utf16le');
+      const hasAvatarId = !!avatarId && (textUtf8.includes(avatarId) || textUtf16.includes(avatarId));
+      const hasPackageId = !!packageId && (textUtf8.includes(packageId) || textUtf16.includes(packageId));
+
+      if (hasAvatarId) {
+        score += 1000;
+      }
+      if (hasPackageId) {
+        score += 1400;
+      }
+      if (
+        textUtf8.includes('/avatar/') || textUtf8.includes('avatar') || textUtf8.includes('avtr_') ||
+        textUtf16.includes('/avatar/') || textUtf16.includes('avatar') || textUtf16.includes('avtr_')
+      ) {
+        score += 25;
+      }
+      break;
+    } catch {
+      // likely binary; skip
+    }
+  }
+
+  // Weak fallback heuristics
+  if (avatarId && bundlePath.includes(avatarId)) score += 200;
+  if (packageId && bundlePath.includes(packageId)) score += 300;
+
+  return score;
+}
+
+function normalizeUnityFsBuffer(input: Buffer): Buffer | null {
+  let data = input;
+
+  // Gzip-wrapped cache artifact
+  if (data.length > 2 && data[0] === 0x1f && data[1] === 0x8b) {
+    try {
+      data = zlib.gunzipSync(data);
+    } catch {
+      return null;
+    }
+  }
+
+  // Find UnityFS marker
+  const marker = Buffer.from('UnityFS', 'utf8');
+  const idx = data.indexOf(marker);
+  if (idx < 0) return null;
+
+  if (idx > 0) {
+    data = data.subarray(idx);
+  }
+
+  return data;
+}
+
+function validateUnityFsIntegrity(input: Buffer): { valid: boolean; reason?: string } {
+  const data = normalizeUnityFsBuffer(input);
+  if (!data) {
+    return { valid: false, reason: 'Not a readable UnityFS buffer (or gzip wrapper failed).' };
+  }
+
+  // UnityFS header layout:
+  // "UnityFS\0"(8) + formatVersion(4) + playerVersion\0 + engineVersion\0 + fileSize(8) + ...
+  let offset = 12;
+  while (offset < data.length && data[offset] !== 0) offset++;
+  offset++;
+  while (offset < data.length && data[offset] !== 0) offset++;
+  offset++;
+
+  if (offset + 8 > data.length) {
+    return { valid: false, reason: 'Header truncated before declared bundle size.' };
+  }
+
+  const declaredFileSize = Number(data.readBigUInt64BE(offset));
+  if (!Number.isFinite(declaredFileSize) || declaredFileSize <= 0) {
+    return { valid: false, reason: 'Invalid declared UnityFS file size in header.' };
+  }
+
+  if (declaredFileSize > data.length) {
+    return {
+      valid: false,
+      reason: `Truncated UnityFS data: declared ${declaredFileSize} bytes, actual ${data.length} bytes.`,
+    };
+  }
+
+  // Strong mismatch can indicate extra wrapper/padding mismatch from cache.
+  if (data.length - declaredFileSize > 64 * 1024) {
+    return {
+      valid: false,
+      reason: `Unexpected trailing data: declared ${declaredFileSize} bytes, actual ${data.length} bytes.`,
+    };
+  }
+
+  return { valid: true };
+}
+
 // Search for _data files (avatar bundles) in VRChat cache
-ipcMain.handle('fs:searchCacheForDataFiles', async (_e) => {
+ipcMain.handle('fs:searchCacheForDataFiles', async (_e, avatarId?: string, packageId?: string) => {
   try {
     if (process.platform !== 'win32') {
       return { success: false, error: 'Only supported on Windows' };
@@ -449,7 +575,14 @@ ipcMain.handle('fs:searchCacheForDataFiles', async (_e) => {
           // Check for _data file
           if (entry.name === '_data' && entry.isFile()) {
             const stat = fs.statSync(fullPath);
-            console.log(`[SearchCache] ✓ FOUND BUNDLE: ${fullPath} (${stat.size} bytes)`);
+            const fileBuffer = fs.readFileSync(fullPath);
+            const integrity = validateUnityFsIntegrity(fileBuffer);
+            if (!integrity.valid) {
+              console.log(`[SearchCache] ⚠ Skipping invalid bundle candidate: ${fullPath} (${integrity.reason})`);
+              continue;
+            }
+            const score = scoreCacheBundleCandidate(fullPath, avatarId, packageId);
+            console.log(`[SearchCache] ✓ FOUND BUNDLE: ${fullPath} (${stat.size} bytes, score=${score})`);
             foundPaths.push(fullPath);
           }
 
@@ -470,11 +603,28 @@ ipcMain.handle('fs:searchCacheForDataFiles', async (_e) => {
       }
     }
 
+    let ranked = foundPaths
+      .map(p => ({ path: p, score: scoreCacheBundleCandidate(p, avatarId, packageId) }))
+      .sort((a, b) => b.score - a.score);
+
+    // If we found strong metadata matches for avatar/package, only return those.
+    if (avatarId || packageId) {
+      const strongThreshold = packageId ? 1300 : 900;
+      const strongMatches = ranked.filter(r => r.score >= strongThreshold);
+      if (strongMatches.length > 0) {
+        ranked = strongMatches;
+      }
+    }
+
     console.log(`[SearchCache] Search complete. Scanned ${scannedDirs} dirs, found ${foundPaths.length} bundle(s)`);
+    if ((avatarId || packageId) && ranked.length > 0) {
+      console.log(`[SearchCache] Top match for avatar=${avatarId || 'n/a'} package=${packageId || 'n/a'}: ${ranked[0].path} (score=${ranked[0].score})`);
+    }
 
     return {
       success: true,
-      bundles: foundPaths,
+      bundles: ranked.map(r => r.path),
+      scoredBundles: ranked.slice(0, 10),
       scannedDirs,
     };
   } catch (err: any) {
@@ -941,6 +1091,7 @@ async function createUnityPackage(sourcePath: string, avatarId: string, outputPa
 using UnityEditor;
 using System.IO;
 using System.Text;
+using System.IO.Compression;
 
 /// <summary>
 /// VRC Studio - AssetBundle Loader
@@ -959,15 +1110,63 @@ public class VRCStudioBundleLoader : EditorWindow
     /// </summary>
     static AssetBundle LoadBundleWithVersionPatch(string bundlePath)
     {
+        // Fast path: attempt unmodified load first
+        AssetBundle directBundle = AssetBundle.LoadFromFile(bundlePath);
+        if (directBundle != null)
+        {
+            Debug.Log("[VRC Studio] Bundle loaded directly without patch.");
+            return directBundle;
+        }
+
         byte[] data = File.ReadAllBytes(bundlePath);
         Debug.Log("[VRC Studio] Read " + data.Length + " bytes from: " + bundlePath);
 
-        // Verify it's a UnityFS bundle
-        string magic = Encoding.UTF8.GetString(data, 0, 7);
-        if (magic != "UnityFS")
+        // If this is gzip-wrapped data, try to decompress first.
+        if (data.Length > 2 && data[0] == 0x1f && data[1] == 0x8b)
         {
-            Debug.LogError("[VRC Studio] Not a UnityFS bundle (magic: " + magic + ")");
+            try
+            {
+                using (MemoryStream input = new MemoryStream(data))
+                using (GZipStream gzip = new GZipStream(input, CompressionMode.Decompress))
+                using (MemoryStream output = new MemoryStream())
+                {
+                    gzip.CopyTo(output);
+                    data = output.ToArray();
+                    Debug.Log("[VRC Studio] Decompressed gzip wrapper, new size: " + data.Length + " bytes");
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[VRC Studio] Gzip decompress attempt failed: " + e.Message);
+            }
+        }
+
+        // Verify it's a UnityFS bundle. Some cache files can have leading bytes,
+        // so search for UnityFS marker and trim to that offset when found.
+        int unityFsOffset = -1;
+        for (int i = 0; i <= data.Length - 7; i++)
+        {
+            if (data[i] == (byte)'U' && data[i + 1] == (byte)'n' && data[i + 2] == (byte)'i' &&
+                data[i + 3] == (byte)'t' && data[i + 4] == (byte)'y' && data[i + 5] == (byte)'F' &&
+                data[i + 6] == (byte)'S')
+            {
+                unityFsOffset = i;
+                break;
+            }
+        }
+
+        if (unityFsOffset < 0)
+        {
+            Debug.LogError("[VRC Studio] Could not find UnityFS marker in bundle bytes.");
             return null;
+        }
+
+        if (unityFsOffset > 0)
+        {
+            byte[] trimmed = new byte[data.Length - unityFsOffset];
+            System.Array.Copy(data, unityFsOffset, trimmed, 0, trimmed.Length);
+            data = trimmed;
+            Debug.Log("[VRC Studio] Trimmed " + unityFsOffset + " leading bytes before UnityFS header.");
         }
 
         // Parse the header to find the engine version string
@@ -989,26 +1188,78 @@ public class VRCStudioBundleLoader : EditorWindow
         Debug.Log("[VRC Studio] Original bundle version: " + originalVersion);
         Debug.Log("[VRC Studio] Your Unity version: " + Application.unityVersion);
 
-        // Patch: overwrite the engine version with our editor's version
-        // Must use EXACT same byte length to keep all offsets intact
-        string patchVersion = Application.unityVersion;
+        // VRChat bundles often report 2022.3.22f2-* while Creator Companion supports 2022.3.22f1.
+        // Force that exact base version and preserve any custom suffix (e.g. "-DWR")
+        // so header length/structure remains stable.
+        string patchBaseVersion = "2022.3.22f1";
+        string targetVersion = patchBaseVersion;
+        int dashIndex = originalVersion.IndexOf('-');
+        if (dashIndex >= 0 && dashIndex < originalVersion.Length - 1)
+        {
+            targetVersion = patchBaseVersion + originalVersion.Substring(dashIndex);
+        }
 
-        // Pad or truncate to exact same length
-        byte[] patchBytes = new byte[versionFieldLen];
-        byte[] verBytes = Encoding.UTF8.GetBytes(patchVersion);
+        Debug.Log("[VRC Studio] Target patch version: " + targetVersion);
 
-        // Copy as many bytes as fit, rest stays as 0x00
+        // Overwrite only the START of the engine version and leave any remaining
+        // original suffix bytes intact. Never write null padding here.
+        byte[] verBytes = Encoding.UTF8.GetBytes(targetVersion);
         int copyLen = System.Math.Min(verBytes.Length, versionFieldLen);
-        System.Array.Copy(verBytes, 0, patchBytes, 0, copyLen);
-
-        // Write patch into data
-        System.Array.Copy(patchBytes, 0, data, engineVerStart, versionFieldLen);
+        System.Array.Copy(verBytes, 0, data, engineVerStart, copyLen);
 
         string patchedVersion = Encoding.UTF8.GetString(data, engineVerStart, versionFieldLen).TrimEnd('\\0');
         Debug.Log("[VRC Studio] Patched version: " + patchedVersion);
 
-        // Load from patched memory
+        // Also patch any additional exact header/version occurrences we can find
+        // without changing total byte lengths.
+        if (!string.IsNullOrEmpty(originalVersion) && originalVersion != targetVersion)
+        {
+            byte[] originalBytes = Encoding.UTF8.GetBytes(originalVersion);
+            int maxReplacements = 8;
+            int replacements = 0;
+            for (int i = 0; i <= data.Length - originalBytes.Length && replacements < maxReplacements; i++)
+            {
+                bool match = true;
+                for (int j = 0; j < originalBytes.Length; j++)
+                {
+                    if (data[i + j] != originalBytes[j])
+                    {
+                        match = false;
+                        break;
+                    }
+                }
+
+                if (match)
+                {
+                    int replaceLen = System.Math.Min(verBytes.Length, originalBytes.Length);
+                    System.Array.Copy(verBytes, 0, data, i, replaceLen);
+                    replacements++;
+                    i += originalBytes.Length - 1;
+                }
+            }
+            Debug.Log("[VRC Studio] Additional version string replacements: " + replacements);
+        }
+
+        // Try loading from patched memory first
         AssetBundle bundle = AssetBundle.LoadFromMemory(data);
+        if (bundle == null)
+        {
+            // Fallback: write patched bytes to a temp bundle and load from file path.
+            // Some Unity versions handle large bundles more reliably via file IO APIs.
+            try
+            {
+                string tempPath = Path.Combine(Path.GetTempPath(),
+                    "vrcstudio_patched_" + Path.GetFileName(bundlePath));
+                File.WriteAllBytes(tempPath, data);
+                Debug.Log("[VRC Studio] Memory load failed, retrying from temp file: " + tempPath);
+                bundle = AssetBundle.LoadFromFile(tempPath);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[VRC Studio] Temp file fallback failed: " + e.Message);
+            }
+        }
+
         if (bundle != null)
         {
             Debug.Log("[VRC Studio] Bundle loaded successfully with version patch!");
@@ -1242,6 +1493,36 @@ public class VRCStudioBundleLoader : EditorWindow
     `fileFormatVersion: 2\nguid: ${scriptGuid}\nMonoImporter:\n  serializedVersion: 2\n  defaultReferences: []\n  executionOrder: 0\n  icon: {instanceID: 0}\n  userData:\n  assetBundleName:\n  assetBundleVariant:\n`
   );
 
+  // --- Recovery assets: include raw cache siblings as .bytes so users always
+  // have importable files in Unity even when bundle decompression is unsupported.
+  const recoveryAssets: Array<{ guid: string; pathname: Buffer; asset: Buffer; meta: Buffer }> = [];
+  try {
+    const sourceName = path.basename(sourcePath).toLowerCase();
+    if (sourceName === '_data') {
+      const sourceDir = path.dirname(sourcePath);
+      const entries = fs.readdirSync(sourceDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        const fullPath = path.join(sourceDir, entry.name);
+        const bytes = fs.readFileSync(fullPath);
+        const recoveryGuid = crypto.randomBytes(16).toString('hex');
+        const recoveryPathname = Buffer.from(`Assets/VRCStudioRaw/${avatarId}/${entry.name}.bytes`);
+        const recoveryMeta = Buffer.from(
+          `fileFormatVersion: 2\nguid: ${recoveryGuid}\nDefaultImporter:\n  userData:\n  assetBundleName:\n  assetBundleVariant:\n`
+        );
+        recoveryAssets.push({
+          guid: recoveryGuid,
+          pathname: recoveryPathname,
+          asset: bytes,
+          meta: recoveryMeta,
+        });
+      }
+      logDiagnostic(`[UnityPackage] Added ${recoveryAssets.length} recovery cache file(s) as .bytes assets`);
+    }
+  } catch (err) {
+    logDiagnostic(`[UnityPackage] Recovery asset packaging skipped: ${err instanceof Error ? err.message : 'Unknown error'}`);
+  }
+
   // Build tar archive in memory
   const parts: Buffer[] = [];
 
@@ -1274,6 +1555,23 @@ public class VRCStudioBundleLoader : EditorWindow
   parts.push(buildTarHeader(`${scriptGuid}/asset.meta`, scriptMeta.length, false));
   parts.push(scriptMeta);
   parts.push(tarPad(scriptMeta.length));
+
+  // --- Recovery files entries ---
+  for (const rec of recoveryAssets) {
+    parts.push(buildTarHeader(rec.guid, 0, true));
+
+    parts.push(buildTarHeader(`${rec.guid}/pathname`, rec.pathname.length, false));
+    parts.push(rec.pathname);
+    parts.push(tarPad(rec.pathname.length));
+
+    parts.push(buildTarHeader(`${rec.guid}/asset`, rec.asset.length, false));
+    parts.push(rec.asset);
+    parts.push(tarPad(rec.asset.length));
+
+    parts.push(buildTarHeader(`${rec.guid}/asset.meta`, rec.meta.length, false));
+    parts.push(rec.meta);
+    parts.push(tarPad(rec.meta.length));
+  }
 
   // End-of-archive marker (two 512-byte zero blocks)
   parts.push(Buffer.alloc(1024, 0));
@@ -1436,6 +1734,147 @@ ipcMain.handle('fs:openFileDialog', async (_e, options: any) => {
     return result;
   } catch (error) {
     throw new Error(`Failed to open file dialog: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+});
+
+ipcMain.handle('fs:launchAssetRipper', async (_e, bundlePath: string, avatarId?: string) => {
+  if (process.platform !== 'win32') {
+    return { success: false, error: 'AssetRipper launcher currently supports Windows only.' };
+  }
+
+  try {
+    if (!bundlePath || !fs.existsSync(bundlePath)) {
+      return { success: false, error: 'Bundle path is missing or does not exist.' };
+    }
+
+    // AssetRipper should consume the raw UnityFS bundle (.vrca/_data), not .unitypackage.
+    // If a .unitypackage is provided, extract the embedded .vrca first.
+    let ripperInputPath = bundlePath;
+
+    // FINAL fallback mode: when a raw VRChat cache `_data` file is selected,
+    // feed AssetRipper the entire containing cache folder so it can resolve
+    // sidecar metadata/files instead of a single extracted blob.
+    if (path.basename(bundlePath).toLowerCase() === '_data') {
+      ripperInputPath = path.dirname(bundlePath);
+    }
+
+    if (bundlePath.toLowerCase().endsWith('.unitypackage')) {
+      try {
+        const gz = fs.readFileSync(bundlePath);
+        const tar = zlib.gunzipSync(gz);
+        let offset = 0;
+        let pendingPathname: string | null = null;
+        let extracted = false;
+
+        while (offset + 512 <= tar.length) {
+          const header = tar.subarray(offset, offset + 512);
+          offset += 512;
+
+          // End-of-archive block
+          if (header.every(b => b === 0)) break;
+
+          const name = header.subarray(0, 100).toString('utf8').replace(/\0.*$/, '');
+          const sizeOct = header.subarray(124, 136).toString('utf8').replace(/\0.*$/, '').trim();
+          const size = parseInt(sizeOct || '0', 8) || 0;
+
+          const fileData = tar.subarray(offset, offset + size);
+          const padded = Math.ceil(size / 512) * 512;
+          offset += padded;
+
+          if (name.endsWith('/pathname')) {
+            pendingPathname = fileData.toString('utf8').replace(/\0.*$/, '');
+            continue;
+          }
+
+          if (name.endsWith('/asset') && pendingPathname && pendingPathname.toLowerCase().endsWith('.vrca')) {
+            const tempDir = path.join(app.getPath('temp'), 'VRCStudio-AssetRipper');
+            if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+            const outPath = path.join(tempDir, `${avatarId || path.basename(bundlePath, '.unitypackage')}.vrca`);
+            fs.writeFileSync(outPath, fileData);
+            ripperInputPath = outPath;
+            extracted = true;
+            break;
+          }
+        }
+
+        if (!extracted) {
+          return { success: false, error: 'Could not find embedded .vrca inside .unitypackage for AssetRipper.' };
+        }
+      } catch (e) {
+        return { success: false, error: `Failed to extract .vrca from unitypackage: ${e instanceof Error ? e.message : 'Unknown error'}` };
+      }
+    }
+
+    const localAppData = process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local');
+    const userDataTools = path.join(app.getPath('userData'), 'tools');
+    const candidates = [
+      path.join(userDataTools, 'AssetRipper', 'AssetRipper.CLI.exe'),
+      path.join(userDataTools, 'AssetRipper', 'AssetRipper.GUI.Free.exe'),
+      path.join(localAppData, 'AssetRipper', 'AssetRipper.CLI.exe'),
+      path.join(localAppData, 'AssetRipper', 'AssetRipper.GUI.Free.exe'),
+      path.join('C:\\', 'Program Files', 'AssetRipper', 'AssetRipper.CLI.exe'),
+      path.join('C:\\', 'Program Files', 'AssetRipper', 'AssetRipper.GUI.Free.exe'),
+    ];
+
+    let ripperExe = candidates.find(p => fs.existsSync(p));
+
+    if (!ripperExe) {
+      if (!mainWindow) return { success: false, error: 'Main window unavailable for picker dialog.' };
+      const pick = await dialog.showOpenDialog(mainWindow, {
+        title: 'Locate AssetRipper executable',
+        properties: ['openFile'],
+        filters: [{ name: 'Executables', extensions: ['exe'] }],
+      });
+      if (pick.canceled || pick.filePaths.length === 0) {
+        return { success: false, error: 'No AssetRipper executable selected.' };
+      }
+      ripperExe = pick.filePaths[0];
+    }
+
+    const startViaShell = (exePath: string, args: string[] = []) => {
+      // Use `start` through cmd to mirror Explorer launch behavior.
+      // This is more reliable for SmartScreen/UAC-prompted executables.
+      const quotedExe = `"${exePath}"`;
+      const quotedArgs = args.map(a => `"${a}"`).join(' ');
+      const cmdLine = `${quotedExe}${quotedArgs ? ` ${quotedArgs}` : ''}`;
+      const child = spawn('cmd.exe', ['/c', 'start', '', cmdLine], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      child.unref();
+    };
+
+    const lower = ripperExe.toLowerCase();
+    if (lower.includes('cli')) {
+      const outputDir = path.join(app.getPath('downloads'), 'VRCStudio-AssetRipper', avatarId || `bundle-${Date.now()}`);
+      if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+
+      // Launch with shell semantics for better SmartScreen/UAC compatibility.
+      startViaShell(ripperExe, [ripperInputPath, outputDir]);
+
+      return {
+        success: true,
+        message: `Launched AssetRipper CLI.\nInput: ${ripperInputPath}\nOutput: ${outputDir}`,
+        outputDir,
+        executable: ripperExe,
+      };
+    }
+
+    // GUI fallback - launch through shell/start so users can approve SmartScreen prompts.
+    // Then pass the selected bundle path as an argument when supported by that build.
+    startViaShell(ripperExe, [ripperInputPath]);
+
+    return {
+      success: true,
+      message: `Launched AssetRipper GUI for: ${path.basename(ripperInputPath)}.\nIf SmartScreen appears, click More info > Run anyway.`,
+      executable: ripperExe,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: `Failed to launch AssetRipper: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    };
   }
 });
 

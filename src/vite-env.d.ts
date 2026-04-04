@@ -10,6 +10,8 @@ interface ElectronAPI {
   openExternal: (url: string) => Promise<void>;
   readFile: (path: string) => Promise<{ success: boolean; content?: string; error?: string }>;
   listDir: (path: string) => Promise<{ success: boolean; entries?: Array<{ name: string; isDirectory: boolean; path: string }>; error?: string }>;
+  searchCacheForDataFiles: (avatarId?: string, packageId?: string) => Promise<{ success: boolean; bundles?: string[]; scannedDirs?: number; error?: string }>;
+  launchAssetRipper: (bundlePath: string, avatarId?: string) => Promise<{ success: boolean; message?: string; error?: string; outputDir?: string; executable?: string }>;
   getVRChatLogPath: () => Promise<string>;
   getVRChatScreenshotPath: () => Promise<string>;
   sendNotification: (opts: { title: string; body: string; icon?: string }) => Promise<void>;
