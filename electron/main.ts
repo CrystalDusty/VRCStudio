@@ -423,11 +423,18 @@ function scoreCacheBundleCandidate(bundlePath: string, avatarId?: string): numbe
     const filePath = path.join(dir, fileName);
     if (!fs.existsSync(filePath)) continue;
     try {
-      const text = fs.readFileSync(filePath, { encoding: 'utf8' });
-      if (text.includes(avatarId)) {
+      const raw = fs.readFileSync(filePath);
+      const textUtf8 = raw.toString('utf8');
+      const textUtf16 = raw.toString('utf16le');
+      const hasAvatarId = textUtf8.includes(avatarId) || textUtf16.includes(avatarId);
+
+      if (hasAvatarId) {
         score += 1000;
       }
-      if (text.includes('/avatar/') || text.includes('avatar') || text.includes('avtr_')) {
+      if (
+        textUtf8.includes('/avatar/') || textUtf8.includes('avatar') || textUtf8.includes('avtr_') ||
+        textUtf16.includes('/avatar/') || textUtf16.includes('avatar') || textUtf16.includes('avtr_')
+      ) {
         score += 25;
       }
       break;
@@ -512,9 +519,17 @@ ipcMain.handle('fs:searchCacheForDataFiles', async (_e, avatarId?: string) => {
       }
     }
 
-    const ranked = foundPaths
+    let ranked = foundPaths
       .map(p => ({ path: p, score: scoreCacheBundleCandidate(p, avatarId) }))
       .sort((a, b) => b.score - a.score);
+
+    // If we found strong metadata matches for this avatar, only return those.
+    if (avatarId) {
+      const strongMatches = ranked.filter(r => r.score >= 900);
+      if (strongMatches.length > 0) {
+        ranked = strongMatches;
+      }
+    }
 
     console.log(`[SearchCache] Search complete. Scanned ${scannedDirs} dirs, found ${foundPaths.length} bundle(s)`);
     if (avatarId && ranked.length > 0) {
