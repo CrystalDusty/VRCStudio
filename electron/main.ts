@@ -14,6 +14,61 @@ let rpcConnected = false;
 let minimizeToTray = true;
 let isQuitting = false;
 
+const UNITY_BUNDLE_SIGNATURE = 'UnityFS';
+const SOURCE_ENGINE_VERSION_PREFIX = '2022.3.22f2';
+const TARGET_ENGINE_VERSION_PREFIX = '2022.3.22f1';
+
+function readNullTerminatedString(
+  buffer: Buffer,
+  offset: number,
+): { value: string; startOffset: number; endOffset: number; nextOffset: number } | null {
+  if (offset < 0 || offset >= buffer.length) return null;
+
+  const endOffset = buffer.indexOf(0, offset);
+  if (endOffset === -1) return null;
+
+  return {
+    value: buffer.toString('utf8', offset, endOffset),
+    startOffset: offset,
+    endOffset,
+    nextOffset: endOffset + 1,
+  };
+}
+
+function patchUnityFsEngineVersion(
+  bundleBytes: Buffer,
+): { patchedBytes: Buffer; patched: boolean; originalVersion?: string; patchedVersion?: string; reason?: string } {
+  const patchedBytes = Buffer.from(bundleBytes);
+
+  const signature = readNullTerminatedString(patchedBytes, 0);
+  if (!signature || signature.value !== UNITY_BUNDLE_SIGNATURE) {
+    return { patchedBytes, patched: false, reason: 'Not a UnityFS bundle' };
+  }
+
+  const formatVersion = readNullTerminatedString(patchedBytes, signature.nextOffset);
+  if (!formatVersion) return { patchedBytes, patched: false, reason: 'Missing format version in UnityFS header' };
+
+  const playerVersion = readNullTerminatedString(patchedBytes, formatVersion.nextOffset);
+  if (!playerVersion) return { patchedBytes, patched: false, reason: 'Missing player version in UnityFS header' };
+
+  const engineVersion = readNullTerminatedString(patchedBytes, playerVersion.nextOffset);
+  if (!engineVersion) return { patchedBytes, patched: false, reason: 'Missing engine version in UnityFS header' };
+
+  const originalVersion = engineVersion.value;
+  if (!originalVersion.startsWith(SOURCE_ENGINE_VERSION_PREFIX)) {
+    return { patchedBytes, patched: false, originalVersion, reason: 'Engine version does not match expected source prefix' };
+  }
+
+  const replacementBytes = Buffer.from(TARGET_ENGINE_VERSION_PREFIX, 'utf8');
+  if (replacementBytes.length > (engineVersion.endOffset - engineVersion.startOffset)) {
+    return { patchedBytes, patched: false, originalVersion, reason: 'Replacement version is longer than existing header field' };
+  }
+
+  replacementBytes.copy(patchedBytes, engineVersion.startOffset);
+  const patchedVersion = patchedBytes.toString('utf8', engineVersion.startOffset, engineVersion.endOffset);
+  return { patchedBytes, patched: true, originalVersion, patchedVersion };
+}
+
 // ─── Window ──────────────────────────────────────────────────────────────────
 
 function createWindow() {
@@ -304,9 +359,20 @@ ipcMain.handle('fs:extractBundle', async (_e, sourcePath: string, avatarId: stri
     fs.writeFileSync(path.join(guidDir, 'pathname'), pathname + '\n');
     console.log('[Bundle] Pathname:', pathname);
 
-    // Copy the asset bundle as "asset"
-    fs.copyFileSync(sourcePath, path.join(guidDir, 'asset'));
-    console.log('[Bundle] Asset copied to staging');
+    // Read entire .vrca into memory and patch Unity engine version in-memory.
+    // Only overwrite the prefix bytes and keep original suffix bytes intact
+    // so the header field length remains unchanged.
+    const originalBundleBytes = fs.readFileSync(sourcePath);
+    const patchResult = patchUnityFsEngineVersion(originalBundleBytes);
+    if (patchResult.patched) {
+      console.log('[Bundle] Engine version patched in-memory:', `${patchResult.originalVersion} -> ${patchResult.patchedVersion}`);
+    } else {
+      console.log('[Bundle] Engine version patch skipped:', patchResult.reason);
+    }
+
+    // Write patched bytes into staging asset. Source file on disk is unchanged.
+    fs.writeFileSync(path.join(guidDir, 'asset'), patchResult.patchedBytes);
+    console.log('[Bundle] Patched asset written to staging');
 
     // Write minimal Unity .meta file
     const metaContent = [
