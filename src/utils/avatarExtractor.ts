@@ -142,7 +142,8 @@ export async function downloadAvatarImage(
  * Create downloadable avatar package (metadata + images + bundle + importer)
  */
 export async function generateDownloadablePackage(
-  avatar: VRCAvatar
+  avatar: VRCAvatar,
+  cacheFilePath?: string | null
 ): Promise<{ success: boolean; files?: File[]; error?: string }> {
   try {
     const files: File[] = [];
@@ -172,30 +173,49 @@ export async function generateDownloadablePackage(
       }
     }
 
-    // 4. Try to get avatar bundle from VRChat cache - direct extraction to Downloads
-    console.log('[AvatarExtractor] Searching for avatar bundle in VRChat cache...');
-    const bundlePath = await findAvatarBundleInCache(avatar.id);
-    if (bundlePath) {
-      console.log('[AvatarExtractor] Found bundle at:', bundlePath);
+    // 4. Get avatar bundle - either from user selection or auto search
+    let bundleToUse: string | null = null;
+
+    if (cacheFilePath) {
+      console.log('[AvatarExtractor] Using user-selected cache file:', cacheFilePath);
+      bundleToUse = cacheFilePath;
+    } else {
+      console.log('[AvatarExtractor] Searching for avatar bundle in VRChat cache...');
+      bundleToUse = await findAvatarBundleInCache(avatar.id);
+    }
+
+    if (bundleToUse) {
+      console.log('[AvatarExtractor] Using bundle at:', bundleToUse);
 
       try {
         const electronAPI = (window as any).electronAPI;
 
-        // Direct extraction to Downloads - bypasses all encoding issues!
-        console.log('[AvatarExtractor] Extracting directly to Downloads folder...');
-        const extractResult = await electronAPI.extractAvatarToDownloads(bundlePath, avatar.id);
+        // Read the _data file and include it as .unitypackage in the download
+        console.log('[AvatarExtractor] Reading bundle file...');
+        const readResult = await electronAPI.readFile(bundleToUse);
 
-        if (extractResult.success) {
-          console.log('[AvatarExtractor] ✓ Bundle extracted to Downloads:', extractResult.path);
-          console.log('[AvatarExtractor] File size:', extractResult.size, 'bytes');
+        if (readResult.success && readResult.content) {
+          console.log('[AvatarExtractor] ✓ Bundle read successfully, size:', readResult.size, 'bytes');
+
+          // Convert base64 back to binary blob
+          const binaryString = atob(readResult.content);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+
+          const bundleBlob = new Blob([bytes], { type: 'application/octet-stream' });
+          files.push(new File([bundleBlob], `${avatar.id}.unitypackage`, { type: 'application/octet-stream' }));
+
+          console.log('[AvatarExtractor] ✓ Bundle added to download package');
         } else {
-          console.error('[AvatarExtractor] ✗ Extraction failed:', extractResult.error);
+          console.error('[AvatarExtractor] ✗ Failed to read bundle:', readResult.error);
         }
       } catch (bundleError) {
-        console.error('[AvatarExtractor] Error during extraction:', bundleError);
+        console.error('[AvatarExtractor] Error during bundle processing:', bundleError);
       }
     } else {
-      console.log('[AvatarExtractor] Bundle not found in cache - user will need to add it manually');
+      console.log('[AvatarExtractor] Bundle not found in cache');
     }
 
     // 5. Generate Unity importer script
@@ -259,14 +279,14 @@ export async function browseCacheFile(): Promise<{
 /**
  * Trigger browser download of extracted avatar data
  */
-export async function downloadAvatarExtract(avatar: VRCAvatar): Promise<{
+export async function downloadAvatarExtract(avatar: VRCAvatar, cacheFilePath?: string | null): Promise<{
   success: boolean;
   bundleFound?: boolean;
   error?: string;
 }> {
   try {
     // Create downloadable package
-    const packageResult = await generateDownloadablePackage(avatar);
+    const packageResult = await generateDownloadablePackage(avatar, cacheFilePath);
     if (!packageResult.success || !packageResult.files) {
       throw new Error(packageResult.error || 'Failed to generate package');
     }

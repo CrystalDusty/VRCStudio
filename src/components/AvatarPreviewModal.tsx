@@ -23,6 +23,7 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
     avatar.unityPackages?.[0]?.id || null
   );
   const [isExtracting2, setIsExtracting2] = useState(false);
+  const [selectedCacheFile, setSelectedCacheFile] = useState<string | null>(null);
 
   // Check if bundle is already downloaded
   useEffect(() => {
@@ -34,7 +35,7 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
     setError(null);
 
     try {
-      const result = await downloadAvatarExtract(avatar);
+      const result = await downloadAvatarExtract(avatar, selectedCacheFile);
       if (result.success) {
         if (!result.bundleFound) {
           setError(result.error || 'Bundle not found in VRChat cache - download still completed with metadata and images');
@@ -150,34 +151,21 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
   };
 
   const handleBrowseCache = async () => {
-    setIsExtracting2(true);
     setError(null);
 
     try {
       const browseResult = await browseCacheFile();
       if (!browseResult.success || !browseResult.path) {
         setError(browseResult.error || 'No file selected');
-        setIsExtracting2(false);
         return;
       }
 
-      console.log('[AvatarPreview] User selected file:', browseResult.path);
-
-      // Extract the selected file to Downloads
-      const electronAPI = (window as any).electronAPI;
-      const extractResult = await electronAPI.extractAvatarToDownloads(browseResult.path, avatar.id);
-
-      if (extractResult.success) {
-        setError(null);
-        console.log('[AvatarPreview] Successfully extracted bundle to:', extractResult.path);
-      } else {
-        setError(extractResult.error || 'Failed to extract bundle');
-      }
+      console.log('[AvatarPreview] User selected cache file:', browseResult.path);
+      setSelectedCacheFile(browseResult.path);
+      setError(null);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error';
       setError(`Browse failed: ${errorMsg}`);
-    } finally {
-      setIsExtracting2(false);
     }
   };
 
@@ -377,12 +365,20 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
             <button
               onClick={handleBrowseCache}
               disabled={isExtracting2}
-              className="btn-secondary w-full text-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Manually select _data file from VRChat cache"
+              className={`w-full text-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed ${
+                selectedCacheFile
+                  ? 'btn-success'
+                  : 'btn-secondary'
+              }`}
+              title={selectedCacheFile ? `Cache file selected: ${selectedCacheFile}` : "Manually select _data file from VRChat cache"}
             >
               {isExtracting2 ? (
                 <>
                   <Loader size={14} className="animate-spin" /> Processing...
+                </>
+              ) : selectedCacheFile ? (
+                <>
+                  <Check size={14} /> Cache File Selected
                 </>
               ) : (
                 <>
