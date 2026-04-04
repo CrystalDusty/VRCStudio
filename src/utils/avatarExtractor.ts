@@ -198,6 +198,7 @@ export async function generateDownloadablePackage(
           console.log('[AvatarExtractor] ✓ Bundle read successfully, size:', readResult.size, 'bytes');
 
           // Convert base64 back to binary blob
+          // The Electron main process already handles gzip decompression
           const binaryString = atob(readResult.content);
           const bytes = new Uint8Array(binaryString.length);
           for (let i = 0; i < binaryString.length; i++) {

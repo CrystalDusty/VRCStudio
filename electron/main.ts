@@ -158,10 +158,24 @@ ipcMain.handle('settings:setMinimizeToTray', (_e, value: boolean) => {
 ipcMain.handle('shell:openExternal', (_e, url: string) => shell.openExternal(url));
 
 // File system
-ipcMain.handle('fs:readFile', async (_e, filePath: string) => {
+ipcMain.handle('fs:readFile', async (_e, filePath: string, autoDecompress: boolean = true) => {
   try {
     // Read as binary data (Buffer), then convert to base64 for transfer
-    const buffer = fs.readFileSync(filePath);
+    let buffer = fs.readFileSync(filePath);
+
+    // Check if the file is gzip-compressed and decompress if requested
+    if (autoDecompress && buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b) {
+      console.log(`[ReadFile] File is gzip-compressed, decompressing...`);
+      const zlib = require('zlib');
+      try {
+        buffer = zlib.gunzipSync(buffer);
+        console.log(`[ReadFile] ✓ Decompressed to ${buffer.length} bytes`);
+      } catch (decompressErr: any) {
+        console.error(`[ReadFile] Failed to decompress:`, decompressErr.message);
+        // If decompression fails, return the original compressed data
+      }
+    }
+
     const base64Data = buffer.toString('base64');
     console.log(`[ReadFile] Read ${buffer.length} bytes from ${filePath}`);
     return { success: true, content: base64Data, size: buffer.length };
@@ -190,21 +204,43 @@ ipcMain.handle('fs:extractAvatarToDownloads', async (_e, cacheDataPath: string, 
 
     console.log(`[ExtractToDownloads] Copying to: ${outputPath}`);
 
-    // Direct binary copy - no encoding/decoding
-    fs.copyFileSync(cacheDataPath, outputPath);
+    // Read the file to check if it's gzip-compressed
+    const buffer = fs.readFileSync(cacheDataPath);
 
-    const outputStats = fs.statSync(outputPath);
-    console.log(`[ExtractToDownloads] ✓ File copied successfully (${outputStats.size} bytes)`);
+    // Check for gzip magic bytes (1f 8b)
+    const isGzipped = buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b;
+    console.log(`[ExtractToDownloads] File is ${isGzipped ? 'gzip-compressed' : 'not compressed'}`);
 
-    if (outputStats.size === 0) {
-      throw new Error('Output file is empty - copy may have failed');
+    if (isGzipped) {
+      // Decompress the gzip file
+      console.log(`[ExtractToDownloads] Decompressing gzip data...`);
+      const zlib = require('zlib');
+      const decompressed = zlib.gunzipSync(buffer);
+
+      // Save decompressed file as .unitypackage
+      fs.writeFileSync(outputPath, decompressed);
+
+      const outputStats = fs.statSync(outputPath);
+      console.log(`[ExtractToDownloads] ✓ File decompressed and saved (${outputStats.size} bytes)`);
+
+      return { success: true, path: outputPath, size: outputStats.size };
+    } else {
+      // No compression - copy directly
+      fs.copyFileSync(cacheDataPath, outputPath);
+
+      const outputStats = fs.statSync(outputPath);
+      console.log(`[ExtractToDownloads] ✓ File copied successfully (${outputStats.size} bytes)`);
+
+      if (outputStats.size === 0) {
+        throw new Error('Output file is empty - copy may have failed');
+      }
+
+      if (outputStats.size !== cacheStats.size) {
+        console.warn(`[ExtractToDownloads] ⚠ Size mismatch: ${cacheStats.size} → ${outputStats.size}`);
+      }
+
+      return { success: true, path: outputPath, size: outputStats.size };
     }
-
-    if (outputStats.size !== cacheStats.size) {
-      console.warn(`[ExtractToDownloads] ⚠ Size mismatch: ${cacheStats.size} → ${outputStats.size}`);
-    }
-
-    return { success: true, path: outputPath, size: outputStats.size };
   } catch (err: any) {
     console.error(`[ExtractToDownloads] ✗ Failed:`, err.message);
     return { success: false, error: err.message };
