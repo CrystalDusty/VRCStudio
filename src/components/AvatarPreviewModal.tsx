@@ -116,7 +116,7 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
               avatar.id,
               avatar.name,
               selectedPackage.platform,
-              result.path,
+              extractResult.extractedPath,
               0,
               selectedPackage.unityVersion,
               selectedPackageId
@@ -127,7 +127,7 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
           setError(null);
           console.log(`[AvatarPreview] Successfully downloaded and extracted`);
         } else {
-          setError(extractResult.error || 'Failed to extract bundle');
+          setError(extractResult.error || 'Failed to create .unitypackage');
         }
 
         setIsExtracting(false);
@@ -287,7 +287,7 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
           {(isDownloading || isExtracting) && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs text-surface-400">
-                <span>{isExtracting ? 'Extracting...' : 'Downloading...'}</span>
+                <span>{isExtracting ? 'Creating .unitypackage...' : 'Downloading...'}</span>
                 {!isExtracting && <span>{downloadProgress}%</span>}
               </div>
               <div className="w-full bg-surface-800 rounded-full h-2 overflow-hidden">

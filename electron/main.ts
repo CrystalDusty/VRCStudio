@@ -6,6 +6,7 @@ import path from 'path';
 import fs from 'fs';
 import https from 'https';
 import tar from 'tar';
+import crypto from 'crypto';
 import { promisify } from 'util';
 
 // Initialize logging EARLY - use a simpler path
@@ -276,14 +277,31 @@ ipcMain.handle('fs:extractAvatarToDownloads', async (_e, cacheDataPath: string, 
       logDiagnostic(`⚠ Unknown format, treating as raw data`);
     }
 
-    // Get Downloads folder and save file
+    // Get Downloads folder
     const downloadsPath = app.getPath('downloads');
     const outputPath = path.join(downloadsPath, `${avatarId}.unitypackage`);
 
-    logDiagnostic(`Writing to: ${outputPath}`);
+    if (detectedFormat === 'GZIP_COMPRESSED' || detectedFormat === 'ZIP_UNITYPACKAGE') {
+      // Already a valid archive format - save as-is
+      logDiagnostic(`File is already an archive (${detectedFormat}), saving directly`);
+      fs.writeFileSync(outputPath, buffer);
+    } else {
+      // Raw UnityFS bundle or unknown - wrap in proper .unitypackage (tar.gz)
+      logDiagnostic(`Wrapping raw bundle in .unitypackage tar.gz format...`);
 
-    // Write file
-    fs.writeFileSync(outputPath, buffer);
+      // Save raw bundle to a temp file first
+      const tempRawPath = path.join(downloadsPath, `${avatarId}-raw.tmp`);
+      fs.writeFileSync(tempRawPath, buffer);
+
+      try {
+        await createUnityPackage(tempRawPath, avatarId, outputPath);
+      } finally {
+        // Clean up temp file
+        if (fs.existsSync(tempRawPath)) {
+          fs.unlinkSync(tempRawPath);
+        }
+      }
+    }
 
     // Verify
     if (!fs.existsSync(outputPath)) {
@@ -291,11 +309,7 @@ ipcMain.handle('fs:extractAvatarToDownloads', async (_e, cacheDataPath: string, 
     }
 
     const outputStats = fs.statSync(outputPath);
-    logDiagnostic(`✓ File written: ${outputStats.size} bytes`);
-
-    if (outputStats.size !== buffer.length) {
-      logDiagnostic(`⚠ WARNING: Size mismatch! Expected: ${buffer.length}, Got: ${outputStats.size}`);
-    }
+    logDiagnostic(`✓ .unitypackage created: ${outputStats.size} bytes`);
 
     logDiagnostic(`Format detected: ${detectedFormat}`);
     logDiagnostic(`========== EXTRACTION SUCCESS ==========\n`);
@@ -797,6 +811,59 @@ ipcMain.handle('fs:downloadFileNative', async (event, url: string, avatarId: str
   });
 });
 
+/**
+ * Create a valid .unitypackage (tar.gz) from a raw AssetBundle file.
+ * A .unitypackage is a tar.gz containing: <GUID>/asset, <GUID>/pathname, <GUID>/asset.meta
+ */
+async function createUnityPackage(sourcePath: string, avatarId: string, outputPath: string): Promise<void> {
+  const guid = crypto.randomBytes(16).toString('hex');
+  const stagingDir = path.join(path.dirname(outputPath), `staging-${Date.now()}`);
+  const guidDir = path.join(stagingDir, guid);
+
+  try {
+    // Create staging structure
+    fs.mkdirSync(guidDir, { recursive: true });
+    logDiagnostic(`[UnityPackage] Staging dir: ${guidDir}`);
+
+    // Write pathname file (tells Unity where to place the asset)
+    const pathname = `Assets/Avatar/${avatarId}.vrca`;
+    fs.writeFileSync(path.join(guidDir, 'pathname'), pathname + '\n');
+    logDiagnostic(`[UnityPackage] Pathname: ${pathname}`);
+
+    // Copy the raw bundle as "asset"
+    fs.copyFileSync(sourcePath, path.join(guidDir, 'asset'));
+    const assetSize = fs.statSync(path.join(guidDir, 'asset')).size;
+    logDiagnostic(`[UnityPackage] Asset copied: ${assetSize} bytes`);
+
+    // Write minimal Unity .meta file
+    const metaContent = [
+      'fileFormatVersion: 2',
+      `guid: ${guid}`,
+      'NativeFormatImporter:',
+      '  userData:',
+      '  assetBundleName:',
+      '  assetBundleVariant:',
+      '',
+    ].join('\n');
+    fs.writeFileSync(path.join(guidDir, 'asset.meta'), metaContent);
+
+    // Create tar.gz archive
+    await tar.create(
+      { gzip: true, file: outputPath, cwd: stagingDir },
+      [guid],
+    );
+
+    const outputSize = fs.statSync(outputPath).size;
+    logDiagnostic(`[UnityPackage] Created: ${outputPath} (${outputSize} bytes)`);
+  } finally {
+    // Clean up staging directory
+    if (fs.existsSync(stagingDir)) {
+      fs.rmSync(stagingDir, { recursive: true, force: true });
+      logDiagnostic(`[UnityPackage] Staging cleaned up`);
+    }
+  }
+}
+
 // Detect file format by reading magic bytes (file signature)
 function detectFileFormat(filePath: string): string {
   try {
@@ -854,141 +921,36 @@ ipcMain.handle('fs:extractBundle', async (_e, sourcePath: string, avatarId: stri
     // Detect actual file format
     const detectedFormat = detectFileFormat(sourcePath);
     console.log(`[Bundle] Detected format: ${detectedFormat}, File size: ${stats.size} bytes`);
+    logDiagnostic(`[ExtractBundle] Format: ${detectedFormat}, Size: ${stats.size} bytes`);
 
-    const extractDir = path.join(app.getPath('userData'), 'AvatarBundles', avatarId, 'extracted');
-    if (fs.existsSync(extractDir)) {
-      fs.rmSync(extractDir, { recursive: true, force: true });
-    }
-    fs.mkdirSync(extractDir, { recursive: true });
+    const bundleDir = path.join(app.getPath('userData'), 'AvatarBundles', avatarId);
+    fs.mkdirSync(bundleDir, { recursive: true });
 
-    let extractionSuccess = false;
-    let lastError: Error | null = null;
+    // Create a proper .unitypackage (tar.gz with GUID structure)
+    const outputPath = path.join(bundleDir, `${avatarId}.unitypackage`);
 
-    // Try different extraction methods based on detected format
-    if (detectedFormat.includes('ZIP')) {
-      try {
-        console.log('[Bundle] Attempting ZIP extraction...');
-        const AdmZip = await import('adm-zip').then(m => m.default);
-        const zip = new AdmZip(sourcePath);
-        zip.extractAllTo(extractDir, true);
-        extractionSuccess = true;
-        console.log('[Bundle] ZIP extraction successful');
-      } catch (zipError) {
-        lastError = zipError instanceof Error ? zipError : new Error(String(zipError));
-        console.log('[Bundle] ZIP extraction failed:', lastError.message);
-      }
+    if (detectedFormat.includes('TAR.GZ') || detectedFormat.includes('GZIP')) {
+      // Already looks like a valid tar.gz - could be a real .unitypackage, save as-is
+      console.log('[Bundle] File is already gzip/tar.gz, saving directly as .unitypackage');
+      logDiagnostic('[ExtractBundle] Already tar.gz, copying directly');
+      fs.copyFileSync(sourcePath, outputPath);
+    } else {
+      // Raw UnityFS bundle, ZIP, or unknown - wrap in proper .unitypackage
+      console.log('[Bundle] Wrapping raw bundle in .unitypackage tar.gz format...');
+      logDiagnostic('[ExtractBundle] Creating .unitypackage from raw bundle');
+      await createUnityPackage(sourcePath, avatarId, outputPath);
     }
 
-    // Try TAR.GZ extraction
-    if (!extractionSuccess && (detectedFormat.includes('TAR.GZ') || detectedFormat.includes('GZIP'))) {
-      try {
-        console.log('[Bundle] Attempting TAR.GZ extraction...');
-        await tar.x({
-          file: sourcePath,
-          cwd: extractDir,
-          gzip: true,
-          strip: 1,
-        });
-        extractionSuccess = true;
-        console.log('[Bundle] TAR.GZ extraction successful');
-      } catch (tarError) {
-        lastError = tarError instanceof Error ? tarError : new Error(String(tarError));
-        console.log('[Bundle] TAR.GZ extraction failed:', lastError.message);
-      }
-    }
+    const outputSize = fs.statSync(outputPath).size;
+    console.log(`[Bundle] .unitypackage created: ${outputPath} (${outputSize} bytes)`);
+    logDiagnostic(`[ExtractBundle] Success: ${outputPath} (${outputSize} bytes)`);
 
-    // Try plain TAR extraction
-    if (!extractionSuccess && detectedFormat.includes('TAR')) {
-      try {
-        console.log('[Bundle] Attempting TAR extraction...');
-        await tar.x({
-          file: sourcePath,
-          cwd: extractDir,
-          strip: 1,
-        });
-        extractionSuccess = true;
-        console.log('[Bundle] TAR extraction successful');
-      } catch (tarError) {
-        lastError = tarError instanceof Error ? tarError : new Error(String(tarError));
-        console.log('[Bundle] TAR extraction failed:', lastError.message);
-      }
-    }
-
-    // If detected format failed, try all formats as fallback
-    if (!extractionSuccess) {
-      console.log('[Bundle] Trying all extraction methods as fallback...');
-
-      // Try TAR without gzip
-      try {
-        console.log('[Bundle] Fallback: Attempting TAR extraction...');
-        await tar.x({
-          file: sourcePath,
-          cwd: extractDir,
-          strict: false, // Be lenient with TAR format
-        });
-        extractionSuccess = true;
-        console.log('[Bundle] Fallback TAR extraction successful');
-      } catch (e) {
-        console.log('[Bundle] Fallback TAR failed');
-      }
-
-      // Try TAR with gzip
-      if (!extractionSuccess) {
-        try {
-          console.log('[Bundle] Fallback: Attempting TAR.GZ extraction...');
-          await tar.x({
-            file: sourcePath,
-            cwd: extractDir,
-            gzip: true,
-            strict: false,
-          });
-          extractionSuccess = true;
-          console.log('[Bundle] Fallback TAR.GZ extraction successful');
-        } catch (e) {
-          console.log('[Bundle] Fallback TAR.GZ failed');
-        }
-      }
-
-      // Try ZIP as last resort
-      if (!extractionSuccess) {
-        try {
-          console.log('[Bundle] Fallback: Attempting ZIP extraction...');
-          const AdmZip = await import('adm-zip').then(m => m.default);
-          const zip = new AdmZip(sourcePath);
-          zip.extractAllTo(extractDir, true);
-          extractionSuccess = true;
-          console.log('[Bundle] Fallback ZIP extraction successful');
-        } catch (e) {
-          console.log('[Bundle] Fallback ZIP failed');
-        }
-      }
-    }
-
-    // Check if extraction was successful
-    if (!extractionSuccess) {
-      const errorMsg = lastError?.message || 'Unknown extraction error';
-      throw new Error(
-        `Failed to extract bundle: Could not extract file. ` +
-        `Detected format: ${detectedFormat}. ` +
-        `File size: ${stats.size} bytes. ` +
-        `Error: ${errorMsg}`
-      );
-    }
-
-    // Verify extraction was successful
-    const extractedFiles = fs.readdirSync(extractDir);
-    if (extractedFiles.length === 0) {
-      throw new Error(
-        'Bundle extracted but no files found. The bundle may be corrupted or in an unexpected format.'
-      );
-    }
-
-    console.log(`[Bundle] Extraction complete. Extracted ${extractedFiles.length} items.`);
-    return extractDir;
+    return outputPath;
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-    console.error('[Bundle] Extraction error:', errorMsg);
-    throw new Error(`Failed to extract bundle: ${errorMsg}`);
+    console.error('[Bundle] Error:', errorMsg);
+    logDiagnostic(`[ExtractBundle] FAILED: ${errorMsg}`);
+    throw new Error(`Failed to create .unitypackage: ${errorMsg}`);
   }
 });
 
@@ -999,9 +961,15 @@ ipcMain.handle('fs:openBundleFolder', async (_e, folderPath: string) => {
 
   try {
     if (!fs.existsSync(folderPath)) {
-      throw new Error('Folder does not exist');
+      throw new Error('Path does not exist');
     }
-    shell.openPath(folderPath);
+    const stat = fs.statSync(folderPath);
+    if (stat.isFile()) {
+      // Open Explorer with the file selected
+      shell.showItemInFolder(folderPath);
+    } else {
+      shell.openPath(folderPath);
+    }
   } catch (error) {
     throw new Error(`Failed to open folder: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
