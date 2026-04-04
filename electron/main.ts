@@ -6,6 +6,7 @@ import path from 'path';
 import fs from 'fs';
 import https from 'https';
 import tar from 'tar';
+import { promisify } from 'util';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -233,40 +234,11 @@ ipcMain.handle('fs:extractAvatarToDownloads', async (_e, cacheDataPath: string, 
     let outputPath: string;
     let finalBuffer = buffer;
 
-    // Handle based on format
-    if (isGzipped) {
-      console.log(`[ExtractToDownloads] Attempting to decompress GZIP...`);
-      const zlib = require('zlib');
-      try {
-        const decompressed = zlib.gunzipSync(buffer);
-        console.log(`[ExtractToDownloads] ✓ GZIP decompression successful!`);
-        console.log(`[ExtractToDownloads] Decompressed size: ${decompressed.length} bytes`);
-
-        // Check decompressed format
-        const decompHeader = decompressed.slice(0, 6).toString('utf8', 0, 6);
-        if (decompHeader === 'UnityFS') {
-          console.log(`[ExtractToDownloads] ✓ Decompressed to UnityFS bundle`);
-          outputPath = path.join(downloadsPath, `${avatarId}.unitypackage`);
-          finalBuffer = decompressed;
-        } else {
-          console.log(`[ExtractToDownloads] Decompressed data format: ${decompHeader || 'binary'}`);
-          outputPath = path.join(downloadsPath, `${avatarId}.unitypackage`);
-          finalBuffer = decompressed;
-        }
-      } catch (err: any) {
-        console.error(`[ExtractToDownloads] ✗ GZIP decompression failed:`, err.message);
-        outputPath = path.join(downloadsPath, `${avatarId}.bundle`);
-        finalBuffer = buffer;
-      }
-    } else if (isUnityBundle) {
-      console.log(`[ExtractToDownloads] Using Unity Bundle directly (no decompression needed)`);
-      outputPath = path.join(downloadsPath, `${avatarId}.unitypackage`);
-      finalBuffer = buffer;
-    } else {
-      console.log(`[ExtractToDownloads] Saving as raw bundle data`);
-      outputPath = path.join(downloadsPath, `${avatarId}.bundle`);
-      finalBuffer = buffer;
-    }
+    // Save as .bundle - let Unity import it as an AssetBundle
+    // Don't try to force .unitypackage format as it's causing import errors
+    console.log(`[ExtractToDownloads] Saving as Unity AssetBundle (.bundle)`);
+    outputPath = path.join(downloadsPath, `${avatarId}.bundle`);
+    finalBuffer = buffer;
 
     console.log(`[ExtractToDownloads] Target: ${outputPath}`);
 

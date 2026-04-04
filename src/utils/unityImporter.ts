@@ -227,95 +227,107 @@ export function generateReadme(avatarName: string, avatarId: string, authorName:
 - \`metadata.json\` - Avatar information and package metadata
 - \`${avatarId}-image.png\` - Full avatar image
 - \`${avatarId}-thumbnail.png\` - Avatar thumbnail
-- \`${avatarId}.unitypackage\` - Avatar bundle (may need to be added manually)
-- \`Editor/\` - Unity importer scripts
+- \`${avatarId}.bundle\` - Unity AssetBundle (the avatar data)
+- \`Editor/\` - Unity editor scripts
 - \`README.md\` - This file
 
-## ⚠️ IMPORTANT: If .unitypackage is Missing
+## How to Import the Avatar Bundle into Unity
 
-If the \`.unitypackage\` file was NOT included in your download:
+The \`.bundle\` file is a Unity AssetBundle extracted directly from VRChat's cache.
 
-1. **Check VRChat Cache Manually:**
-   - Open File Explorer
-   - Go to: \`C:\\Users\\[YourUsername]\\AppData\\LocalLow\\VRChat\\VRChat\\Cache-WebGL\`
-   - Look for files containing the avatar ID or \`file_\`
-   - Copy any \`.unitypackage\` files to this folder
+### Method 1: Direct Drag & Drop (Easiest)
 
-2. **Or Download from VRChat:**
-   - Load the avatar in VRChat once
-   - VRChat will cache it locally
-   - VRC Studio can then extract it
+1. Copy the \`${avatarId}.bundle\` file
+2. Drag it directly into your Unity **Assets** folder
+3. Unity will automatically import it as an AssetBundle
+4. Find the bundle in your Project window and use it
 
-3. **Once You Have the Bundle:**
-   - Place the \`.unitypackage\` file in this folder
-   - Use the Unity importer (see below)
+### Method 2: Using the Editor Script
 
-## How to Import into Unity
+1. Copy this entire folder to your Unity project's **Assets** folder
+2. In Unity, go to: **VRChat > VRC Studio > Import ${avatarName}**
+3. Click **Select Bundle File** and choose the \`.bundle\` file
+4. Click **Import Bundle**
+5. Avatar files extract to: \`Assets/VRCStudio/Avatars/${avatarId}/\`
 
-### Option 1: Using the Importer Script (Recommended)
+### Method 3: Manual Asset Import
 
-1. Copy this entire folder to your Unity project: \`Assets/YourFolder/\`
-2. Wait for Unity to reimport files
-3. In Unity Editor, go to: **VRChat > VRC Studio > Import ${avatarName}**
-4. Click **Select Bundle File** and choose the \`.unitypackage\`
-5. Click **Import Bundle**
-6. Avatar extracts to: \`Assets/VRCStudio/Avatars/${avatarId}/\`
+1. In Unity, right-click in **Project > Import New Asset**
+2. Select the \`.bundle\` file
+3. Adjust import settings if needed
+4. Click **Import**
 
-### Option 2: Manual Unity Import
+## Using the Avatar in Your Scene
 
-1. Have the \`.unitypackage\` file ready
-2. In Unity, double-click the \`.unitypackage\` file
-3. Review what will be imported
-4. Click **Import** to bring files into project
+Once imported, the bundle contains the avatar prefab and all assets:
 
-### Option 3: Direct File Extraction
+1. Find the avatar prefab in your Project hierarchy
+2. Drag it into your Scene
+3. Configure materials, animations, and scripts as needed
+4. Check \`metadata.json\` for platform-specific requirements
 
-1. Right-click \`.unitypackage\` → Extract with 7-Zip or WinRAR
-2. Copy extracted folder contents into \`Assets/YourFolder/\`
-3. Unity auto-reimports
+## Bundle Specifications
+
+Check \`metadata.json\` for:
+- **Platform**: standalonewindows, quest, android, etc.
+- **Unity Version**: Required version to use this avatar
+- **Author**: Creator information
+- **Description**: Avatar details
 
 ## Troubleshooting
 
-**"Bundle file not found" error:**
-- Verify the \`.unitypackage\` is in the same folder as the CS scripts
-- Check that the file isn't corrupted (should be > 100 MB typically)
-- See "If .unitypackage is Missing" section above
+**Bundle won't import:**
+- Verify the file isn't corrupted (should be ~100+ MB)
+- Check you're using the correct Unity version
+- Check the Editor console for errors
 
-**Import fails / Avatar incomplete:**
-- Check Unity version in \`metadata.json\` matches your project
-- Ensure you have VRC SDK installed
-- Check that all folders/files imported successfully
+**Avatar looks broken:**
+- Verify all textures imported with the bundle
+- Check that materials are assigned
+- Inspect the avatar prefab hierarchy
+- Look for missing script references
 
-**Avatar looks wrong in scene:**
-- Check textures are assigned to materials
-- Verify all prefabs imported
-- Look for missing script references in Console
-- Check avatar author's documentation
+**Performance issues:**
+- Check if textures are too high resolution
+- Reduce shadow resolution
+- Check poly count in Scene settings
 
-## Understanding Your Package
+## Common Issues & Solutions
 
-\`\`\`
-metadata.json contains:
-- avatarId, avatarName, authorName
-- Platform: standalonewindows, quest, android, etc.
-- Required Unity version
-- unityPackageUrl (download link)
-\`\`\`
+| Issue | Solution |
+|-------|----------|
+| "File not found" | Ensure .bundle file is in the same folder |
+| "Can't import" | Try dragging directly into Assets folder |
+| Broken textures | Right-click bundle > Reimport |
+| Missing animations | Check avatar prefab in Project folder |
 
-Use this info to ensure your project matches requirements.
+## Understanding the Bundle Format
+
+The \`.bundle\` file is a Unity native AssetBundle format that contains:
+- The avatar prefab/model
+- All textures and materials
+- All animations and scripts
+- Any other avatar-specific assets
+
+Unlike .unitypackage (which is ZIP), bundles are more compact and efficient.
 
 ## Next Steps
 
-1. ✓ Extract this package
-2. ✓ Get the \`.unitypackage\` file (manually if needed)
-3. ✓ Copy both to Unity project
-4. ✓ Run the importer script
-5. ✓ Drag avatar into your scene
-6. ✓ Configure and customize
+1. ✓ Extract this package to your project
+2. ✓ Import the .bundle file into Unity
+3. ✓ Drag the avatar prefab into your scene
+4. ✓ Customize as needed for your project
+
+## Need Help?
+
+- Check the metadata.json for avatar specifications
+- See the included EditorSetup.cs for additional options
+- For VRC-specific issues, consult the VRC SDK documentation
 
 ---
 
 Generated by VRC Studio
+Bundle extracted from VRChat Cache
 For questions: Check metadata.json for package details
 `;
 }
