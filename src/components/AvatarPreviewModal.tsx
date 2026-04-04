@@ -24,6 +24,7 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
   );
   const [isExtracting2, setIsExtracting2] = useState(false);
   const [selectedCacheFile, setSelectedCacheFile] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Check if bundle is already downloaded
   useEffect(() => {
@@ -33,40 +34,40 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
   const handleExtractAvatar = async () => {
     setIsExtracting2(true);
     setError(null);
+    setSuccessMessage(null);
 
     try {
       const electronAPI = (window as any).electronAPI;
+      let cacheFile = selectedCacheFile;
 
-      if (selectedCacheFile) {
-        // Use main process to create a proper .unitypackage from the cache file
-        console.log('[AvatarPreview] Creating .unitypackage via main process from:', selectedCacheFile);
-        const result = await electronAPI.extractAvatarToDownloads(selectedCacheFile, avatar.id);
-
-        if (result.success) {
-          setError(null);
-          console.log('[AvatarPreview] .unitypackage saved to:', result.path);
-        } else {
-          setError(result.error || 'Failed to create .unitypackage');
-        }
-      } else {
-        // No cache file selected - try auto-search then extract
+      // If no cache file selected, try auto-search
+      if (!cacheFile) {
         console.log('[AvatarPreview] No cache file selected, searching cache...');
         const searchResult = await electronAPI.searchCacheForDataFiles();
 
         if (searchResult.success && searchResult.bundles && searchResult.bundles.length > 0) {
-          const bundlePath = searchResult.bundles[0];
-          console.log('[AvatarPreview] Found cache bundle:', bundlePath);
-          const result = await electronAPI.extractAvatarToDownloads(bundlePath, avatar.id);
-
-          if (result.success) {
-            setError(null);
-            console.log('[AvatarPreview] .unitypackage saved to:', result.path);
-          } else {
-            setError(result.error || 'Failed to create .unitypackage');
-          }
+          cacheFile = searchResult.bundles[0];
+          console.log('[AvatarPreview] Found cache bundle:', cacheFile);
         } else {
           setError('No avatar bundle found in VRChat cache. Use "Browse Cache File" to select one manually.');
+          return;
         }
+      }
+
+      console.log('[AvatarPreview] Creating .unitypackage from:', cacheFile);
+      const result = await electronAPI.extractAvatarToDownloads(cacheFile, avatar.id);
+
+      if (result.success) {
+        setError(null);
+        setSuccessMessage(`Saved to Downloads: ${avatar.id}.unitypackage`);
+        console.log('[AvatarPreview] .unitypackage saved to:', result.path);
+
+        // Open the file in Explorer so user can see it
+        try {
+          await electronAPI.openBundleFolder(result.path);
+        } catch { /* non-critical */ }
+      } else {
+        setError(result.error || 'Failed to create .unitypackage');
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error';
@@ -311,6 +312,14 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
                     </span>
                   ))}
               </div>
+            </div>
+          )}
+
+          {/* Success message */}
+          {successMessage && (
+            <div className="flex gap-2 p-3 bg-green-500/10 border border-green-500/30 rounded-lg text-xs text-green-400">
+              <Check size={14} className="flex-shrink-0 mt-0.5" />
+              <span>{successMessage}</span>
             </div>
           )}
 
