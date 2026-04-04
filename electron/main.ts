@@ -959,6 +959,14 @@ public class VRCStudioBundleLoader : EditorWindow
     /// </summary>
     static AssetBundle LoadBundleWithVersionPatch(string bundlePath)
     {
+        // Fast path: attempt unmodified load first
+        AssetBundle directBundle = AssetBundle.LoadFromFile(bundlePath);
+        if (directBundle != null)
+        {
+            Debug.Log("[VRC Studio] Bundle loaded directly without patch.");
+            return directBundle;
+        }
+
         byte[] data = File.ReadAllBytes(bundlePath);
         Debug.Log("[VRC Studio] Read " + data.Length + " bytes from: " + bundlePath);
 
@@ -989,26 +997,78 @@ public class VRCStudioBundleLoader : EditorWindow
         Debug.Log("[VRC Studio] Original bundle version: " + originalVersion);
         Debug.Log("[VRC Studio] Your Unity version: " + Application.unityVersion);
 
-        // Patch: overwrite the engine version with our editor's version
-        // Must use EXACT same byte length to keep all offsets intact
-        string patchVersion = Application.unityVersion;
+        // VRChat bundles often report 2022.3.22f2-* while Creator Companion supports 2022.3.22f1.
+        // Force that exact base version and preserve any custom suffix (e.g. "-DWR")
+        // so header length/structure remains stable.
+        string patchBaseVersion = "2022.3.22f1";
+        string patchVersion = patchBaseVersion;
+        int dashIndex = originalVersion.IndexOf('-');
+        if (dashIndex >= 0 && dashIndex < originalVersion.Length - 1)
+        {
+            patchVersion = patchBaseVersion + originalVersion.Substring(dashIndex);
+        }
 
-        // Pad or truncate to exact same length
-        byte[] patchBytes = new byte[versionFieldLen];
+        Debug.Log("[VRC Studio] Target patch version: " + patchVersion);
+
+        // Overwrite only the START of the engine version and leave any remaining
+        // original suffix bytes intact. Never write null padding here.
         byte[] verBytes = Encoding.UTF8.GetBytes(patchVersion);
-
-        // Copy as many bytes as fit, rest stays as 0x00
         int copyLen = System.Math.Min(verBytes.Length, versionFieldLen);
-        System.Array.Copy(verBytes, 0, patchBytes, 0, copyLen);
-
-        // Write patch into data
-        System.Array.Copy(patchBytes, 0, data, engineVerStart, versionFieldLen);
+        System.Array.Copy(verBytes, 0, data, engineVerStart, copyLen);
 
         string patchedVersion = Encoding.UTF8.GetString(data, engineVerStart, versionFieldLen).TrimEnd('\\0');
         Debug.Log("[VRC Studio] Patched version: " + patchedVersion);
 
-        // Load from patched memory
+        // Also patch any additional exact header/version occurrences we can find
+        // without changing total byte lengths.
+        if (!string.IsNullOrEmpty(originalVersion) && originalVersion != patchVersion)
+        {
+            byte[] originalBytes = Encoding.UTF8.GetBytes(originalVersion);
+            int maxReplacements = 8;
+            int replacements = 0;
+            for (int i = 0; i <= data.Length - originalBytes.Length && replacements < maxReplacements; i++)
+            {
+                bool match = true;
+                for (int j = 0; j < originalBytes.Length; j++)
+                {
+                    if (data[i + j] != originalBytes[j])
+                    {
+                        match = false;
+                        break;
+                    }
+                }
+
+                if (match)
+                {
+                    int replaceLen = System.Math.Min(verBytes.Length, originalBytes.Length);
+                    System.Array.Copy(verBytes, 0, data, i, replaceLen);
+                    replacements++;
+                    i += originalBytes.Length - 1;
+                }
+            }
+            Debug.Log("[VRC Studio] Additional version string replacements: " + replacements);
+        }
+
+        // Try loading from patched memory first
         AssetBundle bundle = AssetBundle.LoadFromMemory(data);
+        if (bundle == null)
+        {
+            // Fallback: write patched bytes to a temp bundle and load from file path.
+            // Some Unity versions handle large bundles more reliably via file IO APIs.
+            try
+            {
+                string tempPath = Path.Combine(Path.GetTempPath(),
+                    "vrcstudio_patched_" + Path.GetFileName(bundlePath));
+                File.WriteAllBytes(tempPath, data);
+                Debug.Log("[VRC Studio] Memory load failed, retrying from temp file: " + tempPath);
+                bundle = AssetBundle.LoadFromFile(tempPath);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[VRC Studio] Temp file fallback failed: " + e.Message);
+            }
+        }
+
         if (bundle != null)
         {
             Debug.Log("[VRC Studio] Bundle loaded successfully with version patch!");
