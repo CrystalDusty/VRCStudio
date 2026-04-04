@@ -1001,23 +1001,18 @@ public class VRCStudioBundleLoader : EditorWindow
         // Force that exact base version and preserve any custom suffix (e.g. "-DWR")
         // so header length/structure remains stable.
         string patchBaseVersion = "2022.3.22f1";
-        string patchVersion = patchBaseVersion;
+        string targetVersion = patchBaseVersion;
         int dashIndex = originalVersion.IndexOf('-');
         if (dashIndex >= 0 && dashIndex < originalVersion.Length - 1)
         {
-            patchVersion = patchBaseVersion + originalVersion.Substring(dashIndex);
+            targetVersion = patchBaseVersion + originalVersion.Substring(dashIndex);
         }
 
-        Debug.Log("[VRC Studio] Target patch version: " + patchVersion);
+        Debug.Log("[VRC Studio] Target patch version: " + targetVersion);
 
         // Overwrite only the START of the engine version and leave any remaining
         // original suffix bytes intact. Never write null padding here.
-        // Patch: overwrite only the START of the engine version and leave any
-        // remaining original suffix bytes intact. Never write null padding here,
-        // because changing bytes to 0x00 can effectively shorten the header string
-        // Unity parses and corrupt downstream reads.
-        string patchVersion = Application.unityVersion;
-        byte[] verBytes = Encoding.UTF8.GetBytes(patchVersion);
+        byte[] verBytes = Encoding.UTF8.GetBytes(targetVersion);
         int copyLen = System.Math.Min(verBytes.Length, versionFieldLen);
         System.Array.Copy(verBytes, 0, data, engineVerStart, copyLen);
 
@@ -1026,7 +1021,7 @@ public class VRCStudioBundleLoader : EditorWindow
 
         // Also patch any additional exact header/version occurrences we can find
         // without changing total byte lengths.
-        if (!string.IsNullOrEmpty(originalVersion) && originalVersion != patchVersion)
+        if (!string.IsNullOrEmpty(originalVersion) && originalVersion != targetVersion)
         {
             byte[] originalBytes = Encoding.UTF8.GetBytes(originalVersion);
             int maxReplacements = 8;
