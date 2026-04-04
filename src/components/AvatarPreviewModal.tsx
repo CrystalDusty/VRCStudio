@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react';
-import { X, Download, Copy, Check, ExternalLink, Folder, AlertCircle, Loader } from 'lucide-react';
+import { X, Download, Copy, Check, ExternalLink, Folder, AlertCircle, Loader, Archive, FolderOpen } from 'lucide-react';
 import type { VRCAvatar } from '../types/vrchat';
-import { downloadAvatarBundle, extractAvatarBundle, openBundleFolder, isBundleDownloaded, addBundleToStore } from '../utils/avatarBundle';
+import { extractAvatarBundle, openBundleFolder, isBundleDownloaded, addBundleToStore } from '../utils/avatarBundle';
+import { downloadBundleDirectly } from '../utils/directDownload';
+import { downloadAvatarExtract, browseCacheFile } from '../utils/avatarExtractor';
+import BundleLoader from './BundleLoader';
 
 interface AvatarPreviewModalProps {
   avatar: VRCAvatar;
@@ -14,15 +17,42 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [isExtracting, setIsExtracting] = useState(false);
   const [isExtracted, setIsExtracted] = useState(false);
+  const [extractedPath, setExtractedPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(
     avatar.unityPackages?.[0]?.id || null
   );
+  const [isExtracting2, setIsExtracting2] = useState(false);
+  const [selectedCacheFile, setSelectedCacheFile] = useState<string | null>(null);
 
   // Check if bundle is already downloaded
   useEffect(() => {
     setIsExtracted(isBundleDownloaded(avatar.id));
   }, [avatar.id]);
+
+  const handleExtractAvatar = async () => {
+    setIsExtracting2(true);
+    setError(null);
+
+    try {
+      const result = await downloadAvatarExtract(avatar, selectedCacheFile);
+      if (result.success) {
+        if (!result.bundleFound) {
+          setError(result.error || 'Bundle not found in VRChat cache - download still completed with metadata and images');
+          console.warn('[AvatarPreview] Bundle not in cache:', result.error);
+        } else {
+          setError(null);
+        }
+      } else {
+        setError(result.error || 'Failed to extract avatar');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      setError(`Extraction failed: ${errorMsg}`);
+    } finally {
+      setIsExtracting2(false);
+    }
+  };
 
   const handleCopyId = () => {
     navigator.clipboard.writeText(avatar.id);
@@ -61,38 +91,52 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
     setError(null);
     setDownloadProgress(0);
 
-    const result = await downloadAvatarBundle(avatar, selectedPackageId, (current, total) => {
-      setDownloadProgress(Math.round((current / total) * 100));
-    });
+    console.log('[AvatarPreview] Starting direct download for package:', selectedPackageId);
 
-    if (result.success && result.path) {
-      // Extract the bundle
-      setIsExtracting(true);
-      const extractResult = await extractAvatarBundle(result.path, avatar.id);
-
-      if (extractResult.success) {
-        // Get bundle info for store
-        const selectedPackage = avatar.unityPackages?.find(p => p.id === selectedPackageId);
-        if (selectedPackage) {
-          addBundleToStore(
-            avatar.id,
-            avatar.name,
-            selectedPackage.platform,
-            result.path,
-            0, // We don't have the file size readily available
-            selectedPackage.unityVersion,
-            selectedPackageId
-          );
+    try {
+      // Use direct download with the URL from VRChat API
+      const result = await downloadBundleDirectly(
+        avatar,
+        selectedPackageId,
+        (current, total) => {
+          setDownloadProgress(Math.round((current / total) * 100));
         }
-        setIsExtracted(true);
-        setError(null);
-      } else {
-        setError(extractResult.error || 'Failed to extract bundle');
-      }
+      );
 
-      setIsExtracting(false);
-    } else {
-      setError(result.error || 'Failed to download bundle');
+      if (result.success && result.path) {
+        // Extract the bundle
+        setIsExtracting(true);
+        const extractResult = await extractAvatarBundle(result.path, avatar.id);
+
+        if (extractResult.success && extractResult.extractedPath) {
+          // Get bundle info for store
+          const selectedPackage = avatar.unityPackages?.find(p => p.id === selectedPackageId);
+          if (selectedPackage) {
+            addBundleToStore(
+              avatar.id,
+              avatar.name,
+              selectedPackage.platform,
+              result.path,
+              0,
+              selectedPackage.unityVersion,
+              selectedPackageId
+            );
+          }
+          setExtractedPath(extractResult.extractedPath);
+          setIsExtracted(true);
+          setError(null);
+          console.log(`[AvatarPreview] Successfully downloaded and extracted`);
+        } else {
+          setError(extractResult.error || 'Failed to extract bundle');
+        }
+
+        setIsExtracting(false);
+      } else {
+        setError(result.error || 'Failed to download bundle');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      setError(`Download error: ${errorMsg}`);
     }
 
     setIsDownloading(false);
@@ -103,6 +147,25 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
       await openBundleFolder(avatar.id);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to open folder');
+    }
+  };
+
+  const handleBrowseCache = async () => {
+    setError(null);
+
+    try {
+      const browseResult = await browseCacheFile();
+      if (!browseResult.success || !browseResult.path) {
+        setError(browseResult.error || 'No file selected');
+        return;
+      }
+
+      console.log('[AvatarPreview] User selected cache file:', browseResult.path);
+      setSelectedCacheFile(browseResult.path);
+      setError(null);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      setError(`Browse failed: ${errorMsg}`);
     }
   };
 
@@ -281,7 +344,56 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
             >
               <Download size={14} /> Download Image
             </button>
+
+            <button
+              onClick={handleExtractAvatar}
+              disabled={isExtracting2}
+              className="btn-secondary w-full text-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Extract avatar metadata and images for download"
+            >
+              {isExtracting2 ? (
+                <>
+                  <Loader size={14} className="animate-spin" /> Extracting...
+                </>
+              ) : (
+                <>
+                  <Archive size={14} /> Extract Avatar Data
+                </>
+              )}
+            </button>
+
+            <button
+              onClick={handleBrowseCache}
+              disabled={isExtracting2}
+              className={`w-full text-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed ${
+                selectedCacheFile
+                  ? 'btn-success'
+                  : 'btn-secondary'
+              }`}
+              title={selectedCacheFile ? `Cache file selected: ${selectedCacheFile}` : "Manually select _data file from VRChat cache"}
+            >
+              {isExtracting2 ? (
+                <>
+                  <Loader size={14} className="animate-spin" /> Processing...
+                </>
+              ) : selectedCacheFile ? (
+                <>
+                  <Check size={14} /> Cache File Selected
+                </>
+              ) : (
+                <>
+                  <FolderOpen size={14} /> Browse Cache File
+                </>
+              )}
+            </button>
           </div>
+
+          {/* Bundle Loader - Show after extraction */}
+          {isExtracted && extractedPath && (
+            <div className="border-t border-surface-700 pt-4 mt-4">
+              <BundleLoader bundlePath={extractedPath} avatarName={avatar.name} />
+            </div>
+          )}
         </div>
       </div>
     </div>

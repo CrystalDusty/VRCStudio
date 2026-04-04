@@ -6,12 +6,17 @@ import { useWorldStore } from '../stores/worldStore';
 import EmptyState from '../components/common/EmptyState';
 import UserAvatar from '../components/common/UserAvatar';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import AvatarPreviewModal from '../components/AvatarPreviewModal';
 import { getBestAvatarUrl } from '../utils/avatar';
+import api from '../api/vrchat';
+import type { VRCAvatar } from '../types/vrchat';
 
 type FavTab = 'friends' | 'worlds' | 'avatars';
 
 export default function FavoritesPage() {
   const [tab, setTab] = useState<FavTab>('friends');
+  const [selectedAvatar, setSelectedAvatar] = useState<VRCAvatar | null>(null);
+  const [loadingSelectedAvatar, setLoadingSelectedAvatar] = useState(false);
   const { worldFavorites, friendFavorites, avatarFavorites, isLoading, fetchAllFavorites, removeFavorite } = useFavoriteStore();
   const { getFriend } = useFriendStore();
   const { worldCache, getWorld } = useWorldStore();
@@ -19,6 +24,18 @@ export default function FavoritesPage() {
   useEffect(() => {
     fetchAllFavorites();
   }, []);
+
+  const handleAvatarClick = async (avatarId: string) => {
+    setLoadingSelectedAvatar(true);
+    try {
+      const avatar = await api.getAvatar(avatarId);
+      setSelectedAvatar(avatar);
+    } catch (error) {
+      console.error('Failed to load avatar:', error);
+    } finally {
+      setLoadingSelectedAvatar(false);
+    }
+  };
 
   return (
     <div className="max-w-5xl mx-auto space-y-4 animate-fade-in">
@@ -126,7 +143,12 @@ export default function FavoritesPage() {
             ) : (
               <div className="space-y-1">
                 {avatarFavorites.map(fav => (
-                  <div key={fav.id} className="glass-panel-solid p-3 flex items-center gap-3">
+                  <button
+                    key={fav.id}
+                    onClick={() => handleAvatarClick(fav.favoriteId)}
+                    disabled={loadingSelectedAvatar}
+                    className="w-full text-left glass-panel-solid p-3 flex items-center gap-3 hover:bg-surface-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
                     <div className="flex-1 text-sm">Avatar: {fav.favoriteId}</div>
                     <div className="flex flex-wrap gap-1">
                       {fav.tags.map(t => (
@@ -134,17 +156,27 @@ export default function FavoritesPage() {
                       ))}
                     </div>
                     <button
-                      onClick={() => removeFavorite(fav.favoriteId, 'avatar')}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeFavorite(fav.favoriteId, 'avatar');
+                      }}
                       className="btn-ghost text-red-400 hover:text-red-300"
                     >
                       <Trash2 size={14} />
                     </button>
-                  </div>
+                  </button>
                 ))}
               </div>
             )
           )}
         </>
+      )}
+
+      {selectedAvatar && (
+        <AvatarPreviewModal
+          avatar={selectedAvatar}
+          onClose={() => setSelectedAvatar(null)}
+        />
       )}
     </div>
   );

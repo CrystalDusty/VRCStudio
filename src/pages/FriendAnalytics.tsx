@@ -247,8 +247,7 @@ export default function FriendAnalyticsPage() {
                     <button
                       key={stat.user.id}
                       onClick={() => setSelectedFriendId(stat.user.id)}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-surface-800/30 transition-colors text-left border-b border-surface-800/10 last:border-0"
-                    >
+                      className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-surface-800/30 transition-colors text-left border-b border-surface-800/10 last:border-0">
                       <span className="text-xs text-surface-600 w-5 text-right tabular-nums font-semibold">
                         {i + 1}
                       </span>
@@ -417,9 +416,9 @@ export default function FriendAnalyticsPage() {
       )}
 
       {/* Friend Event Detail Panel */}
-      {selectedFriendId && (
+      {selectedFriendId && friendMap.get(selectedFriendId) && (
         <FriendEventDetail
-          friend={allFriends.find(f => f.id === selectedFriendId)!}
+          friend={friendMap.get(selectedFriendId)!}
           events={events}
           onClose={() => setSelectedFriendId(null)}
         />

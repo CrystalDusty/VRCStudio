@@ -1,4 +1,5 @@
 import { useAvatarBundleStore, AvatarBundleMetadata } from '../stores/avatarBundleStore';
+import api from '../api/vrchat';
 import type { VRCAvatar } from '../types/vrchat';
 
 // Check if running in Electron environment
@@ -7,7 +8,8 @@ const isElectron = () => {
 };
 
 /**
- * Download an avatar bundle from VRChat
+ * Download an avatar bundle from VRChat using authenticated API
+ * This fetches the file directly through the authenticated VRChat API
  */
 export async function downloadAvatarBundle(
   avatar: VRCAvatar,
@@ -22,9 +24,28 @@ export async function downloadAvatarBundle(
   }
 
   try {
-    // For now, we would need to construct the download URL from VRChat API
-    // In a real implementation, this would use the package's asset URL
-    const bundleUrl = `https://api.vrchat.cloud/file/file_${selectedPackageId}/file`;
+    // Find the selected package
+    const selectedPackage = avatar.unityPackages?.find(p => p.id === selectedPackageId);
+    if (!selectedPackage) {
+      return {
+        success: false,
+        error: 'Selected package not found',
+      };
+    }
+
+    // Try to get download URL from VRChat API
+    // First, try the direct package URL if available
+    let bundleUrl = selectedPackage.unityPackageUrl;
+
+    // If no URL from API, construct it using VRChat's file API pattern
+    if (!bundleUrl) {
+      // VRChat file API: /file/file_{fileId}/file
+      // The packageId is the fileId
+      bundleUrl = `https://api.vrchat.cloud/file/file_${selectedPackageId}/file`;
+      console.log('[Bundle] No URL from API, using constructed URL:', bundleUrl);
+    } else {
+      console.log('[Bundle] Using URL from API:', bundleUrl);
+    }
 
     const electronAPI = (window as any).electronAPI;
 
@@ -41,10 +62,12 @@ export async function downloadAvatarBundle(
     }
 
     try {
+      console.log('[Bundle] Starting download from:', bundleUrl);
       const bundlePath = await electronAPI.downloadFile(bundleUrl, avatar.id);
 
       if (unsubscribe) unsubscribe();
 
+      console.log('[Bundle] Download complete:', bundlePath);
       return {
         success: true,
         path: bundlePath,
@@ -53,15 +76,18 @@ export async function downloadAvatarBundle(
       if (unsubscribe) unsubscribe();
     }
   } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Failed to download bundle';
+    console.error('[Bundle] Download error:', errorMsg);
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to download bundle',
+      error: errorMsg,
     };
   }
 }
 
 /**
  * Extract a downloaded avatar bundle
+ * Returns the path to the extracted bundle contents
  */
 export async function extractAvatarBundle(
   bundlePath: string,
@@ -76,13 +102,21 @@ export async function extractAvatarBundle(
 
   try {
     const electronAPI = (window as any).electronAPI;
-    const store = useAvatarBundleStore.getState();
+    if (!electronAPI?.extractBundle) {
+      throw new Error('Extract bundle API not available');
+    }
 
+    const store = useAvatarBundleStore.getState();
     store.setExtracting(avatarId, true);
 
+    // Extract returns the path to the extracted directory
     const extractedPath = await electronAPI.extractBundle(bundlePath, avatarId);
 
     store.setExtracting(avatarId, false);
+
+    if (!extractedPath) {
+      throw new Error('No extraction path returned from Electron');
+    }
 
     return {
       success: true,
@@ -91,9 +125,13 @@ export async function extractAvatarBundle(
   } catch (error) {
     useAvatarBundleStore.getState().setExtracting(avatarId, false);
 
+    const errorMessage = error instanceof Error
+      ? error.message
+      : 'Failed to extract bundle. Make sure the downloaded file is a valid .unitypackage';
+
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to extract bundle',
+      error: errorMessage,
     };
   }
 }

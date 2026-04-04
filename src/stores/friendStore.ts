@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import api from '../api/vrchat';
+import { savePersistentData, loadPersistentData } from '../utils/persistentStorage';
+import { logWorldVisit, logWorldExit } from '../utils/worldAnalytics';
 import type { VRCUser, FriendNote } from '../types/vrchat';
 import { useFeedStore } from './feedStore';
 
@@ -20,6 +22,7 @@ interface FriendState {
 }
 
 const NOTES_KEY = 'vrcstudio_friend_notes';
+const PERSISTENT_NOTES_KEY = 'friend_notes'; // Survives app updates
 
 function loadNotes(): Record<string, FriendNote> {
   try {
@@ -32,6 +35,14 @@ function loadNotes(): Record<string, FriendNote> {
 
 function saveNotes(notes: Record<string, FriendNote>) {
   localStorage.setItem(NOTES_KEY, JSON.stringify(notes));
+  // Also save to persistent storage (survives app updates)
+  savePersistentData(PERSISTENT_NOTES_KEY, notes)
+    .catch(e => console.warn('[FriendStore] Failed to persist notes:', e));
+}
+
+// Load from persistent storage as fallback
+async function loadPersistedNotes(): Promise<Record<string, FriendNote> | null> {
+  return loadPersistentData(PERSISTENT_NOTES_KEY);
 }
 
 export const useFriendStore = create<FriendState>((set, get) => ({
@@ -62,16 +73,27 @@ export const useFriendStore = create<FriendState>((set, get) => ({
             details: friend.statusDescription,
           });
         } else if (old.location !== friend.location && friend.location !== 'private' && friend.location) {
+          const newWorldId = friend.location.split(':')[0];
+          const oldWorldId = old.location?.split(':')[0];
+
           feed.addEvent({
             type: 'friend_location',
             userId: friend.id,
             userName: friend.displayName,
             userAvatar: friend.currentAvatarThumbnailImageUrl,
-            worldId: friend.location?.split(':')[0],
+            worldId: newWorldId,
             details: `Moved to a new instance`,
             previousValue: prevLocations[friend.id],
             newValue: friend.location,
           });
+
+          // Track world change (non-blocking)
+          if (oldWorldId && oldWorldId !== newWorldId) {
+            logWorldExit(oldWorldId)
+              .catch(e => console.warn('[Analytics] Failed to track world exit:', e));
+          }
+          logWorldVisit(newWorldId, newWorldId, Date.now())
+            .catch(e => console.warn('[Analytics] Failed to track world visit:', e));
         }
 
         if (old && old.status !== friend.status) {
