@@ -23,7 +23,7 @@ export default defineConfig(({ command }) => {
                       formats: ['cjs'],
                     },
                     rollupOptions: {
-                      external: ['electron', 'discord-rpc', 'path', 'fs', 'url', 'https', 'http'],
+                      external: ['electron', 'discord-rpc', 'path', 'fs', 'url', 'https', 'http', 'tar', 'crypto'],
                       output: {
                         entryFileNames: '[name].cjs',
                       },
