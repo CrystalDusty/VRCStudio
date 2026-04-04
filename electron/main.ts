@@ -946,11 +946,83 @@ using System.Text;
 /// VRC Studio - AssetBundle Loader
 /// Bundle was built with Unity ${bundleUnityVersion}
 ///
-/// IMPORTANT: Your Unity Editor version must match or be compatible.
-/// Your build target must be set to Windows (File > Build Settings > PC).
+/// Uses in-memory version patching to bypass Unity's strict version check.
+/// VRChat builds bundles with a custom Unity fork that doesn't match
+/// any public release, so we patch the version header before loading.
 /// </summary>
 public class VRCStudioBundleLoader : EditorWindow
 {
+    /// <summary>
+    /// Reads the .vrca file, patches the Unity version in the header to match
+    /// the current editor, then loads via AssetBundle.LoadFromMemory().
+    /// This bypasses the "wrong version or build target" error.
+    /// </summary>
+    static AssetBundle LoadBundleWithVersionPatch(string bundlePath)
+    {
+        byte[] data = File.ReadAllBytes(bundlePath);
+        Debug.Log("[VRC Studio] Read " + data.Length + " bytes from: " + bundlePath);
+
+        // Verify it's a UnityFS bundle
+        string magic = Encoding.UTF8.GetString(data, 0, 7);
+        if (magic != "UnityFS")
+        {
+            Debug.LogError("[VRC Studio] Not a UnityFS bundle (magic: " + magic + ")");
+            return null;
+        }
+
+        // Parse the header to find the engine version string
+        // Format: "UnityFS\\0" (8) + uint32 format (4) + playerVer\\0 + engineVer\\0
+        int offset = 12;
+
+        // Skip player version (null-terminated)
+        while (offset < data.Length && data[offset] != 0) offset++;
+        offset++; // skip null terminator
+
+        // Read the engine version string
+        int engineVerStart = offset;
+        while (offset < data.Length && data[offset] != 0) offset++;
+        int engineVerEnd = offset; // position of the null terminator
+
+        string originalVersion = Encoding.UTF8.GetString(data, engineVerStart, engineVerEnd - engineVerStart);
+        int versionFieldLen = engineVerEnd - engineVerStart; // length WITHOUT null
+
+        Debug.Log("[VRC Studio] Original bundle version: " + originalVersion);
+        Debug.Log("[VRC Studio] Your Unity version: " + Application.unityVersion);
+
+        // Patch: overwrite the engine version with our editor's version
+        // Must use EXACT same byte length to keep all offsets intact
+        string patchVersion = Application.unityVersion;
+
+        // Pad or truncate to exact same length
+        byte[] patchBytes = new byte[versionFieldLen];
+        byte[] verBytes = Encoding.UTF8.GetBytes(patchVersion);
+
+        // Copy as many bytes as fit, rest stays as 0x00
+        int copyLen = System.Math.Min(verBytes.Length, versionFieldLen);
+        System.Array.Copy(verBytes, 0, patchBytes, 0, copyLen);
+
+        // Write patch into data
+        System.Array.Copy(patchBytes, 0, data, engineVerStart, versionFieldLen);
+
+        string patchedVersion = Encoding.UTF8.GetString(data, engineVerStart, versionFieldLen).TrimEnd('\\0');
+        Debug.Log("[VRC Studio] Patched version: " + patchedVersion);
+
+        // Load from patched memory
+        AssetBundle bundle = AssetBundle.LoadFromMemory(data);
+        if (bundle != null)
+        {
+            Debug.Log("[VRC Studio] Bundle loaded successfully with version patch!");
+        }
+        else
+        {
+            Debug.LogError("[VRC Studio] Bundle still failed to load after version patch.");
+            Debug.LogError("[VRC Studio] This may be a build target issue. Current target: " +
+                EditorUserBuildSettings.activeBuildTarget);
+        }
+
+        return bundle;
+    }
+
     [MenuItem("VRC Studio/Load Avatar Into Scene")]
     static void LoadIntoScene()
     {
@@ -962,23 +1034,17 @@ public class VRCStudioBundleLoader : EditorWindow
             return;
         }
 
-        // Read and display bundle info before loading
-        string bundleInfo = ReadBundleInfo(bundlePath);
-        Debug.Log("[VRC Studio] Bundle info:\\n" + bundleInfo);
-
-        AssetBundle bundle = AssetBundle.LoadFromFile(bundlePath);
+        AssetBundle bundle = LoadBundleWithVersionPatch(bundlePath);
         if (bundle == null)
         {
-            string msg = "Failed to load AssetBundle.\\n\\n"
-                + "Bundle info:\\n" + bundleInfo + "\\n\\n"
-                + "This usually means:\\n"
-                + "1. Unity version mismatch - bundle needs ${bundleUnityVersion}\\n"
-                + "   Your editor: " + Application.unityVersion + "\\n\\n"
-                + "2. Wrong build target - go to File > Build Settings\\n"
-                + "   and switch to 'PC, Mac & Linux Standalone'\\n\\n"
-                + "3. Try using AssetRipper (github.com/AssetRipper/AssetRipper)\\n"
-                + "   to extract the .vrca file instead.";
-            EditorUtility.DisplayDialog("VRC Studio - Load Failed", msg, "OK");
+            string bundleInfo = ReadBundleInfo(bundlePath);
+            EditorUtility.DisplayDialog("VRC Studio - Load Failed",
+                "Failed to load AssetBundle even after version patching.\\n\\n"
+                + bundleInfo + "\\n\\n"
+                + "Make sure your build target is PC Standalone:\\n"
+                + "File > Build Settings > PC, Mac & Linux Standalone\\n\\n"
+                + "If this still fails, try AssetRipper:\\n"
+                + "github.com/AssetRipper/AssetRipper", "OK");
             return;
         }
 
@@ -999,7 +1065,6 @@ public class VRCStudioBundleLoader : EditorWindow
         }
         else
         {
-            // Try loading all assets of any type
             Object[] allAssets = bundle.LoadAllAssets();
             string assetList = "Found " + allAssets.Length + " assets:\\n";
             foreach (Object a in allAssets)
@@ -1023,15 +1088,12 @@ public class VRCStudioBundleLoader : EditorWindow
             return;
         }
 
-        AssetBundle bundle = AssetBundle.LoadFromFile(bundlePath);
+        AssetBundle bundle = LoadBundleWithVersionPatch(bundlePath);
         if (bundle == null)
         {
             string bundleInfo = ReadBundleInfo(bundlePath);
             EditorUtility.DisplayDialog("VRC Studio - Load Failed",
-                "Failed to load AssetBundle.\\n\\n"
-                + "Bundle needs Unity ${bundleUnityVersion}\\n"
-                + "Your editor: " + Application.unityVersion + "\\n\\n"
-                + bundleInfo + "\\n\\n"
+                "Failed to load AssetBundle.\\n\\n" + bundleInfo + "\\n\\n"
                 + "Try AssetRipper instead:\\nhttps://github.com/AssetRipper/AssetRipper", "OK");
             return;
         }
@@ -1105,16 +1167,9 @@ public class VRCStudioBundleLoader : EditorWindow
         string info = ReadBundleInfo(bundlePath);
         info += "\\n\\nYour Unity: " + Application.unityVersion;
         info += "\\nYour Platform: " + EditorUserBuildSettings.activeBuildTarget;
-        info += "\\n\\nBundle needs: ${bundleUnityVersion}";
+        info += "\\n\\nBundle built with: ${bundleUnityVersion}";
         info += "\\nBundle platform: Windows (StandaloneWindows64)";
-
-        bool versionsMatch = Application.unityVersion.StartsWith("${bundleUnityVersion.split('.').slice(0, 2).join('.')}");
-        if (!versionsMatch)
-        {
-            info += "\\n\\n⚠ VERSION MISMATCH ⚠\\n"
-                + "Install Unity ${bundleUnityVersion} via Unity Hub,\\n"
-                + "or use AssetRipper to extract.";
-        }
+        info += "\\n\\nThe loader will auto-patch the version when loading.";
 
         EditorUtility.DisplayDialog("VRC Studio - Bundle Info", info, "OK");
     }
