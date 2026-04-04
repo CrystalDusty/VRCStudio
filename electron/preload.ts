@@ -17,7 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // File system
   readFile: (path: string) => ipcRenderer.invoke('fs:readFile', path),
   listDir: (path: string) => ipcRenderer.invoke('fs:listDir', path),
-  searchCacheForDataFiles: () => ipcRenderer.invoke('fs:searchCacheForDataFiles'),
+  searchCacheForDataFiles: (avatarId?: string) => ipcRenderer.invoke('fs:searchCacheForDataFiles', avatarId),
   browseCacheFolder: () => ipcRenderer.invoke('fs:browseCacheFolder'),
   extractAvatarToDownloads: (cacheDataPath: string, avatarId: string) => ipcRenderer.invoke('fs:extractAvatarToDownloads', cacheDataPath, avatarId),
   getDiagnosticLog: () => ipcRenderer.invoke('fs:getDiagnosticLog'),

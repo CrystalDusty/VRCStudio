@@ -401,8 +401,49 @@ ipcMain.handle('fs:browseCacheFolder', async (_e) => {
   }
 });
 
+function scoreCacheBundleCandidate(bundlePath: string, avatarId?: string): number {
+  let score = 0;
+
+  try {
+    const stat = fs.statSync(bundlePath);
+    // Favor realistic avatar bundle sizes and more recent files.
+    if (stat.size > 5 * 1024 * 1024) score += 20;
+    if (stat.size > 20 * 1024 * 1024) score += 20;
+    score += Math.min(20, Math.floor((Date.now() - stat.mtimeMs) / (1000 * 60 * 10)) * -1 + 20);
+  } catch {
+    // ignore stat issues
+  }
+
+  if (!avatarId) return score;
+
+  const dir = path.dirname(bundlePath);
+  const siblingCandidates = ['__info', '__metadata', '_info', 'info', '__data'];
+
+  for (const fileName of siblingCandidates) {
+    const filePath = path.join(dir, fileName);
+    if (!fs.existsSync(filePath)) continue;
+    try {
+      const text = fs.readFileSync(filePath, { encoding: 'utf8' });
+      if (text.includes(avatarId)) {
+        score += 1000;
+      }
+      if (text.includes('/avatar/') || text.includes('avatar') || text.includes('avtr_')) {
+        score += 25;
+      }
+      break;
+    } catch {
+      // likely binary; skip
+    }
+  }
+
+  // Weak fallback heuristics
+  if (bundlePath.includes(avatarId)) score += 200;
+
+  return score;
+}
+
 // Search for _data files (avatar bundles) in VRChat cache
-ipcMain.handle('fs:searchCacheForDataFiles', async (_e) => {
+ipcMain.handle('fs:searchCacheForDataFiles', async (_e, avatarId?: string) => {
   try {
     if (process.platform !== 'win32') {
       return { success: false, error: 'Only supported on Windows' };
@@ -449,7 +490,8 @@ ipcMain.handle('fs:searchCacheForDataFiles', async (_e) => {
           // Check for _data file
           if (entry.name === '_data' && entry.isFile()) {
             const stat = fs.statSync(fullPath);
-            console.log(`[SearchCache] ✓ FOUND BUNDLE: ${fullPath} (${stat.size} bytes)`);
+            const score = scoreCacheBundleCandidate(fullPath, avatarId);
+            console.log(`[SearchCache] ✓ FOUND BUNDLE: ${fullPath} (${stat.size} bytes, score=${score})`);
             foundPaths.push(fullPath);
           }
 
@@ -470,11 +512,19 @@ ipcMain.handle('fs:searchCacheForDataFiles', async (_e) => {
       }
     }
 
+    const ranked = foundPaths
+      .map(p => ({ path: p, score: scoreCacheBundleCandidate(p, avatarId) }))
+      .sort((a, b) => b.score - a.score);
+
     console.log(`[SearchCache] Search complete. Scanned ${scannedDirs} dirs, found ${foundPaths.length} bundle(s)`);
+    if (avatarId && ranked.length > 0) {
+      console.log(`[SearchCache] Top match for ${avatarId}: ${ranked[0].path} (score=${ranked[0].score})`);
+    }
 
     return {
       success: true,
-      bundles: foundPaths,
+      bundles: ranked.map(r => r.path),
+      scoredBundles: ranked.slice(0, 10),
       scannedDirs,
     };
   } catch (err: any) {
