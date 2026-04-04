@@ -1012,6 +1012,11 @@ public class VRCStudioBundleLoader : EditorWindow
 
         // Overwrite only the START of the engine version and leave any remaining
         // original suffix bytes intact. Never write null padding here.
+        // Patch: overwrite only the START of the engine version and leave any
+        // remaining original suffix bytes intact. Never write null padding here,
+        // because changing bytes to 0x00 can effectively shorten the header string
+        // Unity parses and corrupt downstream reads.
+        string patchVersion = Application.unityVersion;
         byte[] verBytes = Encoding.UTF8.GetBytes(patchVersion);
         int copyLen = System.Math.Min(verBytes.Length, versionFieldLen);
         System.Array.Copy(verBytes, 0, data, engineVerStart, copyLen);
