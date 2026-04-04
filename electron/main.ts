@@ -5,6 +5,7 @@ import {
 import path from 'path';
 import fs from 'fs';
 import https from 'https';
+import crypto from 'crypto';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -220,8 +221,9 @@ ipcMain.handle('fs:downloadFile', async (event, url: string, avatarId: string) =
     fs.mkdirSync(bundleDir, { recursive: true });
   }
 
-  const fileName = url.split('/').pop() || `avatar-${avatarId}.unitypackage`;
+  const fileName = `${avatarId}.vrca`;
   const bundlePath = path.join(bundleDir, fileName);
+  console.log('[Bundle] Downloading to:', bundlePath);
 
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(bundlePath);
@@ -268,20 +270,75 @@ ipcMain.handle('fs:extractBundle', async (_e, sourcePath: string, avatarId: stri
   }
 
   try {
-    // Dynamically import adm-zip (ESM)
-    const AdmZip = await import('adm-zip').then(m => m.default);
-    const zip = new AdmZip(sourcePath);
+    console.log('[Bundle] Creating .unitypackage from AssetBundle:', sourcePath);
 
-    const extractDir = path.join(app.getPath('userData'), 'AvatarBundles', avatarId, 'extracted');
-    if (!fs.existsSync(extractDir)) {
-      fs.mkdirSync(extractDir, { recursive: true });
+    // Validate source file exists and has content
+    if (!fs.existsSync(sourcePath)) {
+      throw new Error(`Source bundle not found: ${sourcePath}`);
+    }
+    const stats = fs.statSync(sourcePath);
+    console.log(`[Bundle] Source file size: ${stats.size} bytes`);
+    if (stats.size === 0) {
+      throw new Error('Downloaded bundle file is empty');
     }
 
-    zip.extractAllTo(extractDir, true);
+    // Log first bytes for format diagnostics
+    const headerBuf = Buffer.alloc(16);
+    const fd = fs.openSync(sourcePath, 'r');
+    fs.readSync(fd, headerBuf, 0, 16, 0);
+    fs.closeSync(fd);
+    console.log('[Bundle] File header (hex):', headerBuf.toString('hex'));
+    console.log('[Bundle] File header (ascii):', headerBuf.toString('ascii').replace(/[^\x20-\x7E]/g, '.'));
 
-    return extractDir;
+    const bundleDir = path.join(app.getPath('userData'), 'AvatarBundles', avatarId);
+    const guid = crypto.randomBytes(16).toString('hex');
+    const stagingDir = path.join(bundleDir, 'staging');
+    const guidDir = path.join(stagingDir, guid);
+
+    // Create staging structure
+    fs.mkdirSync(guidDir, { recursive: true });
+    console.log('[Bundle] Staging directory created:', guidDir);
+
+    // Write pathname file
+    const pathname = `Assets/Avatar/${avatarId}.vrca`;
+    fs.writeFileSync(path.join(guidDir, 'pathname'), pathname + '\n');
+    console.log('[Bundle] Pathname:', pathname);
+
+    // Copy the asset bundle as "asset"
+    fs.copyFileSync(sourcePath, path.join(guidDir, 'asset'));
+    console.log('[Bundle] Asset copied to staging');
+
+    // Write minimal Unity .meta file
+    const metaContent = [
+      'fileFormatVersion: 2',
+      `guid: ${guid}`,
+      'NativeFormatImporter:',
+      '  userData:',
+      '  assetBundleName:',
+      '  assetBundleVariant:',
+      '',
+    ].join('\n');
+    fs.writeFileSync(path.join(guidDir, 'asset.meta'), metaContent);
+
+    // Create tar.gz (.unitypackage)
+    const outputPath = path.join(bundleDir, `${avatarId}.unitypackage`);
+    const tar = await import('tar');
+    await tar.create(
+      { gzip: true, file: outputPath, cwd: stagingDir },
+      [guid],
+    );
+
+    console.log('[Bundle] .unitypackage created:', outputPath);
+    console.log('[Bundle] Output size:', fs.statSync(outputPath).size, 'bytes');
+
+    // Clean up staging directory
+    fs.rmSync(stagingDir, { recursive: true, force: true });
+    console.log('[Bundle] Staging cleaned up');
+
+    return outputPath;
   } catch (error) {
-    throw new Error(`Failed to extract bundle: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    console.error('[Bundle] Failed to create .unitypackage:', error);
+    throw new Error(`Failed to create .unitypackage: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 });
 
@@ -292,9 +349,15 @@ ipcMain.handle('fs:openBundleFolder', async (_e, folderPath: string) => {
 
   try {
     if (!fs.existsSync(folderPath)) {
-      throw new Error('Folder does not exist');
+      throw new Error('Path does not exist');
     }
-    shell.openPath(folderPath);
+    const stat = fs.statSync(folderPath);
+    if (stat.isFile()) {
+      // Open Explorer with the file selected
+      shell.showItemInFolder(folderPath);
+    } else {
+      shell.openPath(folderPath);
+    }
   } catch (error) {
     throw new Error(`Failed to open folder: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
