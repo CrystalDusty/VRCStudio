@@ -1697,6 +1697,14 @@ ipcMain.handle('fs:launchAssetRipper', async (_e, bundlePath: string, avatarId?:
     // AssetRipper should consume the raw UnityFS bundle (.vrca/_data), not .unitypackage.
     // If a .unitypackage is provided, extract the embedded .vrca first.
     let ripperInputPath = bundlePath;
+
+    // FINAL fallback mode: when a raw VRChat cache `_data` file is selected,
+    // feed AssetRipper the entire containing cache folder so it can resolve
+    // sidecar metadata/files instead of a single extracted blob.
+    if (path.basename(bundlePath).toLowerCase() === '_data') {
+      ripperInputPath = path.dirname(bundlePath);
+    }
+
     if (bundlePath.toLowerCase().endsWith('.unitypackage')) {
       try {
         const gz = fs.readFileSync(bundlePath);
