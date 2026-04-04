@@ -227,6 +227,88 @@ ipcMain.handle('fs:listDir', async (_e, dirPath: string) => {
   }
 });
 
+// Search for _data files (avatar bundles) in VRChat cache
+ipcMain.handle('fs:searchCacheForDataFiles', async (_e) => {
+  try {
+    if (process.platform !== 'win32') {
+      return { success: false, error: 'Only supported on Windows' };
+    }
+
+    const cacheRoot = path.join(app.getPath('home'), 'AppData', 'LocalLow', 'VRChat', 'VRChat', 'Cache-WindowsPlayer');
+
+    console.log(`[SearchCache] Starting search in: ${cacheRoot}`);
+
+    // Verify cache root exists
+    if (!fs.existsSync(cacheRoot)) {
+      console.log(`[SearchCache] Cache root doesn't exist: ${cacheRoot}`);
+      return { success: false, error: 'Cache directory not found' };
+    }
+
+    const foundPaths: string[] = [];
+    const queue: string[] = [cacheRoot];
+    const visited = new Set<string>();
+    let scannedDirs = 0;
+    const maxDirs = 5000; // Prevent infinite loops
+    const maxDepth = 12;
+
+    // BFS search for _data files
+    while (queue.length > 0) {
+      if (scannedDirs >= maxDirs) {
+        console.log(`[SearchCache] Reached max directory limit`);
+        break;
+      }
+
+      const dirPath = queue.shift()!;
+      if (visited.has(dirPath)) continue;
+      visited.add(dirPath);
+      scannedDirs++;
+
+      const depth = dirPath.split(path.sep).length - cacheRoot.split(path.sep).length;
+      if (depth > maxDepth) continue;
+
+      try {
+        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+
+        for (const entry of entries) {
+          const fullPath = path.join(dirPath, entry.name);
+
+          // Check for _data file
+          if (entry.name === '_data' && entry.isFile()) {
+            const stat = fs.statSync(fullPath);
+            console.log(`[SearchCache] ✓ FOUND BUNDLE: ${fullPath} (${stat.size} bytes)`);
+            foundPaths.push(fullPath);
+          }
+
+          // Queue directories
+          if (entry.isDirectory()) {
+            queue.push(fullPath);
+          }
+        }
+
+        if (scannedDirs % 100 === 0) {
+          console.log(`[SearchCache] Scanned ${scannedDirs} directories, found ${foundPaths.length} bundles so far...`);
+        }
+      } catch (err) {
+        // Skip directories we can't read
+        if (!(err instanceof Error && err.message.includes('EACCES'))) {
+          console.log(`[SearchCache] Error reading ${dirPath}:`, (err as any).message);
+        }
+      }
+    }
+
+    console.log(`[SearchCache] Search complete. Scanned ${scannedDirs} dirs, found ${foundPaths.length} bundle(s)`);
+
+    return {
+      success: true,
+      bundles: foundPaths,
+      scannedDirs,
+    };
+  } catch (err: any) {
+    console.error(`[SearchCache] Fatal error:`, err.message);
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('fs:getVRChatLogPath', () => {
   const platform = process.platform;
   if (platform === 'win32') {
