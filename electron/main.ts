@@ -163,24 +163,22 @@ ipcMain.handle('fs:readFile', async (_e, filePath: string, autoDecompress: boole
     // Read as binary data (Buffer), then convert to base64 for transfer
     let buffer = fs.readFileSync(filePath);
 
-    console.log(`[ReadFile] Initial file size: ${buffer.length} bytes`);
-    console.log(`[ReadFile] First 16 bytes (hex):`, buffer.slice(0, 16).toString('hex'));
+    console.log(`[ReadFile] File size: ${buffer.length} bytes`);
+    const header = buffer.slice(0, 8).toString('hex');
+    console.log(`[ReadFile] File header: ${header}`);
 
     // Check if the file is gzip-compressed and decompress if requested
     if (autoDecompress && buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b) {
-      console.log(`[ReadFile] File is gzip-compressed (magic bytes detected), decompressing...`);
+      console.log(`[ReadFile] Detected GZIP compression (1f 8b), decompressing...`);
       const zlib = require('zlib');
       try {
         const decompressed = zlib.gunzipSync(buffer);
-        console.log(`[ReadFile] ✓ Successfully decompressed to ${decompressed.length} bytes`);
-        console.log(`[ReadFile] First 16 bytes of decompressed data (hex):`, decompressed.slice(0, 16).toString('hex'));
+        console.log(`[ReadFile] ✓ Decompressed to ${decompressed.length} bytes`);
         buffer = decompressed;
       } catch (decompressErr: any) {
-        console.error(`[ReadFile] ✗ Failed to decompress:`, decompressErr.message);
-        // If decompression fails, return the original compressed data
+        console.error(`[ReadFile] ✗ Decompression failed:`, decompressErr.message);
+        // Keep original buffer if decompression fails
       }
-    } else {
-      console.log(`[ReadFile] File is NOT gzip-compressed`);
     }
 
     const base64Data = buffer.toString('base64');
@@ -204,41 +202,73 @@ ipcMain.handle('fs:extractAvatarToDownloads', async (_e, cacheDataPath: string, 
 
     const cacheStats = fs.statSync(cacheDataPath);
     console.log(`[ExtractToDownloads] Source file size: ${cacheStats.size} bytes`);
-    console.log(`[ExtractToDownloads] Source file first 16 bytes (hex): ${fs.readFileSync(cacheDataPath).slice(0, 16).toString('hex')}`);
+
+    // Read first bytes to detect format
+    const buffer = fs.readFileSync(cacheDataPath);
+    const header = buffer.slice(0, 32).toString('hex');
+    console.log(`[ExtractToDownloads] File header (first 32 bytes hex): ${header}`);
+
+    // Detect file format
+    let fileFormat = 'UNKNOWN';
+    let isGzipped = false;
+    let isUnityBundle = false;
+
+    if (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b) {
+      fileFormat = 'GZIP';
+      isGzipped = true;
+      console.log(`[ExtractToDownloads] ✓ Detected: GZIP (1f 8b)`);
+    } else if (buffer.length >= 6 && buffer.toString('utf8', 0, 6) === 'UnityFS') {
+      fileFormat = 'UNITY_BUNDLE';
+      isUnityBundle = true;
+      console.log(`[ExtractToDownloads] ✓ Detected: Unity AssetBundle`);
+    } else if (buffer.length >= 4 && buffer.toString('utf8', 0, 2) === 'PK') {
+      fileFormat = 'ZIP';
+      console.log(`[ExtractToDownloads] ✓ Detected: ZIP (unitypackage)`);
+    } else {
+      console.log(`[ExtractToDownloads] ⚠ Unknown format, treating as raw data`);
+    }
 
     // Get Downloads folder
     const downloadsPath = app.getPath('downloads');
-    const bundleFileName = `${avatarId}.unitypackage`;
-    const outputPath = path.join(downloadsPath, bundleFileName);
-
-    console.log(`[ExtractToDownloads] Target: ${outputPath}`);
-
-    // Read the file to check if it's gzip-compressed
-    const buffer = fs.readFileSync(cacheDataPath);
-
-    // Check for gzip magic bytes (1f 8b)
-    const isGzipped = buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b;
-    console.log(`[ExtractToDownloads] Compression: ${isGzipped ? '✓ GZIP (1f 8b detected)' : '✗ NOT GZIP'}`);
-
+    let outputPath: string;
     let finalBuffer = buffer;
 
+    // Handle based on format
     if (isGzipped) {
-      // Decompress the gzip file
-      console.log(`[ExtractToDownloads] Attempting decompression...`);
+      console.log(`[ExtractToDownloads] Attempting to decompress GZIP...`);
       const zlib = require('zlib');
       try {
         const decompressed = zlib.gunzipSync(buffer);
-        console.log(`[ExtractToDownloads] ✓ Decompression successful!`);
+        console.log(`[ExtractToDownloads] ✓ GZIP decompression successful!`);
         console.log(`[ExtractToDownloads] Decompressed size: ${decompressed.length} bytes`);
-        console.log(`[ExtractToDownloads] Decompressed first 16 bytes (hex): ${decompressed.slice(0, 16).toString('hex')}`);
-        finalBuffer = decompressed;
-      } catch (decompressErr: any) {
-        console.error(`[ExtractToDownloads] ✗ Decompression FAILED:`, decompressErr.message);
-        throw decompressErr;
+
+        // Check decompressed format
+        const decompHeader = decompressed.slice(0, 6).toString('utf8', 0, 6);
+        if (decompHeader === 'UnityFS') {
+          console.log(`[ExtractToDownloads] ✓ Decompressed to UnityFS bundle`);
+          outputPath = path.join(downloadsPath, `${avatarId}.unitypackage`);
+          finalBuffer = decompressed;
+        } else {
+          console.log(`[ExtractToDownloads] Decompressed data format: ${decompHeader || 'binary'}`);
+          outputPath = path.join(downloadsPath, `${avatarId}.unitypackage`);
+          finalBuffer = decompressed;
+        }
+      } catch (err: any) {
+        console.error(`[ExtractToDownloads] ✗ GZIP decompression failed:`, err.message);
+        outputPath = path.join(downloadsPath, `${avatarId}.bundle`);
+        finalBuffer = buffer;
       }
+    } else if (isUnityBundle) {
+      console.log(`[ExtractToDownloads] Using Unity Bundle directly (no decompression needed)`);
+      outputPath = path.join(downloadsPath, `${avatarId}.unitypackage`);
+      finalBuffer = buffer;
     } else {
-      console.log(`[ExtractToDownloads] No decompression needed`);
+      console.log(`[ExtractToDownloads] Saving as raw bundle data`);
+      outputPath = path.join(downloadsPath, `${avatarId}.bundle`);
+      finalBuffer = buffer;
     }
+
+    console.log(`[ExtractToDownloads] Target: ${outputPath}`);
 
     // Save the file
     fs.writeFileSync(outputPath, finalBuffer);
@@ -246,10 +276,10 @@ ipcMain.handle('fs:extractAvatarToDownloads', async (_e, cacheDataPath: string, 
     const outputStats = fs.statSync(outputPath);
     console.log(`[ExtractToDownloads] ✓ File saved successfully`);
     console.log(`[ExtractToDownloads] Output file size: ${outputStats.size} bytes`);
-    console.log(`[ExtractToDownloads] Output file first 16 bytes (hex): ${fs.readFileSync(outputPath).slice(0, 16).toString('hex')}`);
+    console.log(`[ExtractToDownloads] Output path: ${outputPath}`);
 
     if (outputStats.size === 0) {
-      throw new Error('Output file is empty - save may have failed');
+      throw new Error('Output file is empty');
     }
 
     console.log(`[ExtractToDownloads] ========== EXTRACTION COMPLETE ==========\n`);
