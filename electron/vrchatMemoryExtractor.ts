@@ -168,10 +168,13 @@ $output = @{
     ProcessId = $process.Id
     Timestamp = (Get-Date).ToString("o")
     RegionsScanned = $regionsScanned
-    PotentialKeys = $potentialKeys | Select-Object -First 1000  # Limit output
+    PotentialKeys = @($potentialKeys | Select-Object -First 1000)  # Keep as array even with 0/1 result
 }
 
-$output | ConvertTo-Json -Depth 10 | Out-File -FilePath $OutputFile -Encoding UTF8
+# Write UTF-8 JSON without BOM (Node JSON.parse fails on BOM in some environments)
+$json = $output | ConvertTo-Json -Depth 10
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($OutputFile, $json, $utf8NoBom)
 Write-Host "Results saved to: $OutputFile"
 `;
 
@@ -263,12 +266,18 @@ export async function scanForKeys(): Promise<{
 
       // Read results
       try {
-        const results: MemoryScanResult = JSON.parse(fs.readFileSync(outputPath, 'utf8'));
+        const rawResults = fs.readFileSync(outputPath, 'utf8');
+        const normalizedJson = rawResults.replace(/^\uFEFF/, '').trim();
+        const results: MemoryScanResult = JSON.parse(normalizedJson);
         fs.unlinkSync(outputPath);
+
+        const candidates = Array.isArray(results.PotentialKeys)
+          ? results.PotentialKeys
+          : (results.PotentialKeys ? [results.PotentialKeys] : []);
 
         resolve({
           success: true,
-          candidates: results.PotentialKeys,
+          candidates,
         });
       } catch (err: any) {
         resolve({
@@ -390,11 +399,11 @@ Note: Easy Anti-Cheat may block memory access. If extraction fails, try:
   // Step 3: If we have a test file, validate keys
   if (testFilePath && fs.existsSync(testFilePath)) {
     const validationResult = await extractValidKeys(testFilePath, scanResult.candidates);
-    
+
     if (validationResult.success && validationResult.validKeys.length > 0) {
       // Store the valid keys
       const { storeKey } = await import('./vrchatDecryption');
-      
+
       for (const { key, address } of validationResult.validKeys) {
         storeKey({
           keyId: '1019', // The key ID we observed
@@ -413,9 +422,15 @@ Note: Easy Anti-Cheat may block memory access. If extraction fails, try:
         })),
       };
     }
+
+    return {
+      success: false,
+      error: validationResult.error || 'No valid keys found for this encrypted file',
+      instructions: 'VRChat was detected, but none of the scanned key candidates could decrypt the selected bundle. Load an avatar in VRChat and try extracting again.',
+    };
   }
 
-  // Return candidates for manual testing
+  // Return candidates for manual testing when no test bundle was provided
   return {
     success: true,
     keys: scanResult.candidates.slice(0, 100).map(c => ({
