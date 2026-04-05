@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Download, Copy, Check, ExternalLink, Folder, AlertCircle, Loader, Archive, FolderOpen } from 'lucide-react';
+import { X, Download, Copy, Check, ExternalLink, Folder, AlertCircle, Loader, Archive, FolderOpen, CheckCircle } from 'lucide-react';
 import type { VRCAvatar } from '../types/vrchat';
 import { extractAvatarBundle, openBundleFolder, isBundleDownloaded, addBundleToStore } from '../utils/avatarBundle';
 import { downloadBundleDirectly } from '../utils/directDownload';
@@ -19,6 +19,7 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
   const [isExtracted, setIsExtracted] = useState(false);
   const [extractedPath, setExtractedPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(
     avatar.unityPackages?.[0]?.id || null
   );
@@ -33,14 +34,26 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
   const handleExtractAvatar = async () => {
     setIsExtracting2(true);
     setError(null);
+    setSuccessMessage(null);
 
     try {
-      const result = await downloadAvatarExtract(avatar, selectedCacheFile);
+      // Extract with version patching enabled by default
+      const result = await downloadAvatarExtract(avatar, selectedCacheFile, {
+        outputFormat: 'vrca',
+        patchVersion: true
+      });
+      
       if (result.success) {
         if (!result.bundleFound) {
           setError(result.error || 'Bundle not found in VRChat cache - download still completed with metadata and images');
           console.warn('[AvatarPreview] Bundle not in cache:', result.error);
         } else {
+          // Show success with version patching info
+          if (result.versionPatched) {
+            setSuccessMessage(`✓ Avatar exported! Unity version patched: ${result.originalVersion} → ${result.patchedVersion}`);
+          } else {
+            setSuccessMessage('✓ Avatar exported successfully! Ready for Unity 2022.3.22f1');
+          }
           setError(null);
         }
       } else {
@@ -89,6 +102,7 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
 
     setIsDownloading(true);
     setError(null);
+    setSuccessMessage(null);
     setDownloadProgress(0);
 
     console.log('[AvatarPreview] Starting direct download for package:', selectedPackageId);
@@ -104,9 +118,12 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
       );
 
       if (result.success && result.path) {
-        // Extract the bundle
+        // Extract the bundle with version patching
         setIsExtracting(true);
-        const extractResult = await extractAvatarBundle(result.path, avatar.id);
+        const extractResult = await extractAvatarBundle(result.path, avatar.id, {
+          patchVersion: true,
+          outputFormat: 'vrca'
+        });
 
         if (extractResult.success && extractResult.extractedPath) {
           // Get bundle info for store
@@ -125,9 +142,17 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
           setExtractedPath(extractResult.extractedPath);
           setIsExtracted(true);
           setError(null);
+          
+          // Show success with version patching info
+          if (extractResult.versionPatched) {
+            setSuccessMessage(`✓ Bundle ready! Version patched: ${extractResult.originalVersion} → ${extractResult.patchedVersion}`);
+          } else {
+            setSuccessMessage('✓ Bundle ready for Unity 2022.3.22f1!');
+          }
+          
           console.log(`[AvatarPreview] Successfully downloaded and extracted`);
         } else {
-          setError(extractResult.error || 'Failed to create .unitypackage');
+          setError(extractResult.error || 'Failed to create avatar file');
         }
 
         setIsExtracting(false);
@@ -264,6 +289,14 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
             </div>
           )}
 
+          {/* Success message */}
+          {successMessage && !error && (
+            <div className="flex gap-2 p-3 bg-green-500/10 border border-green-500/30 rounded-lg text-xs text-green-400">
+              <CheckCircle size={14} className="flex-shrink-0 mt-0.5" />
+              <span>{successMessage}</span>
+            </div>
+          )}
+
           {/* Package selector (Windows only) */}
           {typeof window !== 'undefined' && (window as any).electronAPI && avatar.unityPackages && avatar.unityPackages.length > 0 && (
             <div>
@@ -287,7 +320,7 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
           {(isDownloading || isExtracting) && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs text-surface-400">
-                <span>{isExtracting ? 'Creating .unitypackage...' : 'Downloading...'}</span>
+                <span>{isExtracting ? 'Creating .vrca with version patching...' : 'Downloading...'}</span>
                 {!isExtracting && <span>{downloadProgress}%</span>}
               </div>
               <div className="w-full bg-surface-800 rounded-full h-2 overflow-hidden">
