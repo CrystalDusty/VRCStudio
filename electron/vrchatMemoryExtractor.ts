@@ -399,11 +399,11 @@ Note: Easy Anti-Cheat may block memory access. If extraction fails, try:
   // Step 3: If we have a test file, validate keys
   if (testFilePath && fs.existsSync(testFilePath)) {
     const validationResult = await extractValidKeys(testFilePath, scanResult.candidates);
-    
+
     if (validationResult.success && validationResult.validKeys.length > 0) {
       // Store the valid keys
       const { storeKey } = await import('./vrchatDecryption');
-      
+
       for (const { key, address } of validationResult.validKeys) {
         storeKey({
           keyId: '1019', // The key ID we observed
@@ -422,9 +422,15 @@ Note: Easy Anti-Cheat may block memory access. If extraction fails, try:
         })),
       };
     }
+
+    return {
+      success: false,
+      error: validationResult.error || 'No valid keys found for this encrypted file',
+      instructions: 'VRChat was detected, but none of the scanned key candidates could decrypt the selected bundle. Load an avatar in VRChat and try extracting again.',
+    };
   }
 
-  // Return candidates for manual testing
+  // Return candidates for manual testing when no test bundle was provided
   return {
     success: true,
     keys: scanResult.candidates.slice(0, 100).map(c => ({

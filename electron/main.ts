@@ -2586,8 +2586,16 @@ ipcMain.handle('decrypt:fullPipeline', async (_e, bundlePath: string) => {
       
       // Reload stored keys
       storedKeys = vrchatDecryption.loadStoredKeys();
+      if (storedKeys.length === 0) {
+        return {
+          success: false,
+          encrypted: true,
+          error: 'Key extraction did not produce usable decryption keys for this bundle.',
+          instructions: 'VRChat is running, but no valid key was stored. Load into an avatar/world in VRChat, then retry "Decrypt & Patch Version" or use "Extract Keys from VRChat" again while logged in.',
+        };
+      }
     }
-    
+
     // Step 4: Attempt decryption
     logDiagnostic(`Attempting decryption with ${storedKeys.length} stored keys...`);
     const decryptResult = await vrchatDecryption.decryptBundle(bundlePath);
