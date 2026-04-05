@@ -168,10 +168,13 @@ $output = @{
     ProcessId = $process.Id
     Timestamp = (Get-Date).ToString("o")
     RegionsScanned = $regionsScanned
-    PotentialKeys = $potentialKeys | Select-Object -First 1000  # Limit output
+    PotentialKeys = @($potentialKeys | Select-Object -First 1000)  # Keep as array even with 0/1 result
 }
 
-$output | ConvertTo-Json -Depth 10 | Out-File -FilePath $OutputFile -Encoding UTF8
+# Write UTF-8 JSON without BOM (Node JSON.parse fails on BOM in some environments)
+$json = $output | ConvertTo-Json -Depth 10
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($OutputFile, $json, $utf8NoBom)
 Write-Host "Results saved to: $OutputFile"
 `;
 
@@ -263,12 +266,18 @@ export async function scanForKeys(): Promise<{
 
       // Read results
       try {
-        const results: MemoryScanResult = JSON.parse(fs.readFileSync(outputPath, 'utf8'));
+        const rawResults = fs.readFileSync(outputPath, 'utf8');
+        const normalizedJson = rawResults.replace(/^\uFEFF/, '').trim();
+        const results: MemoryScanResult = JSON.parse(normalizedJson);
         fs.unlinkSync(outputPath);
+
+        const candidates = Array.isArray(results.PotentialKeys)
+          ? results.PotentialKeys
+          : (results.PotentialKeys ? [results.PotentialKeys] : []);
 
         resolve({
           success: true,
-          candidates: results.PotentialKeys,
+          candidates,
         });
       } catch (err: any) {
         resolve({
