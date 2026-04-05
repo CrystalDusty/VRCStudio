@@ -1,148 +1,318 @@
 /**
  * Unity Importer Generator
- * Creates a ready-to-use C# script for importing avatars into Unity
+ * Creates a ready-to-use C# script for importing VRChat avatars into Unity
+ * Handles both .vrca (AssetBundle) and .unitypackage formats
  */
 
 export function generateUnityImporterScript(avatarId: string, avatarName: string): string {
   return `// Auto-generated Avatar Importer for ${avatarName}
 // Place this script in: Assets/Editor/VRCStudioImporters/
+// Compatible with Unity 2022.3.22f1 (VRChat Creator Companion)
 
 using UnityEditor;
 using UnityEngine;
 using System.IO;
+using System.Collections.Generic;
 
 public class ${sanitizeClassName(avatarName)}Importer : EditorWindow
 {
-    private static string bundlePath = "";
-    private static string extractPath = "";
+    private static string selectedFilePath = "";
+    private static bool isVRCA = false;
+    private static AssetBundle loadedBundle = null;
+    private static string[] assetNames = null;
+    private static Vector2 scrollPos;
 
     [MenuItem("VRChat/VRC Studio/Import ${sanitizeClassName(avatarName)}")]
     public static void ShowWindow()
     {
-        GetWindow<${sanitizeClassName(avatarName)}Importer>("Import ${avatarName}");
+        var window = GetWindow<${sanitizeClassName(avatarName)}Importer>("Import ${avatarName}");
+        window.minSize = new Vector2(450, 500);
+    }
+
+    private void OnDestroy()
+    {
+        // Clean up loaded bundle when window closes
+        if (loadedBundle != null)
+        {
+            loadedBundle.Unload(true);
+            loadedBundle = null;
+        }
     }
 
     private void OnGUI()
     {
+        scrollPos = EditorGUILayout.BeginScrollView(scrollPos);
+        
+        EditorGUILayout.Space(10);
         GUILayout.Label("Avatar: ${avatarName}", EditorStyles.boldLabel);
         GUILayout.Label("Avatar ID: ${avatarId}", EditorStyles.miniLabel);
+        GUILayout.Label("Target Unity: 2022.3.22f1 (VCC)", EditorStyles.miniLabel);
 
-        GUILayout.Space(10);
-
-        GUILayout.Label("Import Instructions:", EditorStyles.boldLabel);
-        GUILayout.Label(
-            "1. Place the .unitypackage file in Assets/VRCStudio/Avatars\\n" +
-            "2. Click 'Import Bundle' below\\n" +
-            "3. Unity will extract and set up the avatar\\n" +
-            "4. Check the imported avatar in your project",
-            EditorStyles.wordWrappedLabel
+        EditorGUILayout.Space(10);
+        EditorGUILayout.HelpBox(
+            "This importer supports both .vrca (AssetBundle) and .unitypackage formats.\\n\\n" +
+            "VRCA files are raw Unity AssetBundles that have been patched to work with Unity 2022.3.22f1.\\n\\n" +
+            "Select your avatar file below to import it into your project.",
+            MessageType.Info
         );
 
-        GUILayout.Space(10);
-
-        if (GUILayout.Button("Select Bundle File", GUILayout.Height(30)))
+        EditorGUILayout.Space(10);
+        
+        // File selection
+        EditorGUILayout.BeginHorizontal();
+        if (GUILayout.Button("Select Avatar File", GUILayout.Height(35)))
         {
-            bundlePath = EditorUtility.OpenFilePanel(
-                "Select Avatar Bundle",
+            string path = EditorUtility.OpenFilePanel(
+                "Select Avatar File",
                 "",
-                "unitypackage"
+                "vrca,unitypackage"
             );
-        }
-
-        if (!string.IsNullOrEmpty(bundlePath))
-        {
-            GUILayout.Label("Selected: " + Path.GetFileName(bundlePath), EditorStyles.miniLabel);
-        }
-
-        GUILayout.Space(10);
-
-        if (GUILayout.Button("Import Bundle", GUILayout.Height(40)))
-        {
-            if (string.IsNullOrEmpty(bundlePath))
+            
+            if (!string.IsNullOrEmpty(path))
             {
-                EditorUtility.DisplayDialog("Error", "Please select a bundle file first", "OK");
-                return;
+                selectedFilePath = path;
+                isVRCA = path.EndsWith(".vrca", System.StringComparison.OrdinalIgnoreCase);
+                
+                // If VRCA, try to load and inspect it
+                if (isVRCA)
+                {
+                    LoadAndInspectBundle(path);
+                }
             }
+        }
+        EditorGUILayout.EndHorizontal();
 
-            ImportBundle(bundlePath);
+        if (!string.IsNullOrEmpty(selectedFilePath))
+        {
+            EditorGUILayout.Space(5);
+            EditorGUILayout.LabelField("Selected:", EditorStyles.boldLabel);
+            EditorGUILayout.SelectableLabel(Path.GetFileName(selectedFilePath), EditorStyles.textField, GUILayout.Height(20));
+            EditorGUILayout.LabelField("Type: " + (isVRCA ? "VRCA (AssetBundle)" : "Unity Package"));
+            
+            // Show bundle contents if VRCA
+            if (isVRCA && assetNames != null && assetNames.Length > 0)
+            {
+                EditorGUILayout.Space(5);
+                EditorGUILayout.LabelField("Bundle Contents:", EditorStyles.boldLabel);
+                EditorGUI.indentLevel++;
+                foreach (string assetName in assetNames)
+                {
+                    EditorGUILayout.LabelField("• " + assetName, EditorStyles.miniLabel);
+                }
+                EditorGUI.indentLevel--;
+            }
         }
 
-        GUILayout.Space(10);
-        GUILayout.Label("Metadata", EditorStyles.boldLabel);
+        EditorGUILayout.Space(15);
 
-        if (GUILayout.Button("Open Metadata JSON"))
+        // Import button
+        GUI.enabled = !string.IsNullOrEmpty(selectedFilePath);
+        if (GUILayout.Button("Import Avatar", GUILayout.Height(45)))
         {
-            string metadataPath = Path.Combine(
-                Application.dataPath,
-                "VRCStudio/Avatars/${avatarId}/metadata.json"
-            );
-
-            if (File.Exists(metadataPath))
+            if (isVRCA)
             {
-                EditorUtility.OpenWithDefaultApp(metadataPath);
+                ImportVRCABundle(selectedFilePath);
             }
             else
             {
-                EditorUtility.DisplayDialog(
-                    "Info",
-                    "Place metadata.json in: Assets/VRCStudio/Avatars/${avatarId}/",
-                    "OK"
-                );
+                ImportUnityPackage(selectedFilePath);
             }
+        }
+        GUI.enabled = true;
+
+        EditorGUILayout.Space(20);
+        
+        // Manual instructions
+        EditorGUILayout.LabelField("Manual Import Instructions", EditorStyles.boldLabel);
+        
+        EditorGUILayout.HelpBox(
+            "For .vrca files (AssetBundle):\\n" +
+            "1. Click 'Select Avatar File' and choose the .vrca file\\n" +
+            "2. Click 'Import Avatar' to extract and import all assets\\n" +
+            "3. Find extracted assets in Assets/VRCStudio/Avatars/${avatarId}/\\n\\n" +
+            "For .unitypackage files:\\n" +
+            "1. Double-click the .unitypackage file, or\\n" +
+            "2. Use Assets → Import Package → Custom Package",
+            MessageType.None
+        );
+
+        EditorGUILayout.Space(10);
+        
+        // Quick actions
+        EditorGUILayout.LabelField("Quick Actions", EditorStyles.boldLabel);
+        EditorGUILayout.BeginHorizontal();
+        
+        if (GUILayout.Button("Open Output Folder"))
+        {
+            string outputPath = Path.Combine(Application.dataPath, "VRCStudio/Avatars/${avatarId}");
+            if (Directory.Exists(outputPath))
+            {
+                EditorUtility.RevealInFinder(outputPath);
+            }
+            else
+            {
+                EditorUtility.DisplayDialog("Info", "Output folder doesn't exist yet. Import an avatar first.", "OK");
+            }
+        }
+        
+        if (GUILayout.Button("Setup Project Structure"))
+        {
+            VRCStudioSetup.SetupProject();
+        }
+        
+        EditorGUILayout.EndHorizontal();
+
+        EditorGUILayout.EndScrollView();
+    }
+
+    private static void LoadAndInspectBundle(string bundlePath)
+    {
+        // Unload any previously loaded bundle
+        if (loadedBundle != null)
+        {
+            loadedBundle.Unload(true);
+            loadedBundle = null;
+        }
+        assetNames = null;
+
+        try
+        {
+            loadedBundle = AssetBundle.LoadFromFile(bundlePath);
+            if (loadedBundle != null)
+            {
+                assetNames = loadedBundle.GetAllAssetNames();
+                Debug.Log($"[VRCStudio] Bundle loaded successfully. Contains {assetNames.Length} assets.");
+            }
+            else
+            {
+                Debug.LogWarning("[VRCStudio] Failed to load bundle. It may be corrupted or incompatible.");
+            }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"[VRCStudio] Error loading bundle: {e.Message}");
+            assetNames = null;
         }
     }
 
-    private static void ImportBundle(string bundlePath)
+    private static void ImportVRCABundle(string bundlePath)
     {
         try
         {
-            string fileName = Path.GetFileNameWithoutExtension(bundlePath);
-            string importPath = "Assets/VRCStudio/Avatars/${avatarId}/";
+            string outputDir = "Assets/VRCStudio/Avatars/${avatarId}";
+            
+            // Create output directory
+            if (!AssetDatabase.IsValidFolder("Assets/VRCStudio"))
+                AssetDatabase.CreateFolder("Assets", "VRCStudio");
+            if (!AssetDatabase.IsValidFolder("Assets/VRCStudio/Avatars"))
+                AssetDatabase.CreateFolder("Assets/VRCStudio", "Avatars");
+            if (!AssetDatabase.IsValidFolder(outputDir))
+                AssetDatabase.CreateFolder("Assets/VRCStudio/Avatars", "${avatarId}");
 
-            // Create directory if it doesn't exist
-            if (!AssetDatabase.IsValidFolder(importPath))
+            // Load the bundle
+            AssetBundle bundle = AssetBundle.LoadFromFile(bundlePath);
+            if (bundle == null)
             {
-                string[] parts = importPath.Trim('/').Split('/');
-                string currentPath = "";
-                foreach (string part in parts)
+                EditorUtility.DisplayDialog(
+                    "Import Failed",
+                    "Failed to load the AssetBundle. The file may be corrupted or created with an incompatible Unity version.\\n\\n" +
+                    "Make sure the .vrca file was created with version patching enabled for Unity 2022.3.22f1.",
+                    "OK"
+                );
+                return;
+            }
+
+            // Get all asset names
+            string[] allAssets = bundle.GetAllAssetNames();
+            Debug.Log($"[VRCStudio] Found {allAssets.Length} assets in bundle");
+
+            int importedCount = 0;
+            List<GameObject> prefabs = new List<GameObject>();
+
+            // Extract each asset
+            foreach (string assetPath in allAssets)
+            {
+                try
                 {
-                    currentPath += part + "/";
-                    if (!AssetDatabase.IsValidFolder(currentPath.TrimEnd('/')))
+                    Object asset = bundle.LoadAsset(assetPath);
+                    if (asset == null) continue;
+
+                    string fileName = Path.GetFileName(assetPath);
+                    string destPath = outputDir + "/" + fileName;
+
+                    // Handle different asset types
+                    if (asset is GameObject go)
                     {
-                        AssetDatabase.CreateFolder(
-                            currentPath.Substring(0, currentPath.LastIndexOf('/')).TrimEnd('/'),
-                            part
-                        );
+                        // Save prefab
+                        string prefabPath = destPath.EndsWith(".prefab") ? destPath : destPath + ".prefab";
+                        PrefabUtility.SaveAsPrefabAsset(go, prefabPath);
+                        prefabs.Add(go);
+                        Debug.Log($"[VRCStudio] Saved prefab: {prefabPath}");
                     }
+                    else if (asset is Texture2D tex)
+                    {
+                        // Save texture
+                        byte[] pngData = tex.EncodeToPNG();
+                        if (pngData != null)
+                        {
+                            string texPath = destPath.EndsWith(".png") ? destPath : destPath + ".png";
+                            string fullPath = Path.Combine(Path.GetDirectoryName(Application.dataPath), texPath);
+                            File.WriteAllBytes(fullPath, pngData);
+                            Debug.Log($"[VRCStudio] Saved texture: {texPath}");
+                        }
+                    }
+                    else if (asset is Material mat)
+                    {
+                        // Create material asset
+                        string matPath = destPath.EndsWith(".mat") ? destPath : destPath + ".mat";
+                        Material newMat = new Material(mat);
+                        AssetDatabase.CreateAsset(newMat, matPath);
+                        Debug.Log($"[VRCStudio] Saved material: {matPath}");
+                    }
+                    // Add more asset type handlers as needed
+
+                    importedCount++;
+                }
+                catch (System.Exception e)
+                {
+                    Debug.LogWarning($"[VRCStudio] Failed to extract asset {assetPath}: {e.Message}");
                 }
             }
 
-            // Copy bundle file to Assets
-            string destPath = Path.Combine("Assets/VRCStudio/Avatars/${avatarId}/", Path.GetFileName(bundlePath));
-            string assetPath = destPath.Replace("\\\\", "/");
+            // Unload bundle
+            bundle.Unload(false);
 
-            FileUtil.CopyFileOrDirectory(bundlePath, destPath);
-            AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.Default);
+            // Refresh asset database
+            AssetDatabase.Refresh();
 
             EditorUtility.DisplayDialog(
-                "Success",
-                $"Avatar bundle imported!\\n\\nLocation: {assetPath}\\n\\n" +
-                "Next steps:\\n" +
-                "1. Find the avatar prefab in the project\\n" +
-                "2. Drag it into your scene\\n" +
-                "3. Configure as needed",
+                "Import Complete",
+                $"Successfully imported {importedCount} assets from the avatar bundle.\\n\\n" +
+                $"Location: {outputDir}\\n\\n" +
+                "Look for prefabs to drag into your scene.",
                 "OK"
             );
 
-            // Open folder - use compatible method
-            string folderPath = Path.Combine(Application.dataPath, "VRCStudio/Avatars/${avatarId}");
-            #if UNITY_EDITOR_WIN
-                System.Diagnostics.Process.Start("explorer.exe", folderPath.Replace("/", "\\\\"));
-            #elif UNITY_EDITOR_OSX
-                System.Diagnostics.Process.Start("open", folderPath);
-            #else
-                EditorUtility.RevealInFinder(folderPath);
-            #endif
+            // Reveal in project
+            EditorUtility.RevealInFinder(Path.Combine(Application.dataPath, "VRCStudio/Avatars/${avatarId}"));
+        }
+        catch (System.Exception e)
+        {
+            EditorUtility.DisplayDialog(
+                "Import Error",
+                $"An error occurred during import:\\n\\n{e.Message}\\n\\n" +
+                "Check the Console for more details.",
+                "OK"
+            );
+            Debug.LogError($"[VRCStudio] Import error: {e}");
+        }
+    }
+
+    private static void ImportUnityPackage(string packagePath)
+    {
+        try
+        {
+            AssetDatabase.ImportPackage(packagePath, true);
         }
         catch (System.Exception e)
         {
@@ -227,107 +397,83 @@ export function generateReadme(avatarName: string, avatarId: string, authorName:
 - \`metadata.json\` - Avatar information and package metadata
 - \`${avatarId}-image.png\` - Full avatar image
 - \`${avatarId}-thumbnail.png\` - Avatar thumbnail
-- \`${avatarId}.bundle\` - Unity AssetBundle (the avatar data)
-- \`Editor/\` - Unity editor scripts
+- \`${avatarId}.vrca\` - Unity AssetBundle (patched for Unity 2022.3.22f1)
+- \`Editor/\` - Unity editor scripts for easy importing
 - \`README.md\` - This file
 
-## How to Import the Avatar Bundle into Unity
+## Quick Start
 
-The \`.bundle\` file is a Unity AssetBundle extracted directly from VRChat's cache.
+### Option 1: Use the Unity Importer Script (Recommended)
 
-### Method 1: Direct Drag & Drop (Easiest)
-
-1. Copy the \`${avatarId}.bundle\` file
-2. Drag it directly into your Unity **Assets** folder
-3. Unity will automatically import it as an AssetBundle
-4. Find the bundle in your Project window and use it
-
-### Method 2: Using the Editor Script
-
-1. Copy this entire folder to your Unity project's **Assets** folder
+1. Copy the \`Editor/\` folder to your Unity project's \`Assets/\` folder
 2. In Unity, go to: **VRChat > VRC Studio > Import ${avatarName}**
-3. Click **Select Bundle File** and choose the \`.bundle\` file
-4. Click **Import Bundle**
-5. Avatar files extract to: \`Assets/VRCStudio/Avatars/${avatarId}/\`
+3. Click **Select Avatar File** and choose the \`.vrca\` file
+4. Click **Import Avatar**
+5. Find the extracted assets in \`Assets/VRCStudio/Avatars/${avatarId}/\`
 
-### Method 3: Manual Asset Import
+### Option 2: Direct AssetBundle Loading
 
-1. In Unity, right-click in **Project > Import New Asset**
-2. Select the \`.bundle\` file
-3. Adjust import settings if needed
-4. Click **Import**
+1. Open your Unity project (must be Unity **2022.3.22f1** - VRChat Creator Companion version)
+2. Use this code to load the bundle:
 
-## Using the Avatar in Your Scene
+\`\`\`csharp
+AssetBundle bundle = AssetBundle.LoadFromFile("path/to/${avatarId}.vrca");
+string[] assetNames = bundle.GetAllAssetNames();
+foreach (string name in assetNames)
+{
+    Object asset = bundle.LoadAsset(name);
+    // Process the asset...
+}
+bundle.Unload(false);
+\`\`\`
 
-Once imported, the bundle contains the avatar prefab and all assets:
+## About VRCA Files
 
-1. Find the avatar prefab in your Project hierarchy
-2. Drag it into your Scene
-3. Configure materials, animations, and scripts as needed
-4. Check \`metadata.json\` for platform-specific requirements
+The \`.vrca\` file is a Unity AssetBundle extracted from VRChat's cache. VRC Studio automatically patches the Unity version in these bundles to make them compatible with the public Unity version used by VRChat Creator Companion (2022.3.22f1).
 
-## Bundle Specifications
-
-Check \`metadata.json\` for:
-- **Platform**: standalonewindows, quest, android, etc.
-- **Unity Version**: Required version to use this avatar
-- **Author**: Creator information
-- **Description**: Avatar details
+**Original VRChat Unity Version:** Varies (e.g., 2022.3.22f2)
+**Patched Unity Version:** 2022.3.22f1
 
 ## Troubleshooting
 
-**Bundle won't import:**
-- Verify the file isn't corrupted (should be ~100+ MB)
-- Check you're using the correct Unity version
-- Check the Editor console for errors
+### "Version mismatch" error
+- Make sure you're using Unity **2022.3.22f1** (the VCC version)
+- The .vrca file should already be patched. If not, re-export from VRC Studio with version patching enabled
 
-**Avatar looks broken:**
-- Verify all textures imported with the bundle
-- Check that materials are assigned
-- Inspect the avatar prefab hierarchy
-- Look for missing script references
+### Bundle won't load
+- Verify the file isn't corrupted (should be several MB at minimum)
+- Check the Unity Console for specific error messages
+- Try loading with the provided Editor script instead of manual loading
 
-**Performance issues:**
-- Check if textures are too high resolution
-- Reduce shadow resolution
-- Check poly count in Scene settings
+### Assets look broken
+- Some materials may need shader reassignment
+- Textures might need to be reimported
+- Check for missing script references
 
-## Common Issues & Solutions
+### Can't find prefabs
+- Look in the bundle's asset list (shown in the importer window)
+- Some avatars store the main prefab at different paths
 
-| Issue | Solution |
-|-------|----------|
-| "File not found" | Ensure .bundle file is in the same folder |
-| "Can't import" | Try dragging directly into Assets folder |
-| Broken textures | Right-click bundle > Reimport |
-| Missing animations | Check avatar prefab in Project folder |
+## Unity Version Compatibility
 
-## Understanding the Bundle Format
+| Unity Version | Compatible | Notes |
+|---------------|------------|-------|
+| 2022.3.22f1   | ✓ Yes      | VRChat Creator Companion version |
+| 2022.3.22f2   | ⚠ Maybe    | VRChat internal version |
+| Other 2022.3.x| ⚠ Maybe    | May work, not guaranteed |
+| 2019.4.x      | ✗ No       | Older VRChat SDK version |
 
-The \`.bundle\` file is a Unity native AssetBundle format that contains:
-- The avatar prefab/model
-- All textures and materials
-- All animations and scripts
-- Any other avatar-specific assets
+## File Format Reference
 
-Unlike .unitypackage (which is ZIP), bundles are more compact and efficient.
-
-## Next Steps
-
-1. ✓ Extract this package to your project
-2. ✓ Import the .bundle file into Unity
-3. ✓ Drag the avatar prefab into your scene
-4. ✓ Customize as needed for your project
-
-## Need Help?
-
-- Check the metadata.json for avatar specifications
-- See the included EditorSetup.cs for additional options
-- For VRC-specific issues, consult the VRC SDK documentation
+| Extension | Format | Description |
+|-----------|--------|-------------|
+| .vrca | AssetBundle | Raw Unity AssetBundle with VRChat avatar data |
+| .unitypackage | tar.gz | Unity package format (contains GUID structure) |
 
 ---
 
 Generated by VRC Studio
-Bundle extracted from VRChat Cache
-For questions: Check metadata.json for package details
+Bundle extracted from VRChat cache with automatic version patching
+For issues: Check the diagnostic log in VRC Studio
 `;
 }

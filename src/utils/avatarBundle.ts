@@ -91,8 +91,9 @@ export async function downloadAvatarBundle(
  */
 export async function extractAvatarBundle(
   bundlePath: string,
-  avatarId: string
-): Promise<{ success: boolean; extractedPath?: string; error?: string }> {
+  avatarId: string,
+  options?: { patchVersion?: boolean; outputFormat?: 'vrca' | 'unitypackage' }
+): Promise<{ success: boolean; extractedPath?: string; error?: string; versionPatched?: boolean; originalVersion?: string; patchedVersion?: string }> {
   if (!isElectron()) {
     return {
       success: false,
@@ -109,25 +110,36 @@ export async function extractAvatarBundle(
     const store = useAvatarBundleStore.getState();
     store.setExtracting(avatarId, true);
 
-    // Extract returns the path to the extracted directory
-    const extractedPath = await electronAPI.extractBundle(bundlePath, avatarId);
+    // Extract with version patching options (default to .vrca format with patching)
+    const extractResult = await electronAPI.extractBundle(bundlePath, avatarId, {
+      patchVersion: options?.patchVersion !== false, // Default true
+      outputFormat: options?.outputFormat || 'vrca' // Default to .vrca
+    });
 
     store.setExtracting(avatarId, false);
 
-    if (!extractedPath) {
+    if (!extractResult || !extractResult.path) {
       throw new Error('No extraction path returned from Electron');
+    }
+
+    console.log('[Bundle] Extraction complete:', extractResult);
+    if (extractResult.versionPatched) {
+      console.log(`[Bundle] Version patched: ${extractResult.originalVersion} -> ${extractResult.patchedVersion}`);
     }
 
     return {
       success: true,
-      extractedPath,
+      extractedPath: extractResult.path,
+      versionPatched: extractResult.versionPatched,
+      originalVersion: extractResult.originalVersion,
+      patchedVersion: extractResult.patchedVersion
     };
   } catch (error) {
     useAvatarBundleStore.getState().setExtracting(avatarId, false);
 
     const errorMessage = error instanceof Error
       ? error.message
-      : 'Failed to extract bundle. Make sure the downloaded file is a valid .unitypackage';
+      : 'Failed to extract bundle. Make sure the downloaded file is a valid avatar bundle';
 
     return {
       success: false,

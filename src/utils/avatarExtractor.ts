@@ -143,10 +143,13 @@ export async function downloadAvatarImage(
  */
 export async function generateDownloadablePackage(
   avatar: VRCAvatar,
-  cacheFilePath?: string | null
-): Promise<{ success: boolean; files?: File[]; error?: string }> {
+  cacheFilePath?: string | null,
+  options?: { outputFormat?: 'vrca' | 'unitypackage'; patchVersion?: boolean }
+): Promise<{ success: boolean; files?: File[]; error?: string; versionPatched?: boolean; originalVersion?: string; patchedVersion?: string }> {
   try {
     const files: File[] = [];
+    const outputFormat = options?.outputFormat || 'vrca'; // Default to .vrca for better Unity compatibility
+    const patchVersion = options?.patchVersion !== false; // Default to true
 
     // 1. Create metadata JSON
     const packageResult = await createAvatarPackage(avatar);
@@ -175,6 +178,9 @@ export async function generateDownloadablePackage(
 
     // 4. Get avatar bundle - either from user selection or auto search
     let bundleToUse: string | null = null;
+    let versionPatched = false;
+    let originalVersion: string | undefined;
+    let patchedVersion: string | undefined;
 
     if (cacheFilePath) {
       console.log('[AvatarExtractor] Using user-selected cache file:', cacheFilePath);
@@ -190,27 +196,45 @@ export async function generateDownloadablePackage(
       try {
         const electronAPI = (window as any).electronAPI;
 
-        // Read the _data file and include it as .unitypackage in the download
-        console.log('[AvatarExtractor] Reading bundle file...');
-        const readResult = await electronAPI.readFile(bundleToUse);
+        // Use the new extraction method with version patching
+        console.log('[AvatarExtractor] Extracting bundle with version patching...');
+        const extractResult = await electronAPI.extractAvatarToDownloads(bundleToUse, avatar.id, {
+          patchVersion,
+          outputFormat
+        });
 
-        if (readResult.success && readResult.content) {
-          console.log('[AvatarExtractor] ✓ Bundle read successfully, size:', readResult.size, 'bytes');
+        if (extractResult.success && extractResult.path) {
+          console.log('[AvatarExtractor] ✓ Bundle extracted successfully');
+          console.log('[AvatarExtractor]   Path:', extractResult.path);
+          console.log('[AvatarExtractor]   Version patched:', extractResult.versionPatched);
+          
+          versionPatched = extractResult.versionPatched;
+          originalVersion = extractResult.originalVersion;
+          patchedVersion = extractResult.patchedVersion;
 
-          // Convert base64 back to binary blob
-          // The Electron main process already handles gzip decompression
-          const binaryString = atob(readResult.content);
-          const bytes = new Uint8Array(binaryString.length);
-          for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
+          // Read the extracted file
+          const readResult = await electronAPI.readFile(extractResult.path, false); // Don't auto-decompress
+          
+          if (readResult.success && readResult.content) {
+            const binaryString = atob(readResult.content);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+              bytes[i] = binaryString.charCodeAt(i);
+            }
+
+            const bundleBlob = new Blob([bytes], { type: 'application/octet-stream' });
+            const fileName = outputFormat === 'vrca' ? `${avatar.id}.vrca` : `${avatar.id}.unitypackage`;
+            files.push(new File([bundleBlob], fileName, { type: 'application/octet-stream' }));
+
+            console.log('[AvatarExtractor] ✓ Bundle added to download package');
+            if (versionPatched) {
+              console.log(`[AvatarExtractor]   Version: ${originalVersion} -> ${patchedVersion}`);
+            }
+          } else {
+            console.error('[AvatarExtractor] ✗ Failed to read extracted file:', readResult.error);
           }
-
-          const bundleBlob = new Blob([bytes], { type: 'application/octet-stream' });
-          files.push(new File([bundleBlob], `${avatar.id}.unitypackage`, { type: 'application/octet-stream' }));
-
-          console.log('[AvatarExtractor] ✓ Bundle added to download package');
         } else {
-          console.error('[AvatarExtractor] ✗ Failed to read bundle:', readResult.error);
+          console.error('[AvatarExtractor] ✗ Extraction failed:', extractResult.error);
         }
       } catch (bundleError) {
         console.error('[AvatarExtractor] Error during bundle processing:', bundleError);
@@ -239,6 +263,9 @@ export async function generateDownloadablePackage(
     return {
       success: true,
       files,
+      versionPatched,
+      originalVersion,
+      patchedVersion
     };
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
@@ -280,20 +307,27 @@ export async function browseCacheFile(): Promise<{
 /**
  * Trigger browser download of extracted avatar data
  */
-export async function downloadAvatarExtract(avatar: VRCAvatar, cacheFilePath?: string | null): Promise<{
+export async function downloadAvatarExtract(
+  avatar: VRCAvatar, 
+  cacheFilePath?: string | null,
+  options?: { outputFormat?: 'vrca' | 'unitypackage'; patchVersion?: boolean }
+): Promise<{
   success: boolean;
   bundleFound?: boolean;
+  versionPatched?: boolean;
+  originalVersion?: string;
+  patchedVersion?: string;
   error?: string;
 }> {
   try {
-    // Create downloadable package
-    const packageResult = await generateDownloadablePackage(avatar, cacheFilePath);
+    // Create downloadable package with version patching
+    const packageResult = await generateDownloadablePackage(avatar, cacheFilePath, options);
     if (!packageResult.success || !packageResult.files) {
       throw new Error(packageResult.error || 'Failed to generate package');
     }
 
     // Check if bundle was included
-    const bundleFound = packageResult.files.some(f => f.name.endsWith('.unitypackage'));
+    const bundleFound = packageResult.files.some(f => f.name.endsWith('.vrca') || f.name.endsWith('.unitypackage'));
 
     // Download each file
     for (const file of packageResult.files) {
@@ -321,7 +355,7 @@ export async function downloadAvatarExtract(avatar: VRCAvatar, cacheFilePath?: s
           'Avatar bundle not found in VRChat cache. ' +
           'You can manually add it: ' +
           '1) Download avatar in VRChat or copy from cache ' +
-          '2) Place .unitypackage in the extracted folder ' +
+          '2) Place .vrca file in the extracted folder ' +
           '3) Use the Unity importer script to import',
       };
     }
@@ -329,6 +363,9 @@ export async function downloadAvatarExtract(avatar: VRCAvatar, cacheFilePath?: s
     return {
       success: true,
       bundleFound: true,
+      versionPatched: packageResult.versionPatched,
+      originalVersion: packageResult.originalVersion,
+      patchedVersion: packageResult.patchedVersion
     };
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
