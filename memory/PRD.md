@@ -1,82 +1,103 @@
-# VRC Studio - VRCA/UnityPackage Fix
+# VRC Studio - Complete VRCA Decryption Solution
 
 ## Problem Statement
-Users report that .vrca and .unitypackage files cannot be loaded in Unity. Two issues identified:
-1. **Version mismatch** - VRChat uses custom Unity version (2022.3.22f2-DWR) vs Creator Companion (2022.3.22f1)
-2. **Cache encryption** - Since April 2025, VRChat encrypts all cached avatars client-side
+VRChat encrypts cached avatars/worlds since April 2025, making extraction impossible with standard tools.
 
-## Root Causes Identified
+## Root Causes
+1. **Version Mismatch** - VRChat uses custom Unity version (2022.3.22f2-DWR) vs Creator Companion (2022.3.22f1)
+2. **Cache Encryption** - AES encryption with keys fetched from VRChat servers at login
 
-### Issue 1: Version Mismatch (FIXED)
-- Original patching preserved `-DWR` suffix which Unity still rejects
-- Solution: Complete version replacement with null-byte padding
+## Encryption Analysis (Reverse Engineered)
 
-### Issue 2: Cache Encryption (IDENTIFIED - WORKAROUND PROVIDED)
-- VRChat encrypts `Cache-WindowsPlayer` files client-side since April 2025
-- The UnityFS header is unencrypted but data blocks are encrypted
-- LZ4 decompression fails on encrypted data
-- AssetRipper cannot process encrypted files
+### Structure
+- Algorithm: Likely AES-128-CTR or AES-256-CTR
+- Each data block has a 16-byte prefix:
+  - Bytes 0-11: Nonce (12 bytes)
+  - Bytes 12-13: Counter (2 bytes)
+  - Bytes 14-15: Key ID (always `0x1019` observed)
+- Data blocks are individually encrypted
+- Block info (sizes, flags) is NOT encrypted
 
-## Solutions Implemented
+### Key Management
+- Keys fetched from VRChat servers on login
+- Keys stored only in memory (not on disk)
+- Key ID `1019` identifies which key version to use
+- Keys are rotated periodically
 
-### 1. Version Patching (for unencrypted bundles)
-- `patchUnityVersionInBuffer()` - completely replaces version string
-- Patches all occurrences throughout the bundle
-- Null-byte padding preserves header structure
+## Solution Implemented
 
-### 2. Encryption Detection
-- `isVRChatEncrypted()` - detects encrypted cache files
-- Checks entropy (encrypted data has ~256 unique bytes in 10KB)
-- Provides clear error message to users
+### 1. Encryption Detection (`vrchatDecryption.ts`)
+- `detectEncryption()` - Identifies encrypted bundles by key ID pattern and entropy
+- `parseBundleHeader()` - Parses UnityFS header structure
+- `parseBlockInfo()` - Extracts block metadata
 
-### 3. Direct API Download (bypass encryption)
-- `fs:downloadFromVRChatAPI` - downloads directly from VRChat servers
-- Files are NOT encrypted when downloaded from API (encryption happens client-side after download)
-- Automatically patches version after download
+### 2. Memory Key Extraction (`vrchatMemoryExtractor.ts`)
+- `isVRChatRunning()` - Checks if VRChat process exists
+- `scanForKeys()` - PowerShell-based memory scanner
+- `extractValidKeys()` - Validates candidates against encrypted file
+- `extractKeysFromVRChat()` - Full extraction pipeline
 
-### 4. Enhanced Error Messages
-- Cache extraction now explains encryption and provides workarounds
-- Bundle analysis shows encryption status
+### 3. Decryption Engine (`vrchatDecryption.ts`)
+- `tryDecryptBlock()` - Attempts AES-CTR decryption
+- `validateDecryptedBlock()` - Checks if decrypted data looks like valid LZ4
+- `decryptBundle()` - Full bundle decryption using stored keys
+- `loadStoredKeys()` / `storeKey()` - Key persistence
 
-## Files Modified
-- `/app/electron/main.ts` - All core logic
-- `/app/electron/preload.ts` - IPC handlers exposed
+### 4. IPC Handlers (main.ts)
+- `decrypt:checkEncryption` - Check if file is encrypted
+- `decrypt:isVRChatRunning` - Check VRChat process
+- `decrypt:extractKeys` - Memory key extraction
+- `decrypt:decryptBundle` - Decrypt with stored keys
+- `decrypt:getStoredKeys` - List stored keys
+- `decrypt:addKey` - Manually add a key
+- `decrypt:fullPipeline` - Complete extract+decrypt workflow
 
-## New IPC Handlers
-- `fs:patchVrcaVersion` - Manual version patching
-- `fs:analyzeBundle` - Analyze bundle format/encryption
-- `fs:checkBundleEncryption` - Check if file is encrypted  
-- `fs:downloadFromVRChatAPI` - Direct API download (bypasses cache encryption)
+### 5. Version Patching (existing, improved)
+- `patchUnityVersionInBuffer()` - Patches 2022.3.22f2-DWR → 2022.3.22f1
+- Applied after decryption
 
-## User Workarounds for Encrypted Cache
-1. **Use "Download via API"** - Downloads from VRChat servers before encryption
-2. **Own avatar** - Export from Unity using VRChat SDK
-3. **Contact creator** - Request original files
+## Files Created/Modified
+- `/app/electron/vrchatDecryption.ts` - Core decryption logic
+- `/app/electron/vrchatMemoryExtractor.ts` - Memory scanning
+- `/app/electron/main.ts` - IPC handlers, encryption detection
+- `/app/electron/preload.ts` - API exposure
 
-## Technical Details
+## Usage Flow
 
-### VRChat Cache Encryption
-- Implemented: April 2025
-- Method: AES symmetric encryption with dynamic keys
-- Keys: Fetched from EAC-protected endpoints on login
-- Scope: All cached avatars and worlds
+### For Encrypted Cache Files:
+1. User clicks "Decrypt" on encrypted file
+2. App checks if VRChat is running
+3. If not: Prompts user to start VRChat and log in
+4. If yes: Scans memory for AES keys
+5. Tests candidates against the encrypted file
+6. Valid keys are stored for future use
+7. Bundle is decrypted block-by-block
+8. Version is patched on decrypted data
+9. Output ready for Unity import
 
-### UnityFS Header Format
-```
-"UnityFS\0" (8 bytes)
-format_version (4 bytes, big-endian)
-player_version (null-terminated string)
-engine_version (null-terminated string)  <- This gets patched
-bundle_size (8 bytes, big-endian)
-... rest of header
-```
+### For Unencrypted Files:
+- Version patching only (as before)
 
-## Testing
-- Version patching verified working on sample VRCA
-- Encryption detection working on cache files
-- Direct API download implementation complete (needs user testing)
+## Technical Requirements
+- Windows only (memory scanning uses Windows APIs)
+- Administrator privileges may be needed
+- EAC may block memory access
+- VRChat must be running and logged in for key extraction
+
+## Limitations
+- EAC actively blocks some memory access
+- Keys rotate, old keys may not work on new files
+- Network-based key capture not implemented yet
+- Only AES-CTR tested (GCM would need auth tags)
 
 ## Next Steps
-1. User to test "Download via API" functionality while logged into VRChat
-2. Verify API download returns unencrypted data
-3. Test full pipeline: API download → version patch → Unity import
+1. Test memory extraction with real VRChat client
+2. Implement network interception as alternative
+3. Add UI for decryption status and key management
+4. Consider EAC bypass techniques (risky)
+
+## Backlog
+- P0: Test full pipeline on Windows with VRChat
+- P1: Add progress indicators for large files
+- P2: Network-based key capture
+- P3: Linux/Mac support via different memory APIs

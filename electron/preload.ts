@@ -49,6 +49,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   downloadFromVRChatAPI: (avatarId: string, packageId: string) => ipcRenderer.invoke('fs:downloadFromVRChatAPI', avatarId, packageId),
   checkBundleEncryption: (bundlePath: string) => ipcRenderer.invoke('fs:checkBundleEncryption', bundlePath),
 
+  // VRChat Cache Decryption
+  decryptCheckEncryption: (bundlePath: string) => ipcRenderer.invoke('decrypt:checkEncryption', bundlePath),
+  decryptIsVRChatRunning: () => ipcRenderer.invoke('decrypt:isVRChatRunning'),
+  decryptExtractKeys: (testFilePath?: string) => ipcRenderer.invoke('decrypt:extractKeys', testFilePath),
+  decryptBundle: (bundlePath: string, outputPath?: string) => ipcRenderer.invoke('decrypt:decryptBundle', bundlePath, outputPath),
+  decryptGetStoredKeys: () => ipcRenderer.invoke('decrypt:getStoredKeys'),
+  decryptAddKey: (keyHex: string, keyId?: string) => ipcRenderer.invoke('decrypt:addKey', keyHex, keyId),
+  decryptFullPipeline: (bundlePath: string) => ipcRenderer.invoke('decrypt:fullPipeline', bundlePath),
+
   // Persistent app data storage
   saveAppData: (key: string, data: string) => ipcRenderer.invoke('storage:saveAppData', key, data),
   loadAppData: (key: string) => ipcRenderer.invoke('storage:loadAppData', key),

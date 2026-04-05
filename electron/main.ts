@@ -8,7 +8,11 @@ import https from 'https';
 import crypto from 'crypto';
 import zlib from 'zlib';
 import { promisify } from 'util';
-import { spawn } from 'child_process';
+import { spawn, exec } from 'child_process';
+
+// Import decryption modules
+import * as vrchatDecryption from './vrchatDecryption';
+import * as vrchatMemoryExtractor from './vrchatMemoryExtractor';
 
 // Initialize logging EARLY - use a simpler path
 let logFile: string;
@@ -2403,6 +2407,225 @@ ipcMain.handle('fs:downloadFromVRChatAPI', async (_e, avatarId: string, packageI
     return { success: false, error: err.message };
   }
 });
+
+
+// ==================== DECRYPTION IPC HANDLERS ====================
+
+// Check if a bundle is encrypted
+ipcMain.handle('decrypt:checkEncryption', async (_e, bundlePath: string) => {
+  try {
+    if (!fs.existsSync(bundlePath)) {
+      return { success: false, error: 'File not found' };
+    }
+    
+    const data = fs.readFileSync(bundlePath);
+    const result = vrchatDecryption.detectEncryption(data);
+    
+    return {
+      success: true,
+      encrypted: result.encrypted,
+      keyId: result.keyId,
+      reason: result.reason
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+});
+
+// Check if VRChat is running
+ipcMain.handle('decrypt:isVRChatRunning', async () => {
+  const running = await vrchatMemoryExtractor.isVRChatRunning();
+  return { running };
+});
+
+// Extract keys from VRChat memory
+ipcMain.handle('decrypt:extractKeys', async (_e, testFilePath?: string) => {
+  try {
+    logDiagnostic('\n========== KEY EXTRACTION START ==========');
+    
+    const result = await vrchatMemoryExtractor.extractKeysFromVRChat(testFilePath);
+    
+    if (result.success && result.keys) {
+      logDiagnostic(`Extracted ${result.keys.length} potential keys`);
+    } else {
+      logDiagnostic(`Key extraction failed: ${result.error}`);
+    }
+    
+    logDiagnostic('========== KEY EXTRACTION END ==========\n');
+    
+    return result;
+  } catch (err: any) {
+    logDiagnostic(`KEY EXTRACTION ERROR: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+});
+
+// Decrypt a bundle using stored keys
+ipcMain.handle('decrypt:decryptBundle', async (_e, bundlePath: string, outputPath?: string) => {
+  try {
+    logDiagnostic('\n========== BUNDLE DECRYPTION START ==========');
+    logDiagnostic(`Input: ${bundlePath}`);
+    
+    const result = await vrchatDecryption.decryptBundle(bundlePath, outputPath);
+    
+    if (result.success) {
+      logDiagnostic(`Decryption successful: ${result.outputPath}`);
+      logDiagnostic(`Key used: ${result.keyUsed}`);
+    } else {
+      logDiagnostic(`Decryption failed: ${result.error}`);
+    }
+    
+    logDiagnostic('========== BUNDLE DECRYPTION END ==========\n');
+    
+    return result;
+  } catch (err: any) {
+    logDiagnostic(`DECRYPTION ERROR: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+});
+
+// Get stored decryption keys
+ipcMain.handle('decrypt:getStoredKeys', async () => {
+  try {
+    const keys = vrchatDecryption.loadStoredKeys();
+    return {
+      success: true,
+      keys: keys.map(k => ({
+        keyId: k.keyId,
+        keyPreview: k.key.slice(0, 4).toString('hex') + '...',
+        extractedAt: k.extractedAt,
+        source: k.source,
+        platform: k.platform
+      }))
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+});
+
+// Manually add a decryption key
+ipcMain.handle('decrypt:addKey', async (_e, keyHex: string, keyId?: string) => {
+  try {
+    const keyBuffer = Buffer.from(keyHex, 'hex');
+    
+    if (keyBuffer.length !== 16 && keyBuffer.length !== 32) {
+      return { success: false, error: 'Key must be 16 bytes (AES-128) or 32 bytes (AES-256)' };
+    }
+    
+    vrchatDecryption.storeKey({
+      keyId: keyId || '1019',
+      key: keyBuffer,
+      extractedAt: Date.now(),
+      source: 'manual',
+      platform: 'windows'
+    });
+    
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+});
+
+// Full decryption pipeline: extract keys + decrypt
+ipcMain.handle('decrypt:fullPipeline', async (_e, bundlePath: string) => {
+  try {
+    logDiagnostic('\n========== FULL DECRYPTION PIPELINE ==========');
+    logDiagnostic(`Target file: ${bundlePath}`);
+    
+    // Step 1: Check if file is encrypted
+    const data = fs.readFileSync(bundlePath);
+    const encCheck = vrchatDecryption.detectEncryption(data);
+    
+    if (!encCheck.encrypted) {
+      // File is not encrypted - just patch version and return
+      logDiagnostic('File is not encrypted, applying version patch only');
+      const patchResult = patchUnityVersionInBuffer(data);
+      
+      const outputPath = bundlePath.replace(/\.(vrca|_data)$/i, '_patched.vrca');
+      fs.writeFileSync(outputPath, patchResult.patched);
+      
+      return {
+        success: true,
+        encrypted: false,
+        outputPath,
+        message: 'File was not encrypted. Version patched successfully.'
+      };
+    }
+    
+    logDiagnostic(`File is encrypted with key ID: ${encCheck.keyId}`);
+    
+    // Step 2: Check for stored keys
+    let storedKeys = vrchatDecryption.loadStoredKeys();
+    
+    if (storedKeys.length === 0) {
+      // Step 3: Try to extract keys from VRChat
+      logDiagnostic('No stored keys, attempting extraction from VRChat...');
+      
+      const isRunning = await vrchatMemoryExtractor.isVRChatRunning();
+      if (!isRunning) {
+        return {
+          success: false,
+          encrypted: true,
+          needsVRChat: true,
+          error: 'VRChat is not running',
+          instructions: `This file is ENCRYPTED by VRChat.\n\nTo decrypt it:\n1. Start VRChat and log in\n2. Load any avatar (to trigger key loading)\n3. Keep VRChat running\n4. Click "Extract Keys" button\n5. Then try decrypting again\n\nNote: Requires Administrator privileges. EAC may block key extraction.`
+        };
+      }
+      
+      // Extract keys
+      const extractResult = await vrchatMemoryExtractor.extractKeysFromVRChat(bundlePath);
+      
+      if (!extractResult.success) {
+        return {
+          success: false,
+          encrypted: true,
+          error: extractResult.error,
+          instructions: extractResult.instructions
+        };
+      }
+      
+      // Reload stored keys
+      storedKeys = vrchatDecryption.loadStoredKeys();
+    }
+    
+    // Step 4: Attempt decryption
+    logDiagnostic(`Attempting decryption with ${storedKeys.length} stored keys...`);
+    const decryptResult = await vrchatDecryption.decryptBundle(bundlePath);
+    
+    if (decryptResult.success) {
+      // Step 5: Patch version on decrypted file
+      const decryptedData = fs.readFileSync(decryptResult.outputPath!);
+      const patchResult = patchUnityVersionInBuffer(decryptedData);
+      fs.writeFileSync(decryptResult.outputPath!, patchResult.patched);
+      
+      logDiagnostic('Decryption and version patching complete!');
+      
+      return {
+        success: true,
+        encrypted: true,
+        decrypted: true,
+        outputPath: decryptResult.outputPath,
+        keyUsed: decryptResult.keyUsed,
+        versionPatched: {
+          from: patchResult.originalVersion,
+          to: patchResult.patchedVersion
+        }
+      };
+    }
+    
+    return {
+      success: false,
+      encrypted: true,
+      error: decryptResult.error,
+      instructions: 'Stored keys could not decrypt this file. The key may have been rotated. Try extracting fresh keys while VRChat is running.'
+    };
+    
+  } catch (err: any) {
+    logDiagnostic(`PIPELINE ERROR: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+});
+
 
 ipcMain.handle('fs:launchAssetRipper', async (_e, bundlePath: string, avatarId?: string) => {
   if (process.platform !== 'win32') {
