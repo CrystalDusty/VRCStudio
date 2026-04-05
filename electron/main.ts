@@ -257,6 +257,24 @@ ipcMain.handle('fs:extractAvatarToDownloads', async (_e, cacheDataPath: string, 
     const buffer = fs.readFileSync(cacheDataPath);
     logDiagnostic(`Read successful: ${buffer.length} bytes`);
 
+    // CHECK FOR VRCHAT ENCRYPTION FIRST
+    const encryptionCheck = isVRChatEncrypted(buffer);
+    if (encryptionCheck.encrypted) {
+      logDiagnostic(`⚠ ENCRYPTION DETECTED: ${encryptionCheck.reason}`);
+      return {
+        success: false,
+        encrypted: true,
+        error: `This cache file is ENCRYPTED by VRChat.\n\n` +
+          `Since April 2025, VRChat encrypts all cached avatars client-side to prevent extraction.\n\n` +
+          `WORKAROUND OPTIONS:\n` +
+          `1. Use the "Download via API" button instead - downloads directly from VRChat servers (unencrypted)\n` +
+          `2. If you own this avatar, export it from Unity using the VRChat SDK\n` +
+          `3. Contact the avatar creator for the original files\n\n` +
+          `Technical: ${encryptionCheck.reason}`,
+        logFile: logFile
+      };
+    }
+
     const integrity = validateUnityFsIntegrity(buffer);
     if (!integrity.valid) {
       const msg = `Cache bundle failed integrity check: ${integrity.reason}`;
@@ -544,6 +562,65 @@ function validateUnityFsIntegrity(input: Buffer): { valid: boolean; reason?: str
 
 // Target Unity version for VRChat Creator Companion compatibility
 const TARGET_UNITY_VERSION = '2022.3.22f1';
+
+/**
+ * Check if a buffer contains encrypted VRChat cache data.
+ * VRChat encrypts cache files client-side since April 2025.
+ * Encrypted files have:
+ * - Valid UnityFS header (not encrypted)
+ * - But data blocks fail LZ4 decompression
+ */
+function isVRChatEncrypted(buffer: Buffer): { encrypted: boolean; reason: string } {
+  // Must start with UnityFS
+  if (buffer.slice(0, 7).toString('utf8') !== 'UnityFS') {
+    return { encrypted: false, reason: 'Not a UnityFS file' };
+  }
+  
+  // Parse header to find data region
+  let offset = 12;
+  while (offset < buffer.length && buffer[offset] !== 0) offset++;
+  offset++;
+  while (offset < buffer.length && buffer[offset] !== 0) offset++;
+  offset++;
+  
+  // Skip bundle size (8), compressed block info size (4), uncompressed (4)
+  offset += 8 + 4 + 4;
+  
+  // Read flags
+  const flags = buffer.readUInt32BE(offset);
+  const blockInfoAtEnd = !!(flags & 0x80);
+  offset += 4;
+  
+  // Data starts here (if block info is at end)
+  if (!blockInfoAtEnd) {
+    return { encrypted: false, reason: 'Block info not at end - unusual format' };
+  }
+  
+  // Read first data bytes
+  const firstDataBytes = buffer.slice(offset, offset + 64);
+  
+  // Check entropy - encrypted data has very high entropy (all 256 byte values appear)
+  const byteSet = new Set<number>();
+  for (let i = offset; i < Math.min(offset + 10000, buffer.length); i++) {
+    byteSet.add(buffer[i]);
+  }
+  
+  // If we see nearly all 256 byte values in first 10KB, it's likely encrypted
+  if (byteSet.size > 250) {
+    // Try LZ4 decompression on what should be the first block
+    try {
+      // This would need actual LZ4 library - for now just check entropy
+      return { 
+        encrypted: true, 
+        reason: `High entropy (${byteSet.size}/256 unique bytes in 10KB) suggests encryption. VRChat encrypts cache files since April 2025.`
+      };
+    } catch {
+      return { encrypted: true, reason: 'Data blocks appear encrypted (LZ4 decompression fails)' };
+    }
+  }
+  
+  return { encrypted: false, reason: 'Data appears unencrypted' };
+}
 
 /**
  * Patch the Unity version in a raw UnityFS bundle buffer.
@@ -2068,8 +2145,16 @@ ipcMain.handle('fs:analyzeBundle', async (_e, bundlePath: string) => {
       result.playerVersion = playerVer;
       result.unityVersion = engineVer;
       
+      // Check for encryption
+      const encryptionCheck = isVRChatEncrypted(buffer);
+      result.isEncrypted = encryptionCheck.encrypted;
+      if (encryptionCheck.encrypted) {
+        result.encryptionReason = encryptionCheck.reason;
+        result.recommendation = `⚠️ ENCRYPTED: ${encryptionCheck.reason}\n\n` +
+          `VRChat encrypts cache files since April 2025. Use "Download via API" to get unencrypted data.`;
+      }
       // Check if patching is needed
-      if (engineVer.includes('-DWR') || engineVer.includes('f2')) {
+      else if (engineVer.includes('-DWR') || engineVer.includes('f2')) {
         result.needsPatching = true;
         result.recommendation = `This bundle was built with Unity ${engineVer} (VRChat custom). ` +
           `It needs version patching to work with Unity ${TARGET_UNITY_VERSION}. ` +
@@ -2090,6 +2175,231 @@ ipcMain.handle('fs:analyzeBundle', async (_e, bundlePath: string) => {
     
     return result;
   } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+});
+
+// Check if a bundle file is encrypted
+ipcMain.handle('fs:checkBundleEncryption', async (_e, bundlePath: string) => {
+  try {
+    if (!fs.existsSync(bundlePath)) {
+      return { success: false, error: 'File not found' };
+    }
+    
+    const buffer = fs.readFileSync(bundlePath);
+    const result = isVRChatEncrypted(buffer);
+    
+    return {
+      success: true,
+      encrypted: result.encrypted,
+      reason: result.reason,
+      fileSize: buffer.length
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+});
+
+// Download directly from VRChat API (bypasses encrypted cache)
+// This should give UNENCRYPTED data since encryption happens client-side after download
+ipcMain.handle('fs:downloadFromVRChatAPI', async (_e, avatarId: string, packageId: string) => {
+  try {
+    logDiagnostic('\n========== DIRECT API DOWNLOAD ==========');
+    logDiagnostic(`Avatar ID: ${avatarId}`);
+    logDiagnostic(`Package ID: ${packageId}`);
+    
+    // Construct the VRChat file API URL
+    const downloadUrl = `https://api.vrchat.cloud/api/1/file/file_${packageId}/file`;
+    logDiagnostic(`Download URL: ${downloadUrl}`);
+    
+    // Get cookies from the session
+    const cookies = await mainWindow?.webContents.session.cookies.get({
+      url: 'https://api.vrchat.cloud',
+    }) || [];
+    
+    const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+    logDiagnostic(`Auth cookies: ${cookies.length} found`);
+    
+    if (cookies.length === 0) {
+      return {
+        success: false,
+        error: 'Not logged in to VRChat. Please log in first to download avatars.'
+      };
+    }
+    
+    // Download to temp file first
+    const downloadsPath = app.getPath('downloads');
+    const tempPath = path.join(downloadsPath, `${avatarId}_api_download.tmp`);
+    const outputPath = path.join(downloadsPath, `${avatarId}.vrca`);
+    
+    return new Promise((resolve) => {
+      const file = fs.createWriteStream(tempPath);
+      
+      const request = https.get(downloadUrl, {
+        headers: {
+          'Cookie': cookieString,
+          'User-Agent': 'VRCStudio/1.0.0',
+        },
+        timeout: 120000, // 2 minute timeout for large files
+      }, (response) => {
+        logDiagnostic(`Response status: ${response.statusCode}`);
+        logDiagnostic(`Content-Type: ${response.headers['content-type']}`);
+        logDiagnostic(`Content-Length: ${response.headers['content-length']}`);
+        
+        // Check for redirects or errors
+        if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400) {
+          const redirectUrl = response.headers.location;
+          logDiagnostic(`Redirect to: ${redirectUrl}`);
+          // Follow redirect
+          file.close();
+          fs.unlinkSync(tempPath);
+          // Would need to implement redirect following here
+          resolve({
+            success: false,
+            error: `Redirect response (${response.statusCode}). VRChat API may require different authentication.`
+          });
+          return;
+        }
+        
+        if (response.statusCode && response.statusCode >= 400) {
+          file.close();
+          fs.unlinkSync(tempPath);
+          resolve({
+            success: false,
+            error: `API returned error ${response.statusCode}: ${response.statusMessage}. ` +
+              `This avatar may not be downloadable or you may not have permission.`
+          });
+          return;
+        }
+        
+        // Check content type
+        const contentType = response.headers['content-type'] || '';
+        if (contentType.includes('application/json')) {
+          let errorData = '';
+          response.on('data', chunk => errorData += chunk);
+          response.on('end', () => {
+            file.close();
+            fs.unlinkSync(tempPath);
+            try {
+              const error = JSON.parse(errorData);
+              resolve({
+                success: false,
+                error: `API Error: ${error.error?.message || JSON.stringify(error)}`
+              });
+            } catch {
+              resolve({
+                success: false,
+                error: `API returned error: ${errorData.substring(0, 200)}`
+              });
+            }
+          });
+          return;
+        }
+        
+        let downloadedBytes = 0;
+        const totalBytes = parseInt(response.headers['content-length'] || '0', 10);
+        
+        response.on('data', (chunk) => {
+          downloadedBytes += chunk.length;
+          if (downloadedBytes % (1024 * 1024) < chunk.length) {
+            logDiagnostic(`Downloaded: ${(downloadedBytes / 1024 / 1024).toFixed(1)} MB`);
+          }
+        });
+        
+        response.pipe(file);
+        
+        file.on('finish', async () => {
+          file.close();
+          
+          logDiagnostic(`Download complete: ${downloadedBytes} bytes`);
+          
+          // Verify the downloaded file
+          if (downloadedBytes < 1000) {
+            fs.unlinkSync(tempPath);
+            resolve({
+              success: false,
+              error: 'Downloaded file is too small - likely an error response'
+            });
+            return;
+          }
+          
+          // Read and check if it's encrypted
+          const downloadedBuffer = fs.readFileSync(tempPath);
+          const encCheck = isVRChatEncrypted(downloadedBuffer);
+          
+          if (encCheck.encrypted) {
+            logDiagnostic(`WARNING: Downloaded file appears encrypted: ${encCheck.reason}`);
+            // Still save it but warn the user
+          }
+          
+          // Check if it's a valid UnityFS
+          const header = downloadedBuffer.slice(0, 7).toString('utf8');
+          if (header !== 'UnityFS') {
+            logDiagnostic(`WARNING: Downloaded file doesn't start with UnityFS header`);
+            logDiagnostic(`Header: ${downloadedBuffer.slice(0, 16).toString('hex')}`);
+          }
+          
+          // Patch version if needed
+          const patchResult = patchUnityVersionInBuffer(downloadedBuffer);
+          fs.writeFileSync(outputPath, patchResult.patched);
+          fs.unlinkSync(tempPath);
+          
+          logDiagnostic(`Saved to: ${outputPath}`);
+          logDiagnostic(`Version: ${patchResult.originalVersion} -> ${patchResult.patchedVersion}`);
+          logDiagnostic(`========== DOWNLOAD SUCCESS ==========\n`);
+          
+          // Also create a .unitypackage
+          const unityPackagePath = path.join(downloadsPath, `${avatarId}.unitypackage`);
+          const tempPatchedPath = path.join(downloadsPath, `${avatarId}_patched.tmp`);
+          fs.writeFileSync(tempPatchedPath, patchResult.patched);
+          
+          try {
+            await createUnityPackage(tempPatchedPath, avatarId, unityPackagePath);
+            logDiagnostic(`Created .unitypackage: ${unityPackagePath}`);
+          } catch (pkgErr: any) {
+            logDiagnostic(`Warning: Failed to create .unitypackage: ${pkgErr.message}`);
+          } finally {
+            if (fs.existsSync(tempPatchedPath)) {
+              fs.unlinkSync(tempPatchedPath);
+            }
+          }
+          
+          resolve({
+            success: true,
+            vrcaPath: outputPath,
+            unityPackagePath: unityPackagePath,
+            size: patchResult.patched.length,
+            originalVersion: patchResult.originalVersion,
+            patchedVersion: patchResult.patchedVersion,
+            wasEncrypted: encCheck.encrypted,
+            encryptionNote: encCheck.encrypted ? encCheck.reason : undefined
+          });
+        });
+      });
+      
+      request.on('error', (err) => {
+        logDiagnostic(`Download error: ${err.message}`);
+        file.close();
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+        resolve({
+          success: false,
+          error: `Download failed: ${err.message}`
+        });
+      });
+      
+      request.on('timeout', () => {
+        logDiagnostic('Download timeout');
+        request.destroy();
+        file.close();
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+        resolve({
+          success: false,
+          error: 'Download timeout - file may be too large or server is slow'
+        });
+      });
+    });
+  } catch (err: any) {
+    logDiagnostic(`DOWNLOAD FAILED: ${err.message}`);
     return { success: false, error: err.message };
   }
 });

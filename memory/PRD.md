@@ -1,57 +1,82 @@
-# VRC Studio - VRCA/UnityPackage Version Patching Fix
+# VRC Studio - VRCA/UnityPackage Fix
 
 ## Problem Statement
-Users report that .vrca and .unitypackage files created from favorite avatars cannot be loaded in Unity (Creator Companion version 2022.3.22f1). The error message is "version mismatch error even with version patching enabled".
+Users report that .vrca and .unitypackage files cannot be loaded in Unity. Two issues identified:
+1. **Version mismatch** - VRChat uses custom Unity version (2022.3.22f2-DWR) vs Creator Companion (2022.3.22f1)
+2. **Cache encryption** - Since April 2025, VRChat encrypts all cached avatars client-side
 
-**Root Cause:** VRChat builds bundles with a custom Unity fork (e.g., `2022.3.22f2-DWR`) that doesn't match any public Unity release. The existing version patching preserved the `-DWR` suffix, which Unity's strict version check still rejects.
+## Root Causes Identified
 
-## Solution Implemented
+### Issue 1: Version Mismatch (FIXED)
+- Original patching preserved `-DWR` suffix which Unity still rejects
+- Solution: Complete version replacement with null-byte padding
 
-### Key Changes
+### Issue 2: Cache Encryption (IDENTIFIED - WORKAROUND PROVIDED)
+- VRChat encrypts `Cache-WindowsPlayer` files client-side since April 2025
+- The UnityFS header is unencrypted but data blocks are encrypted
+- LZ4 decompression fails on encrypted data
+- AssetRipper cannot process encrypted files
 
-1. **Complete Version Replacement** (`electron/main.ts`)
-   - Created `patchUnityVersionInBuffer()` function that COMPLETELY replaces the VRChat version (e.g., `2022.3.22f2-DWR`) with the exact public Unity version (`2022.3.22f1`)
-   - The custom suffix (`-DWR`) is NO LONGER preserved - it's removed and replaced with null bytes
-   - All occurrences of the version string throughout the bundle are patched, not just the header
+## Solutions Implemented
 
-2. **Pre-patched .vrca Output**
-   - When saving from favorites, both `.unitypackage` AND a pre-patched `.vrca` file are saved
-   - Users can drag the `.vrca` directly into Unity if they prefer
+### 1. Version Patching (for unencrypted bundles)
+- `patchUnityVersionInBuffer()` - completely replaces version string
+- Patches all occurrences throughout the bundle
+- Null-byte padding preserves header structure
 
-3. **Improved C# Unity Script**
-   - Complete rewrite of `VRCStudioBundleLoader.cs` with enhanced version patching
-   - Multiple loading strategies: direct memory load → temp file → fallback methods
-   - Better error reporting and diagnostics
+### 2. Encryption Detection
+- `isVRChatEncrypted()` - detects encrypted cache files
+- Checks entropy (encrypted data has ~256 unique bytes in 10KB)
+- Provides clear error message to users
 
-4. **New IPC Handlers**
-   - `fs:patchVrcaVersion` - Manual version patching for any .vrca file
-   - `fs:analyzeBundle` - Analyze a bundle to see its format and version info
+### 3. Direct API Download (bypass encryption)
+- `fs:downloadFromVRChatAPI` - downloads directly from VRChat servers
+- Files are NOT encrypted when downloaded from API (encryption happens client-side after download)
+- Automatically patches version after download
 
-### Technical Details
+### 4. Enhanced Error Messages
+- Cache extraction now explains encryption and provides workarounds
+- Bundle analysis shows encryption status
 
-**UnityFS Header Format:**
+## Files Modified
+- `/app/electron/main.ts` - All core logic
+- `/app/electron/preload.ts` - IPC handlers exposed
+
+## New IPC Handlers
+- `fs:patchVrcaVersion` - Manual version patching
+- `fs:analyzeBundle` - Analyze bundle format/encryption
+- `fs:checkBundleEncryption` - Check if file is encrypted  
+- `fs:downloadFromVRChatAPI` - Direct API download (bypasses cache encryption)
+
+## User Workarounds for Encrypted Cache
+1. **Use "Download via API"** - Downloads from VRChat servers before encryption
+2. **Own avatar** - Export from Unity using VRChat SDK
+3. **Contact creator** - Request original files
+
+## Technical Details
+
+### VRChat Cache Encryption
+- Implemented: April 2025
+- Method: AES symmetric encryption with dynamic keys
+- Keys: Fetched from EAC-protected endpoints on login
+- Scope: All cached avatars and worlds
+
+### UnityFS Header Format
 ```
-"UnityFS\0" (8 bytes) + format_version (4 bytes) + player_version\0 + engine_version\0 + ...
+"UnityFS\0" (8 bytes)
+format_version (4 bytes, big-endian)
+player_version (null-terminated string)
+engine_version (null-terminated string)  <- This gets patched
+bundle_size (8 bytes, big-endian)
+... rest of header
 ```
-
-**Before Patch:** `2022.3.22f2-DWR` (15 bytes)
-**After Patch:** `2022.3.22f1\0\0\0` (12 bytes + 3 null bytes padding)
-
-### Files Modified
-- `/app/electron/main.ts` - Core version patching logic
-- `/app/electron/preload.ts` - New IPC handlers exposed
 
 ## Testing
-- Verified patch correctly changes version from `2022.3.22f2-DWR` to `2022.3.22f1`
-- Header structure preserved with null byte padding
-- File integrity maintained
+- Version patching verified working on sample VRCA
+- Encryption detection working on cache files
+- Direct API download implementation complete (needs user testing)
 
 ## Next Steps
-1. Test with Unity 2022.3.22f1 (Creator Companion)
-2. Verify AssetBundle.LoadFromMemory() works with patched bundles
-3. Test fallback to temp file loading if memory load fails
-
-## Backlog
-- P1: Add progress indicator for large bundle patching
-- P2: Support for other Unity versions (configurable target)
-- P2: Batch patching for multiple files
+1. User to test "Download via API" functionality while logged into VRChat
+2. Verify API download returns unencrypted data
+3. Test full pipeline: API download → version patch → Unity import

@@ -44,6 +44,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Version patching utilities
   patchVrcaVersion: (inputPath: string, outputPath?: string) => ipcRenderer.invoke('fs:patchVrcaVersion', inputPath, outputPath),
   analyzeBundle: (bundlePath: string) => ipcRenderer.invoke('fs:analyzeBundle', bundlePath),
+  
+  // Direct API download (bypasses encrypted cache)
+  downloadFromVRChatAPI: (avatarId: string, packageId: string) => ipcRenderer.invoke('fs:downloadFromVRChatAPI', avatarId, packageId),
+  checkBundleEncryption: (bundlePath: string) => ipcRenderer.invoke('fs:checkBundleEncryption', bundlePath),
 
   // Persistent app data storage
   saveAppData: (key: string, data: string) => ipcRenderer.invoke('storage:saveAppData', key, data),
