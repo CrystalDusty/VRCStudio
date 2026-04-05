@@ -40,6 +40,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   launchAssetRipper: (bundlePath: string, avatarId?: string) => ipcRenderer.invoke('fs:launchAssetRipper', bundlePath, avatarId),
   deleteBundleData: (avatarId: string) => ipcRenderer.invoke('fs:deleteBundleData', avatarId),
   openFileDialog: (options: { title?: string; message?: string; filters?: any[] }) => ipcRenderer.invoke('fs:openFileDialog', options),
+  
+  // Version patching utilities
+  patchVrcaVersion: (inputPath: string, outputPath?: string) => ipcRenderer.invoke('fs:patchVrcaVersion', inputPath, outputPath),
+  analyzeBundle: (bundlePath: string) => ipcRenderer.invoke('fs:analyzeBundle', bundlePath),
 
   // Persistent app data storage
   saveAppData: (key: string, data: string) => ipcRenderer.invoke('storage:saveAppData', key, data),

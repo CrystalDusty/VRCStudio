@@ -303,6 +303,18 @@ ipcMain.handle('fs:extractAvatarToDownloads', async (_e, cacheDataPath: string, 
       }
     }
 
+    // CRITICAL: Patch the Unity version BEFORE packaging
+    // This ensures the .vrca inside the unitypackage has the correct version
+    logDiagnostic('Patching Unity version in bundle...');
+    const patchResult = patchUnityVersionInBuffer(rawBundleBuffer);
+    rawBundleBuffer = patchResult.patched;
+    logDiagnostic(`Version patched: ${patchResult.originalVersion} -> ${patchResult.patchedVersion}`);
+
+    // Also create a standalone pre-patched .vrca file for direct use
+    const patchedVrcaPath = path.join(downloadsPath, `${avatarId}.vrca`);
+    fs.writeFileSync(patchedVrcaPath, rawBundleBuffer);
+    logDiagnostic(`✓ Pre-patched .vrca saved: ${patchedVrcaPath}`);
+
     // Always wrap in a proper .unitypackage tar.gz
     logDiagnostic(`Creating .unitypackage tar.gz...`);
     const tempRawPath = path.join(downloadsPath, `${avatarId}-raw.tmp`);
@@ -330,8 +342,11 @@ ipcMain.handle('fs:extractAvatarToDownloads', async (_e, cacheDataPath: string, 
     return {
       success: true,
       path: outputPath,
+      vrcaPath: patchedVrcaPath,
       size: outputStats.size,
       format: detectedFormat,
+      originalVersion: patchResult.originalVersion,
+      patchedVersion: patchResult.patchedVersion,
       logFile: logFile
     };
   } catch (err: any) {
@@ -525,6 +540,118 @@ function validateUnityFsIntegrity(input: Buffer): { valid: boolean; reason?: str
   }
 
   return { valid: true };
+}
+
+// Target Unity version for VRChat Creator Companion compatibility
+const TARGET_UNITY_VERSION = '2022.3.22f1';
+
+/**
+ * Patch the Unity version in a raw UnityFS bundle buffer.
+ * This completely replaces VRChat's custom version (e.g., 2022.3.22f2-DWR)
+ * with the public Unity version (2022.3.22f1) that Creator Companion uses.
+ * 
+ * The key insight is that VRChat's "-DWR" suffix must be COMPLETELY REMOVED,
+ * not preserved, because Unity's version check rejects any non-standard suffix.
+ */
+function patchUnityVersionInBuffer(input: Buffer): { patched: Buffer; originalVersion: string; patchedVersion: string } {
+  let data = Buffer.from(input); // Create a copy to avoid mutating input
+  
+  // Handle gzip-wrapped data
+  let wasGzipped = false;
+  if (data.length > 2 && data[0] === 0x1f && data[1] === 0x8b) {
+    wasGzipped = true;
+    try {
+      data = zlib.gunzipSync(data);
+      logDiagnostic(`[VersionPatch] Decompressed gzip, size: ${data.length} bytes`);
+    } catch (err: any) {
+      logDiagnostic(`[VersionPatch] Gzip decompression failed: ${err.message}`);
+      return { patched: input, originalVersion: 'unknown', patchedVersion: 'unchanged' };
+    }
+  }
+  
+  // Find UnityFS marker
+  const marker = Buffer.from('UnityFS', 'utf8');
+  const unityFsOffset = data.indexOf(marker);
+  if (unityFsOffset < 0) {
+    logDiagnostic('[VersionPatch] UnityFS marker not found');
+    return { patched: input, originalVersion: 'unknown', patchedVersion: 'unchanged' };
+  }
+  
+  // Trim leading bytes if any
+  if (unityFsOffset > 0) {
+    data = data.subarray(unityFsOffset);
+    logDiagnostic(`[VersionPatch] Trimmed ${unityFsOffset} leading bytes`);
+  }
+  
+  // Parse header: "UnityFS\0" (8) + format_version (4) + player_version\0 + engine_version\0
+  let offset = 12; // Skip "UnityFS\0" + format version
+  
+  // Skip player version (null-terminated)
+  while (offset < data.length && data[offset] !== 0) offset++;
+  offset++; // skip null terminator
+  
+  // Read engine version bounds
+  const engineVerStart = offset;
+  while (offset < data.length && data[offset] !== 0) offset++;
+  const engineVerEnd = offset;
+  
+  const originalVersion = data.subarray(engineVerStart, engineVerEnd).toString('utf8');
+  const originalFieldLen = engineVerEnd - engineVerStart;
+  
+  logDiagnostic(`[VersionPatch] Original version: "${originalVersion}" (${originalFieldLen} bytes)`);
+  
+  // Build the patched version - use EXACT target version, NO suffix
+  const targetBytes = Buffer.from(TARGET_UNITY_VERSION, 'utf8');
+  
+  // Clear the entire version field with nulls first
+  for (let i = engineVerStart; i < engineVerEnd; i++) {
+    data[i] = 0;
+  }
+  
+  // Write the new version (it will be null-padded to original length)
+  const copyLen = Math.min(targetBytes.length, originalFieldLen);
+  targetBytes.copy(data, engineVerStart, 0, copyLen);
+  
+  // Also patch ALL occurrences of the original version string in the bundle
+  // This catches version strings in serialized metadata
+  const originalVersionBytes = Buffer.from(originalVersion, 'utf8');
+  let replacementCount = 0;
+  const maxReplacements = 50; // Safety limit
+  
+  let searchStart = engineVerEnd + 1;
+  while (searchStart <= data.length - originalVersionBytes.length && replacementCount < maxReplacements) {
+    const foundIdx = data.indexOf(originalVersionBytes, searchStart);
+    if (foundIdx < 0) break;
+    
+    // Clear and write target version
+    for (let i = 0; i < originalVersionBytes.length; i++) {
+      data[foundIdx + i] = 0;
+    }
+    const patchLen = Math.min(targetBytes.length, originalVersionBytes.length);
+    targetBytes.copy(data, foundIdx, 0, patchLen);
+    
+    replacementCount++;
+    searchStart = foundIdx + originalVersionBytes.length;
+  }
+  
+  logDiagnostic(`[VersionPatch] Patched ${replacementCount + 1} version occurrences`);
+  logDiagnostic(`[VersionPatch] Patched version: "${TARGET_UNITY_VERSION}"`);
+  
+  // Re-gzip if it was originally gzipped
+  if (wasGzipped) {
+    try {
+      data = zlib.gzipSync(data);
+      logDiagnostic(`[VersionPatch] Re-compressed to gzip, size: ${data.length} bytes`);
+    } catch (err: any) {
+      logDiagnostic(`[VersionPatch] Re-compression failed: ${err.message}`);
+    }
+  }
+  
+  return {
+    patched: data,
+    originalVersion,
+    patchedVersion: TARGET_UNITY_VERSION
+  };
 }
 
 // Search for _data files (avatar bundles) in VRChat cache
@@ -1092,17 +1219,22 @@ using UnityEditor;
 using System.IO;
 using System.Text;
 using System.IO.Compression;
+using System.Collections.Generic;
 
 /// <summary>
-/// VRC Studio - AssetBundle Loader
+/// VRC Studio - AssetBundle Loader v2.0
 /// Bundle was built with Unity ${bundleUnityVersion}
 ///
-/// Uses in-memory version patching to bypass Unity's strict version check.
-/// VRChat builds bundles with a custom Unity fork that doesn't match
-/// any public release, so we patch the version header before loading.
+/// Uses advanced in-memory version patching to bypass Unity's strict version check.
+/// VRChat builds bundles with a custom Unity fork (e.g., 2022.3.22f2-DWR) that
+/// doesn't match any public release. We completely replace the version string
+/// with the exact public Unity version (2022.3.22f1) to ensure compatibility.
 /// </summary>
 public class VRCStudioBundleLoader : EditorWindow
 {
+    // Target Unity version for VRChat Creator Companion
+    private const string TARGET_UNITY_VERSION = "2022.3.22f1";
+    
     /// <summary>
     /// Reads the .vrca file, patches the Unity version in the header to match
     /// the current editor, then loads via AssetBundle.LoadFromMemory().
@@ -1110,18 +1242,10 @@ public class VRCStudioBundleLoader : EditorWindow
     /// </summary>
     static AssetBundle LoadBundleWithVersionPatch(string bundlePath)
     {
-        // Fast path: attempt unmodified load first
-        AssetBundle directBundle = AssetBundle.LoadFromFile(bundlePath);
-        if (directBundle != null)
-        {
-            Debug.Log("[VRC Studio] Bundle loaded directly without patch.");
-            return directBundle;
-        }
-
         byte[] data = File.ReadAllBytes(bundlePath);
         Debug.Log("[VRC Studio] Read " + data.Length + " bytes from: " + bundlePath);
 
-        // If this is gzip-wrapped data, try to decompress first.
+        // If this is gzip-wrapped data, decompress first
         if (data.Length > 2 && data[0] == 0x1f && data[1] == 0x8b)
         {
             try
@@ -1141,20 +1265,8 @@ public class VRCStudioBundleLoader : EditorWindow
             }
         }
 
-        // Verify it's a UnityFS bundle. Some cache files can have leading bytes,
-        // so search for UnityFS marker and trim to that offset when found.
-        int unityFsOffset = -1;
-        for (int i = 0; i <= data.Length - 7; i++)
-        {
-            if (data[i] == (byte)'U' && data[i + 1] == (byte)'n' && data[i + 2] == (byte)'i' &&
-                data[i + 3] == (byte)'t' && data[i + 4] == (byte)'y' && data[i + 5] == (byte)'F' &&
-                data[i + 6] == (byte)'S')
-            {
-                unityFsOffset = i;
-                break;
-            }
-        }
-
+        // Find UnityFS marker - some cache files have leading bytes
+        int unityFsOffset = FindUnityFSMarker(data);
         if (unityFsOffset < 0)
         {
             Debug.LogError("[VRC Studio] Could not find UnityFS marker in bundle bytes.");
@@ -1169,109 +1281,203 @@ public class VRCStudioBundleLoader : EditorWindow
             Debug.Log("[VRC Studio] Trimmed " + unityFsOffset + " leading bytes before UnityFS header.");
         }
 
-        // Parse the header to find the engine version string
-        // Format: "UnityFS\\0" (8) + uint32 format (4) + playerVer\\0 + engineVer\\0
-        int offset = 12;
-
-        // Skip player version (null-terminated)
-        while (offset < data.Length && data[offset] != 0) offset++;
-        offset++; // skip null terminator
-
-        // Read the engine version string
-        int engineVerStart = offset;
-        while (offset < data.Length && data[offset] != 0) offset++;
-        int engineVerEnd = offset; // position of the null terminator
-
-        string originalVersion = Encoding.UTF8.GetString(data, engineVerStart, engineVerEnd - engineVerStart);
-        int versionFieldLen = engineVerEnd - engineVerStart; // length WITHOUT null
-
+        // Parse and patch the version in the header
+        string originalVersion;
+        data = PatchUnityVersion(data, out originalVersion);
+        
         Debug.Log("[VRC Studio] Original bundle version: " + originalVersion);
         Debug.Log("[VRC Studio] Your Unity version: " + Application.unityVersion);
+        Debug.Log("[VRC Studio] Target patch version: " + TARGET_UNITY_VERSION);
 
-        // VRChat bundles often report 2022.3.22f2-* while Creator Companion supports 2022.3.22f1.
-        // Force that exact base version and preserve any custom suffix (e.g. "-DWR")
-        // so header length/structure remains stable.
-        string patchBaseVersion = "2022.3.22f1";
-        string targetVersion = patchBaseVersion;
-        int dashIndex = originalVersion.IndexOf('-');
-        if (dashIndex >= 0 && dashIndex < originalVersion.Length - 1)
-        {
-            targetVersion = patchBaseVersion + originalVersion.Substring(dashIndex);
-        }
-
-        Debug.Log("[VRC Studio] Target patch version: " + targetVersion);
-
-        // Overwrite only the START of the engine version and leave any remaining
-        // original suffix bytes intact. Never write null padding here.
-        byte[] verBytes = Encoding.UTF8.GetBytes(targetVersion);
-        int copyLen = System.Math.Min(verBytes.Length, versionFieldLen);
-        System.Array.Copy(verBytes, 0, data, engineVerStart, copyLen);
-
-        string patchedVersion = Encoding.UTF8.GetString(data, engineVerStart, versionFieldLen).TrimEnd('\\0');
-        Debug.Log("[VRC Studio] Patched version: " + patchedVersion);
-
-        // Also patch any additional exact header/version occurrences we can find
-        // without changing total byte lengths.
-        if (!string.IsNullOrEmpty(originalVersion) && originalVersion != targetVersion)
-        {
-            byte[] originalBytes = Encoding.UTF8.GetBytes(originalVersion);
-            int maxReplacements = 8;
-            int replacements = 0;
-            for (int i = 0; i <= data.Length - originalBytes.Length && replacements < maxReplacements; i++)
-            {
-                bool match = true;
-                for (int j = 0; j < originalBytes.Length; j++)
-                {
-                    if (data[i + j] != originalBytes[j])
-                    {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match)
-                {
-                    int replaceLen = System.Math.Min(verBytes.Length, originalBytes.Length);
-                    System.Array.Copy(verBytes, 0, data, i, replaceLen);
-                    replacements++;
-                    i += originalBytes.Length - 1;
-                }
-            }
-            Debug.Log("[VRC Studio] Additional version string replacements: " + replacements);
-        }
-
-        // Try loading from patched memory first
-        AssetBundle bundle = AssetBundle.LoadFromMemory(data);
-        if (bundle == null)
-        {
-            // Fallback: write patched bytes to a temp bundle and load from file path.
-            // Some Unity versions handle large bundles more reliably via file IO APIs.
-            try
-            {
-                string tempPath = Path.Combine(Path.GetTempPath(),
-                    "vrcstudio_patched_" + Path.GetFileName(bundlePath));
-                File.WriteAllBytes(tempPath, data);
-                Debug.Log("[VRC Studio] Memory load failed, retrying from temp file: " + tempPath);
-                bundle = AssetBundle.LoadFromFile(tempPath);
-            }
-            catch (System.Exception e)
-            {
-                Debug.LogWarning("[VRC Studio] Temp file fallback failed: " + e.Message);
-            }
-        }
+        // Try multiple loading strategies
+        AssetBundle bundle = TryLoadBundle(data, bundlePath);
 
         if (bundle != null)
         {
-            Debug.Log("[VRC Studio] Bundle loaded successfully with version patch!");
+            Debug.Log("[VRC Studio] Bundle loaded successfully!");
         }
         else
         {
-            Debug.LogError("[VRC Studio] Bundle still failed to load after version patch.");
-            Debug.LogError("[VRC Studio] This may be a build target issue. Current target: " +
-                EditorUserBuildSettings.activeBuildTarget);
+            Debug.LogError("[VRC Studio] All loading attempts failed.");
+            Debug.LogError("[VRC Studio] Current build target: " + EditorUserBuildSettings.activeBuildTarget);
+            Debug.LogError("[VRC Studio] Make sure: File > Build Settings > PC, Mac & Linux Standalone");
         }
 
         return bundle;
+    }
+    
+    static int FindUnityFSMarker(byte[] data)
+    {
+        byte[] marker = Encoding.UTF8.GetBytes("UnityFS");
+        for (int i = 0; i <= data.Length - marker.Length; i++)
+        {
+            bool found = true;
+            for (int j = 0; j < marker.Length; j++)
+            {
+                if (data[i + j] != marker[j])
+                {
+                    found = false;
+                    break;
+                }
+            }
+            if (found) return i;
+        }
+        return -1;
+    }
+    
+    /// <summary>
+    /// Patches the Unity version in the bundle header.
+    /// CRITICAL: We must completely replace the version string (including any -DWR suffix)
+    /// with the exact public Unity version, padded with null bytes to maintain field length.
+    /// </summary>
+    static byte[] PatchUnityVersion(byte[] data, out string originalVersion)
+    {
+        // UnityFS header format:
+        // "UnityFS\\0" (8 bytes) + format_version (4 bytes big-endian) + 
+        // player_version\\0 (null-terminated) + engine_version\\0 (null-terminated) + ...
+        
+        int offset = 12; // Skip "UnityFS\\0" + format version
+        
+        // Skip player version (null-terminated string like "5.x.x")
+        while (offset < data.Length && data[offset] != 0) offset++;
+        offset++; // skip null terminator
+        
+        // Read engine version bounds
+        int engineVerStart = offset;
+        while (offset < data.Length && data[offset] != 0) offset++;
+        int engineVerEnd = offset; // position of null terminator
+        
+        originalVersion = Encoding.UTF8.GetString(data, engineVerStart, engineVerEnd - engineVerStart);
+        int originalFieldLen = engineVerEnd - engineVerStart;
+        
+        // Build the patched version - use EXACT target version, no suffix
+        byte[] targetBytes = Encoding.UTF8.GetBytes(TARGET_UNITY_VERSION);
+        
+        // Create patched data - we need to handle length differences carefully
+        // If target is shorter, pad with nulls. If longer (shouldn't happen), truncate.
+        if (targetBytes.Length <= originalFieldLen)
+        {
+            // Clear the entire field first (fill with nulls)
+            for (int i = engineVerStart; i < engineVerEnd; i++)
+            {
+                data[i] = 0;
+            }
+            // Write the new version
+            System.Array.Copy(targetBytes, 0, data, engineVerStart, targetBytes.Length);
+        }
+        else
+        {
+            // Version is longer - need to rebuild the header (rare case)
+            // For now, truncate to fit
+            System.Array.Copy(targetBytes, 0, data, engineVerStart, originalFieldLen);
+        }
+        
+        // Also patch ALL occurrences of the original version string throughout the bundle
+        // This handles serialized metadata that may also contain the version
+        data = PatchAllVersionOccurrences(data, originalVersion, TARGET_UNITY_VERSION);
+        
+        string patchedVersion = Encoding.UTF8.GetString(data, engineVerStart, 
+            System.Math.Min(targetBytes.Length, originalFieldLen));
+        Debug.Log("[VRC Studio] Header patched: " + originalVersion + " -> " + patchedVersion);
+        
+        return data;
+    }
+    
+    /// <summary>
+    /// Finds and replaces all occurrences of the original version string.
+    /// Uses safe replacement that maintains byte alignment.
+    /// </summary>
+    static byte[] PatchAllVersionOccurrences(byte[] data, string originalVersion, string targetVersion)
+    {
+        if (string.IsNullOrEmpty(originalVersion) || originalVersion == targetVersion)
+            return data;
+            
+        byte[] originalBytes = Encoding.UTF8.GetBytes(originalVersion);
+        byte[] targetBytes = Encoding.UTF8.GetBytes(targetVersion);
+        
+        List<int> positions = new List<int>();
+        
+        // Find all occurrences
+        for (int i = 0; i <= data.Length - originalBytes.Length; i++)
+        {
+            bool match = true;
+            for (int j = 0; j < originalBytes.Length; j++)
+            {
+                if (data[i + j] != originalBytes[j])
+                {
+                    match = false;
+                    break;
+                }
+            }
+            if (match)
+            {
+                positions.Add(i);
+                i += originalBytes.Length - 1; // Skip past this match
+            }
+        }
+        
+        Debug.Log("[VRC Studio] Found " + positions.Count + " version string occurrences to patch");
+        
+        // Replace each occurrence
+        foreach (int pos in positions)
+        {
+            // Clear the original field
+            for (int i = 0; i < originalBytes.Length; i++)
+            {
+                data[pos + i] = 0;
+            }
+            // Write target version (may be shorter, which is fine - null padded)
+            int copyLen = System.Math.Min(targetBytes.Length, originalBytes.Length);
+            System.Array.Copy(targetBytes, 0, data, pos, copyLen);
+        }
+        
+        return data;
+    }
+    
+    /// <summary>
+    /// Tries multiple methods to load the bundle.
+    /// </summary>
+    static AssetBundle TryLoadBundle(byte[] data, string originalPath)
+    {
+        AssetBundle bundle = null;
+        
+        // Method 1: Direct memory load
+        Debug.Log("[VRC Studio] Trying LoadFromMemory...");
+        bundle = AssetBundle.LoadFromMemory(data);
+        if (bundle != null)
+        {
+            Debug.Log("[VRC Studio] LoadFromMemory succeeded!");
+            return bundle;
+        }
+        
+        // Method 2: Write to temp file and load from there
+        Debug.Log("[VRC Studio] Memory load failed, trying temp file...");
+        try
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "VRCStudio");
+            if (!Directory.Exists(tempDir))
+                Directory.CreateDirectory(tempDir);
+                
+            string tempPath = Path.Combine(tempDir, "patched_" + Path.GetFileName(originalPath));
+            File.WriteAllBytes(tempPath, data);
+            Debug.Log("[VRC Studio] Wrote patched bundle to: " + tempPath);
+            
+            bundle = AssetBundle.LoadFromFile(tempPath);
+            if (bundle != null)
+            {
+                Debug.Log("[VRC Studio] LoadFromFile succeeded!");
+                return bundle;
+            }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogWarning("[VRC Studio] Temp file method failed: " + e.Message);
+        }
+        
+        // Method 3: Try async load as last resort
+        Debug.Log("[VRC Studio] Sync loads failed, this bundle may require special handling.");
+        
+        return null;
     }
 
     [MenuItem("VRC Studio/Load Avatar Into Scene")]
@@ -1668,9 +1874,36 @@ ipcMain.handle('fs:extractBundle', async (_e, sourcePath: string, avatarId: stri
       fs.copyFileSync(sourcePath, outputPath);
     } else {
       // Raw UnityFS bundle, ZIP, or unknown - wrap in proper .unitypackage
-      console.log('[Bundle] Wrapping raw bundle in .unitypackage tar.gz format...');
-      logDiagnostic('[ExtractBundle] Creating .unitypackage from raw bundle');
-      await createUnityPackage(sourcePath, avatarId, outputPath);
+      // CRITICAL: Patch version BEFORE packaging
+      console.log('[Bundle] Reading and patching raw bundle...');
+      logDiagnostic('[ExtractBundle] Reading raw bundle for version patching');
+      
+      let rawBuffer = fs.readFileSync(sourcePath);
+      const patchResult = patchUnityVersionInBuffer(rawBuffer);
+      rawBuffer = patchResult.patched;
+      
+      console.log(`[Bundle] Version patched: ${patchResult.originalVersion} -> ${patchResult.patchedVersion}`);
+      logDiagnostic(`[ExtractBundle] Version patched: ${patchResult.originalVersion} -> ${patchResult.patchedVersion}`);
+      
+      // Write patched bundle to temp file
+      const tempPatchedPath = path.join(bundleDir, `${avatarId}-patched.tmp`);
+      fs.writeFileSync(tempPatchedPath, rawBuffer);
+      
+      // Also save a standalone .vrca for direct use
+      const vrcaPath = path.join(bundleDir, `${avatarId}.vrca`);
+      fs.writeFileSync(vrcaPath, rawBuffer);
+      console.log(`[Bundle] Pre-patched .vrca saved: ${vrcaPath}`);
+      
+      console.log('[Bundle] Wrapping patched bundle in .unitypackage tar.gz format...');
+      logDiagnostic('[ExtractBundle] Creating .unitypackage from patched bundle');
+      
+      try {
+        await createUnityPackage(tempPatchedPath, avatarId, outputPath);
+      } finally {
+        if (fs.existsSync(tempPatchedPath)) {
+          fs.unlinkSync(tempPatchedPath);
+        }
+      }
     }
 
     const outputSize = fs.statSync(outputPath).size;
@@ -1734,6 +1967,130 @@ ipcMain.handle('fs:openFileDialog', async (_e, options: any) => {
     return result;
   } catch (error) {
     throw new Error(`Failed to open file dialog: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+});
+
+// Manual version patching utility - allows users to patch any .vrca file
+ipcMain.handle('fs:patchVrcaVersion', async (_e, inputPath: string, outputPath?: string) => {
+  try {
+    logDiagnostic(`\n========== MANUAL VERSION PATCH ==========`);
+    logDiagnostic(`Input: ${inputPath}`);
+    
+    if (!fs.existsSync(inputPath)) {
+      return { success: false, error: `File not found: ${inputPath}` };
+    }
+    
+    const inputBuffer = fs.readFileSync(inputPath);
+    logDiagnostic(`Input size: ${inputBuffer.length} bytes`);
+    
+    const patchResult = patchUnityVersionInBuffer(inputBuffer);
+    
+    // Determine output path
+    const finalOutputPath = outputPath || inputPath.replace(/\.vrca$/i, '_patched.vrca');
+    fs.writeFileSync(finalOutputPath, patchResult.patched);
+    
+    logDiagnostic(`Output: ${finalOutputPath}`);
+    logDiagnostic(`Version: ${patchResult.originalVersion} -> ${patchResult.patchedVersion}`);
+    logDiagnostic(`========== PATCH COMPLETE ==========\n`);
+    
+    return {
+      success: true,
+      outputPath: finalOutputPath,
+      originalVersion: patchResult.originalVersion,
+      patchedVersion: patchResult.patchedVersion,
+      size: patchResult.patched.length
+    };
+  } catch (err: any) {
+    logDiagnostic(`PATCH FAILED: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+});
+
+// Bundle analysis utility - provides detailed info about a bundle file
+ipcMain.handle('fs:analyzeBundle', async (_e, bundlePath: string) => {
+  try {
+    if (!fs.existsSync(bundlePath)) {
+      return { success: false, error: `File not found: ${bundlePath}` };
+    }
+    
+    const stats = fs.statSync(bundlePath);
+    let buffer = fs.readFileSync(bundlePath);
+    
+    const result: any = {
+      success: true,
+      path: bundlePath,
+      size: stats.size,
+      sizeFormatted: `${(stats.size / 1024 / 1024).toFixed(2)} MB`,
+      format: 'UNKNOWN',
+      isGzipped: false,
+      isUnityFS: false,
+      unityVersion: null,
+      playerVersion: null,
+      recommendation: ''
+    };
+    
+    // Check for gzip
+    if (buffer.length > 2 && buffer[0] === 0x1f && buffer[1] === 0x8b) {
+      result.isGzipped = true;
+      result.format = 'GZIP_COMPRESSED';
+      try {
+        buffer = zlib.gunzipSync(buffer);
+        result.decompressedSize = buffer.length;
+      } catch {
+        result.recommendation = 'File appears gzip compressed but failed to decompress.';
+        return result;
+      }
+    }
+    
+    // Check for UnityFS
+    const header = buffer.slice(0, 7).toString('utf8');
+    if (header === 'UnityFS') {
+      result.isUnityFS = true;
+      result.format = result.isGzipped ? 'GZIP_WRAPPED_UNITYFS' : 'UNITYFS_BUNDLE';
+      
+      // Parse version strings
+      let offset = 12;
+      // Read player version
+      let playerVer = '';
+      while (offset < buffer.length && buffer[offset] !== 0) {
+        playerVer += String.fromCharCode(buffer[offset]);
+        offset++;
+      }
+      offset++;
+      
+      // Read engine version
+      let engineVer = '';
+      while (offset < buffer.length && buffer[offset] !== 0) {
+        engineVer += String.fromCharCode(buffer[offset]);
+        offset++;
+      }
+      
+      result.playerVersion = playerVer;
+      result.unityVersion = engineVer;
+      
+      // Check if patching is needed
+      if (engineVer.includes('-DWR') || engineVer.includes('f2')) {
+        result.needsPatching = true;
+        result.recommendation = `This bundle was built with Unity ${engineVer} (VRChat custom). ` +
+          `It needs version patching to work with Unity ${TARGET_UNITY_VERSION}. ` +
+          `Use patchVrcaVersion() to fix.`;
+      } else if (engineVer === TARGET_UNITY_VERSION) {
+        result.needsPatching = false;
+        result.recommendation = 'Bundle version matches target Unity version. Should load without issues.';
+      } else {
+        result.needsPatching = true;
+        result.recommendation = `Bundle Unity version (${engineVer}) differs from target (${TARGET_UNITY_VERSION}). May need patching.`;
+      }
+    } else if (buffer[0] === 0x50 && buffer[1] === 0x4b) {
+      result.format = 'ZIP_ARCHIVE';
+      result.recommendation = 'This appears to be a ZIP file, not a Unity bundle.';
+    } else {
+      result.recommendation = 'Unknown file format. Not a standard Unity bundle.';
+    }
+    
+    return result;
+  } catch (err: any) {
+    return { success: false, error: err.message };
   }
 });
 
