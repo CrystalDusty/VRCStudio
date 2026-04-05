@@ -168,7 +168,7 @@ $output = @{
     ProcessId = $process.Id
     Timestamp = (Get-Date).ToString("o")
     RegionsScanned = $regionsScanned
-    PotentialKeys = $potentialKeys | Select-Object -First 1000  # Limit output
+    PotentialKeys = @($potentialKeys | Select-Object -First 1000)  # Keep as array even with 0/1 result
 }
 
 # Write UTF-8 JSON without BOM (Node JSON.parse fails on BOM in some environments)
@@ -271,9 +271,13 @@ export async function scanForKeys(): Promise<{
         const results: MemoryScanResult = JSON.parse(normalizedJson);
         fs.unlinkSync(outputPath);
 
+        const candidates = Array.isArray(results.PotentialKeys)
+          ? results.PotentialKeys
+          : (results.PotentialKeys ? [results.PotentialKeys] : []);
+
         resolve({
           success: true,
-          candidates: results.PotentialKeys,
+          candidates,
         });
       } catch (err: any) {
         resolve({
