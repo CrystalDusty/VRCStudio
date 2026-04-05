@@ -101,3 +101,29 @@ VRChat encrypts cached avatars/worlds since April 2025, making extraction imposs
 - P1: Add progress indicators for large files
 - P2: Network-based key capture
 - P3: Linux/Mac support via different memory APIs
+
+## UI Components Added
+
+### Avatar Preview Modal (AvatarPreviewModal.tsx)
+New decrypt functionality added to the favorites avatar modal:
+
+1. **Encryption Status Display**
+   - Shows "🔒 Encrypted" or "🔓 Not Encrypted"
+   - Auto-detects when cache file is selected
+
+2. **VRChat Status Indicator**
+   - Real-time check every 5 seconds
+   - Shows green/red dot for running status
+
+3. **Decrypt & Patch Version Button**
+   - Yellow/accent colored when encrypted
+   - Runs full pipeline: detect → extract keys → decrypt → patch version
+   - Opens output folder on success
+
+4. **Extract Keys from VRChat Button**
+   - Only shows when file is encrypted AND VRChat is running
+   - Extracts AES keys from VRChat process memory
+
+### New CSS Styles (globals.css)
+- `.btn-accent` - Yellow/warning style for decrypt button
+- `.btn-success` - Green style for success states

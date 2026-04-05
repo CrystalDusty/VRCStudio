@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Download, Copy, Check, ExternalLink, Folder, AlertCircle, Loader, Archive, FolderOpen, Save } from 'lucide-react';
+import { X, Download, Copy, Check, ExternalLink, Folder, AlertCircle, Loader, Archive, FolderOpen, Save, Unlock, Key } from 'lucide-react';
 import type { VRCAvatar } from '../types/vrchat';
 import { extractAvatarBundle, openBundleFolder, isBundleDownloaded, addBundleToStore } from '../utils/avatarBundle';
 import { downloadBundleDirectly } from '../utils/directDownload';
@@ -25,11 +25,117 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
   const [isExtracting2, setIsExtracting2] = useState(false);
   const [selectedCacheFile, setSelectedCacheFile] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [isDecrypting, setIsDecrypting] = useState(false);
+  const [encryptionStatus, setEncryptionStatus] = useState<'unknown' | 'encrypted' | 'not_encrypted'>('unknown');
+  const [isVRChatRunning, setIsVRChatRunning] = useState(false);
 
   // Check if bundle is already downloaded
   useEffect(() => {
     setIsExtracted(isBundleDownloaded(avatar.id));
   }, [avatar.id]);
+
+  // Check VRChat running status periodically
+  useEffect(() => {
+    const checkVRChat = async () => {
+      const electronAPI = (window as any).electronAPI;
+      if (electronAPI?.decryptIsVRChatRunning) {
+        const result = await electronAPI.decryptIsVRChatRunning();
+        setIsVRChatRunning(result.running);
+      }
+    };
+    checkVRChat();
+    const interval = setInterval(checkVRChat, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Check encryption status when cache file is selected
+  useEffect(() => {
+    const checkEncryption = async () => {
+      if (!selectedCacheFile) {
+        setEncryptionStatus('unknown');
+        return;
+      }
+      const electronAPI = (window as any).electronAPI;
+      if (electronAPI?.decryptCheckEncryption) {
+        const result = await electronAPI.decryptCheckEncryption(selectedCacheFile);
+        if (result.success) {
+          setEncryptionStatus(result.encrypted ? 'encrypted' : 'not_encrypted');
+        }
+      }
+    };
+    checkEncryption();
+  }, [selectedCacheFile]);
+
+  const handleDecryptBundle = async () => {
+    setIsDecrypting(true);
+    setError(null);
+    setSuccessMessage(null);
+
+    try {
+      const electronAPI = (window as any).electronAPI;
+      let cacheFile = selectedCacheFile;
+
+      // If no cache file selected, try auto-search
+      if (!cacheFile) {
+        const searchResult = await electronAPI.searchCacheForDataFiles(avatar.id, selectedPackageId || undefined);
+        if (searchResult.success && searchResult.bundles?.length > 0) {
+          cacheFile = searchResult.bundles[0];
+          setSelectedCacheFile(cacheFile);
+        } else {
+          setError('No cache file found. Use "Browse Cache File" to select one manually.');
+          setIsDecrypting(false);
+          return;
+        }
+      }
+
+      // Run full decryption pipeline
+      const result = await electronAPI.decryptFullPipeline(cacheFile);
+
+      if (result.success) {
+        if (result.encrypted && result.decrypted) {
+          setSuccessMessage(`Decrypted and patched! Saved to: ${result.outputPath}`);
+        } else if (!result.encrypted) {
+          setSuccessMessage(`File was not encrypted. Version patched: ${result.outputPath}`);
+        }
+        setEncryptionStatus('not_encrypted');
+        
+        // Open the output folder
+        if (result.outputPath) {
+          try {
+            await electronAPI.openBundleFolder(result.outputPath);
+          } catch { /* non-critical */ }
+        }
+      } else {
+        if (result.needsVRChat) {
+          setError(`VRChat must be running to extract decryption keys.\n\n1. Start VRChat\n2. Log in\n3. Load any avatar\n4. Try again`);
+        } else {
+          setError(result.error || result.instructions || 'Decryption failed');
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Decryption failed');
+    } finally {
+      setIsDecrypting(false);
+    }
+  };
+
+  const handleExtractKeys = async () => {
+    setError(null);
+    setSuccessMessage(null);
+
+    try {
+      const electronAPI = (window as any).electronAPI;
+      const result = await electronAPI.decryptExtractKeys(selectedCacheFile);
+
+      if (result.success && result.keys?.length > 0) {
+        setSuccessMessage(`Extracted ${result.keys.length} potential decryption keys. Try decrypting now!`);
+      } else {
+        setError(result.error || result.instructions || 'No keys found');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Key extraction failed');
+    }
+  };
 
   const handleExtractAvatar = async () => {
     setIsExtracting2(true);
@@ -496,6 +602,67 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
               >
                 <Save size={14} /> Save Raw Bundle (.vrca)
               </button>
+            )}
+
+            {/* Decrypt Bundle - Shows when encrypted or cache file selected */}
+            {selectedCacheFile && (
+              <div className="space-y-2 pt-2 border-t border-surface-700">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-surface-500">Encryption Status:</span>
+                  <span className={`font-medium ${
+                    encryptionStatus === 'encrypted' ? 'text-yellow-400' :
+                    encryptionStatus === 'not_encrypted' ? 'text-green-400' :
+                    'text-surface-400'
+                  }`}>
+                    {encryptionStatus === 'encrypted' ? '🔒 Encrypted' :
+                     encryptionStatus === 'not_encrypted' ? '🔓 Not Encrypted' :
+                     'Unknown'}
+                  </span>
+                </div>
+
+                {encryptionStatus === 'encrypted' && (
+                  <div className="text-xs text-surface-400 bg-surface-800 p-2 rounded">
+                    <div className="flex items-center gap-1 mb-1">
+                      <span className={`w-2 h-2 rounded-full ${isVRChatRunning ? 'bg-green-500' : 'bg-red-500'}`} />
+                      <span>VRChat: {isVRChatRunning ? 'Running' : 'Not Running'}</span>
+                    </div>
+                    {!isVRChatRunning && (
+                      <p className="text-yellow-400/80">
+                        Start VRChat & log in to extract decryption keys
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                <button
+                  onClick={handleDecryptBundle}
+                  disabled={isDecrypting}
+                  className={`w-full text-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed ${
+                    encryptionStatus === 'encrypted' ? 'btn-accent' : 'btn-secondary'
+                  }`}
+                  title="Decrypt the bundle (requires VRChat to be running for key extraction)"
+                >
+                  {isDecrypting ? (
+                    <>
+                      <Loader size={14} className="animate-spin" /> Decrypting...
+                    </>
+                  ) : (
+                    <>
+                      <Unlock size={14} /> Decrypt & Patch Version
+                    </>
+                  )}
+                </button>
+
+                {encryptionStatus === 'encrypted' && isVRChatRunning && (
+                  <button
+                    onClick={handleExtractKeys}
+                    className="btn-secondary w-full text-sm flex items-center justify-center gap-2"
+                    title="Extract decryption keys from running VRChat process"
+                  >
+                    <Key size={14} /> Extract Keys from VRChat
+                  </button>
+                )}
+              </div>
             )}
 
             <button
