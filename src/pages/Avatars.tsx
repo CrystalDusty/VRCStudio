@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Shirt, Search, Star, ArrowLeft, Heart, AlertCircle, RotateCw, Download, Folder, Loader } from 'lucide-react';
+import { Shirt, Search, Star, ArrowLeft, Heart, AlertCircle, RotateCw } from 'lucide-react';
 import api from '../api/vrchat';
 import SearchInput from '../components/common/SearchInput';
 import EmptyState from '../components/common/EmptyState';
 import LoadingSpinner from '../components/common/LoadingSpinner';
-import { downloadAvatarBundle, extractAvatarBundle, openBundleFolder, isBundleDownloaded, addBundleToStore } from '../utils/avatarBundle';
 import type { VRCAvatar } from '../types/vrchat';
 
 type AvatarTab = 'favorites' | 'own' | 'search';
@@ -19,31 +18,16 @@ export default function AvatarsPage() {
   const [selected, setSelected] = useState<VRCAvatar | null>(null);
   const [switching, setSwitching] = useState(false);
   const [ownAvatarsError, setOwnAvatarsError] = useState<string | null>(null);
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState(0);
-  const [isExtracting, setIsExtracting] = useState(false);
-  const [isExtracted, setIsExtracted] = useState(false);
-  const [bundleError, setBundleError] = useState<string | null>(null);
-  const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
 
   useEffect(() => {
     loadFavoriteAvatars();
     loadOwnAvatars();
   }, []);
 
-  useEffect(() => {
-    if (selected) {
-      setSelectedPackageId(selected.unityPackages?.[0]?.id || null);
-      setIsExtracted(isBundleDownloaded(selected.id));
-      setBundleError(null);
-    }
-  }, [selected]);
-
   const loadFavoriteAvatars = async () => {
     setIsLoading(true);
     try {
       const favorites = await api.getFavorites('avatar', 100);
-      // Resolve each favorite to full avatar data
       const avatarPromises = favorites.map(fav =>
         api.getAvatar(fav.favoriteId).catch(() => null)
       );
@@ -58,11 +42,9 @@ export default function AvatarsPage() {
       setOwnAvatarsError(null);
       const avatars = await api.getOwnAvatars();
       setOwnAvatars(Array.isArray(avatars) ? avatars : []);
-      console.log('Loaded own avatars:', avatars);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to load uploaded avatars';
       setOwnAvatarsError(errorMsg);
-      console.error('Error loading own avatars:', err);
     }
   };
 
@@ -83,58 +65,6 @@ export default function AvatarsPage() {
       await api.selectAvatar(avatarId);
     } catch {}
     setSwitching(false);
-  };
-
-  const handleDownloadBundle = async () => {
-    if (!selected || !selectedPackageId) return;
-
-    setIsDownloading(true);
-    setBundleError(null);
-    setDownloadProgress(0);
-
-    const result = await downloadAvatarBundle(selected, selectedPackageId, (current, total) => {
-      setDownloadProgress(Math.round((current / total) * 100));
-    });
-
-    if (result.success && result.path) {
-      // Extract the bundle
-      setIsExtracting(true);
-      const extractResult = await extractAvatarBundle(result.path, selected.id);
-
-      if (extractResult.success) {
-        // Get bundle info for store
-        const selectedPackage = selected.unityPackages?.find(p => p.id === selectedPackageId);
-        if (selectedPackage) {
-          addBundleToStore(
-            selected.id,
-            selected.name,
-            selectedPackage.platform,
-            result.path,
-            0,
-            selectedPackage.unityVersion,
-            selectedPackageId
-          );
-        }
-        setIsExtracted(true);
-      } else {
-        setBundleError(extractResult.error || 'Failed to extract bundle');
-      }
-
-      setIsExtracting(false);
-    } else {
-      setBundleError(result.error || 'Failed to download bundle');
-    }
-
-    setIsDownloading(false);
-  };
-
-  const handleOpenBundleFolder = async () => {
-    if (!selected) return;
-    try {
-      await openBundleFolder(selected.id);
-    } catch (error) {
-      setBundleError(error instanceof Error ? error.message : 'Failed to open folder');
-    }
   };
 
   const avatars = tab === 'favorites' ? favoriteAvatars : tab === 'own' ? ownAvatars : searchResults;
@@ -172,48 +102,7 @@ export default function AvatarsPage() {
               Updated: {new Date(selected.updated_at).toLocaleDateString()}
             </div>
 
-            {bundleError && (
-              <div className="mt-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-400 flex gap-2">
-                <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
-                <span>{bundleError}</span>
-              </div>
-            )}
-
-            {(isDownloading || isExtracting) && (
-              <div className="mt-4 space-y-2">
-                <div className="flex items-center justify-between text-xs text-surface-400">
-                  <span>{isExtracting ? 'Extracting...' : 'Downloading...'}</span>
-                  {!isExtracting && <span>{downloadProgress}%</span>}
-                </div>
-                <div className="w-full bg-surface-800 rounded-full h-2 overflow-hidden">
-                  <div
-                    className="bg-accent-600 h-full rounded-full transition-all duration-300"
-                    style={{ width: `${isExtracting ? 100 : downloadProgress}%` }}
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* Package selector (Windows only) */}
-            {typeof window !== 'undefined' && (window as any).electronAPI && selected.unityPackages && selected.unityPackages.length > 0 && (
-              <div className="mt-4">
-                <label className="text-xs font-semibold text-surface-500 block mb-1.5">Package</label>
-                <select
-                  value={selectedPackageId || ''}
-                  onChange={e => setSelectedPackageId(e.target.value)}
-                  disabled={isDownloading || isExtracting}
-                  className="w-full px-3 py-2 bg-surface-800 border border-surface-700 rounded text-xs text-surface-300 hover:bg-surface-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {selected.unityPackages.map(pkg => (
-                    <option key={pkg.id} value={pkg.id}>
-                      {pkg.platform} (Unity {pkg.unityVersion})
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            <div className="mt-4 space-y-2 flex flex-col">
+            <div className="mt-4">
               <button
                 onClick={() => handleSelect(selected.id)}
                 disabled={switching}
@@ -221,36 +110,6 @@ export default function AvatarsPage() {
               >
                 {switching ? 'Switching...' : 'Switch to this Avatar'}
               </button>
-
-              {/* Bundle buttons (Windows only) */}
-              {typeof window !== 'undefined' && (window as any).electronAPI && (
-                <>
-                  {!isExtracted ? (
-                    <button
-                      onClick={handleDownloadBundle}
-                      disabled={isDownloading || isExtracting || !selectedPackageId}
-                      className="btn-secondary text-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {isDownloading || isExtracting ? (
-                        <>
-                          <Loader size={14} className="animate-spin" /> Preparing...
-                        </>
-                      ) : (
-                        <>
-                          <Download size={14} /> Download Bundle
-                        </>
-                      )}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleOpenBundleFolder}
-                      className="btn-secondary text-sm flex items-center justify-center gap-2"
-                    >
-                      <Folder size={14} /> Open in File Explorer
-                    </button>
-                  )}
-                </>
-              )}
             </div>
           </div>
         </div>
