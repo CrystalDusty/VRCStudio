@@ -15,48 +15,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
 
   // File system
-  readFile: (path: string) => ipcRenderer.invoke('fs:readFile', path),
   listDir: (path: string) => ipcRenderer.invoke('fs:listDir', path),
-  searchCacheForDataFiles: (avatarId?: string, packageId?: string) => ipcRenderer.invoke('fs:searchCacheForDataFiles', avatarId, packageId),
-  browseCacheFolder: () => ipcRenderer.invoke('fs:browseCacheFolder'),
-  extractAvatarToDownloads: (cacheDataPath: string, avatarId: string) => ipcRenderer.invoke('fs:extractAvatarToDownloads', cacheDataPath, avatarId),
-  getDiagnosticLog: () => ipcRenderer.invoke('fs:getDiagnosticLog'),
   getVRChatLogPath: () => ipcRenderer.invoke('fs:getVRChatLogPath'),
   getVRChatScreenshotPath: () => ipcRenderer.invoke('fs:getVRChatScreenshotPath'),
-
-  // Avatar bundles
-  getAvatarBundlePath: () => ipcRenderer.invoke('fs:getAvatarBundlePath'),
-  downloadFile: (url: string, avatarId: string, onProgress?: (current: number, total: number) => void) => {
-    if (onProgress) {
-      ipcRenderer.on('fs:downloadFile:progress', (_event, current: number, total: number) => {
-        onProgress(current, total);
-      });
-    }
-    return ipcRenderer.invoke('fs:downloadFile', url, avatarId);
-  },
-  downloadFileNative: (url: string, avatarId: string) => ipcRenderer.invoke('fs:downloadFileNative', url, avatarId),
-  extractBundle: (sourcePath: string, avatarId: string) => ipcRenderer.invoke('fs:extractBundle', sourcePath, avatarId),
-  openBundleFolder: (folderPath: string) => ipcRenderer.invoke('fs:openBundleFolder', folderPath),
-  launchAssetRipper: (bundlePath: string, avatarId?: string) => ipcRenderer.invoke('fs:launchAssetRipper', bundlePath, avatarId),
-  deleteBundleData: (avatarId: string) => ipcRenderer.invoke('fs:deleteBundleData', avatarId),
-  openFileDialog: (options: { title?: string; message?: string; filters?: any[] }) => ipcRenderer.invoke('fs:openFileDialog', options),
-  
-  // Version patching utilities
-  patchVrcaVersion: (inputPath: string, outputPath?: string) => ipcRenderer.invoke('fs:patchVrcaVersion', inputPath, outputPath),
-  analyzeBundle: (bundlePath: string) => ipcRenderer.invoke('fs:analyzeBundle', bundlePath),
-  
-  // Direct API download (bypasses encrypted cache)
-  downloadFromVRChatAPI: (avatarId: string, packageId: string) => ipcRenderer.invoke('fs:downloadFromVRChatAPI', avatarId, packageId),
-  checkBundleEncryption: (bundlePath: string) => ipcRenderer.invoke('fs:checkBundleEncryption', bundlePath),
-
-  // VRChat Cache Decryption
-  decryptCheckEncryption: (bundlePath: string) => ipcRenderer.invoke('decrypt:checkEncryption', bundlePath),
-  decryptIsVRChatRunning: () => ipcRenderer.invoke('decrypt:isVRChatRunning'),
-  decryptExtractKeys: (testFilePath?: string) => ipcRenderer.invoke('decrypt:extractKeys', testFilePath),
-  decryptBundle: (bundlePath: string, outputPath?: string) => ipcRenderer.invoke('decrypt:decryptBundle', bundlePath, outputPath),
-  decryptGetStoredKeys: () => ipcRenderer.invoke('decrypt:getStoredKeys'),
-  decryptAddKey: (keyHex: string, keyId?: string) => ipcRenderer.invoke('decrypt:addKey', keyHex, keyId),
-  decryptFullPipeline: (bundlePath: string) => ipcRenderer.invoke('decrypt:fullPipeline', bundlePath),
 
   // Persistent app data storage
   saveAppData: (key: string, data: string) => ipcRenderer.invoke('storage:saveAppData', key, data),
