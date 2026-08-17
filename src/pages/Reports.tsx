@@ -3,20 +3,24 @@ import {
   Flag, MapPin, ClipboardList, ChevronRight, ChevronLeft,
   Check, AlertTriangle, Clock, Copy, ExternalLink, Trash2,
   Download, CheckCircle, XCircle, HelpCircle, FileText,
-  ChevronDown, ChevronUp, Edit3, Globe, Users, LogIn,
+  ChevronDown, ChevronUp, Edit3, Globe, Users, LogIn, Search, MessageSquare,
 } from 'lucide-react';
 import api from '../api/vrchat';
 import { format, formatDistanceToNow, isToday, isYesterday } from 'date-fns';
 import { useInstanceHistoryStore } from '../stores/instanceHistoryStore';
 import { useReportStore } from '../stores/reportStore';
 import { useAuthStore } from '../stores/authStore';
-import { useFriendStore } from '../stores/friendStore';
 import {
   VIOLATION_CATEGORIES,
   PLAYER_CATEGORIES,
   GROUP_CATEGORIES,
+  PLAYER_SCENARIOS,
+  GROUP_SCENARIOS,
+  getScenario,
+  searchScenarios,
   generateReportText,
 } from '../data/reportTemplates';
+import ReportTargetPicker from '../components/ReportTargetPicker';
 import { downloadCSV } from '../utils/dataExport';
 import type { ViolationCategory, FiledReport, ReportStatus } from '../types/vrchat';
 
@@ -315,6 +319,8 @@ interface WizardState {
   targetImageUrl: string;
   violationCategory: ViolationCategory | '';
   violationSubtype: string;
+  scenarioId: string;
+  userStatement: string;
   hasEvidence: boolean;
   evidenceType: 'screenshot' | 'video' | 'both' | '';
   worldId: string;
@@ -333,6 +339,8 @@ const INITIAL_WIZARD: WizardState = {
   targetImageUrl: '',
   violationCategory: '',
   violationSubtype: '',
+  scenarioId: '',
+  userStatement: '',
   hasEvidence: false,
   evidenceType: '',
   worldId: '',
@@ -346,27 +354,29 @@ const INITIAL_WIZARD: WizardState = {
 function ReportWizardTab({ prefillInstance }: {
   prefillInstance?: { worldId: string; worldName: string; instanceId: string } | null;
 }) {
+  // Default the incident to the instance the user is in — that's where it
+  // almost always happened, and it saves retyping a world name.
+  const liveInstance = useInstanceHistoryStore.getState().currentInstance;
   const [w, setW] = useState<WizardState>({
     ...INITIAL_WIZARD,
-    worldId: prefillInstance?.worldId || '',
-    worldName: prefillInstance?.worldName || '',
-    instanceId: prefillInstance?.instanceId || '',
+    worldId: prefillInstance?.worldId || liveInstance?.worldId || '',
+    worldName: prefillInstance?.worldName || liveInstance?.worldName || '',
+    instanceId: prefillInstance?.instanceId || liveInstance?.instanceId || '',
     incidentTime: Date.now(),
   });
-  const { onlineFriends, offlineFriends } = useFriendStore();
-  const { history } = useInstanceHistoryStore();
   const { addReport } = useReportStore();
   const [copied, setCopied] = useState(false);
   const [filed, setFiled] = useState(false);
-
-  const allFriends = [...onlineFriends, ...offlineFriends];
-
-  const recentFriends = useMemo(() => {
-    if (!history.length) return allFriends.slice(0, 8);
-    return allFriends.slice(0, 8);
-  }, [allFriends, history]);
+  const [scenarioQuery, setScenarioQuery] = useState('');
+  const [browseCategories, setBrowseCategories] = useState(false);
 
   const categories = w.reportType === 'player' ? PLAYER_CATEGORIES : GROUP_CATEGORIES;
+  const scenarios = w.reportType === 'player' ? PLAYER_SCENARIOS : GROUP_SCENARIOS;
+  const matchingScenarios = useMemo(
+    () => searchScenarios(scenarios, scenarioQuery),
+    [scenarios, scenarioQuery],
+  );
+  const pickedScenario = getScenario(w.scenarioId);
   const catDef = w.violationCategory ? VIOLATION_CATEGORIES[w.violationCategory] : null;
 
   function update(patch: Partial<WizardState>) {
@@ -387,6 +397,8 @@ function ReportWizardTab({ prefillInstance }: {
         targetName: w.targetName,
         violationCategory: w.violationCategory as ViolationCategory,
         violationSubtype: cleanSubtype(w.violationSubtype),
+        scenarioId: w.scenarioId || undefined,
+        userStatement: w.userStatement || undefined,
         hasEvidence: w.hasEvidence,
         evidenceType: w.evidenceType || undefined,
         worldId: w.worldId || undefined,
@@ -414,6 +426,8 @@ function ReportWizardTab({ prefillInstance }: {
       targetImageUrl: w.targetImageUrl || undefined,
       violationCategory: w.violationCategory as ViolationCategory,
       violationSubtype: cleanSubtype(w.violationSubtype),
+      scenarioId: w.scenarioId || undefined,
+      userStatement: w.userStatement || undefined,
       hasEvidence: w.hasEvidence,
       evidenceType: w.evidenceType || undefined,
       worldId: w.worldId || undefined,
@@ -454,7 +468,7 @@ function ReportWizardTab({ prefillInstance }: {
     }
   };
 
-  const stepLabels = ['Type', 'Target', 'Category', 'Details', 'Review', 'Done'];
+  const stepLabels = ['Type', 'Who', 'What happened', 'Details', 'Review', 'Done'];
 
   return (
     <div className="max-w-2xl mx-auto space-y-5">
@@ -528,51 +542,114 @@ function ReportWizardTab({ prefillInstance }: {
             />
           </div>
 
-          {w.reportType === 'player' && recentFriends.length > 0 && (
-            <div>
-              <div className="text-xs font-semibold text-surface-200 mb-2">Quick pick from friends</div>
-              <div className="flex flex-wrap gap-2">
-                {recentFriends.map(f => (
-                  <button
-                    key={f.id}
-                    onClick={() => update({ targetName: f.displayName, targetId: f.id })}
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors ${w.targetId === f.id ? 'bg-accent-500/20 text-accent-300' : 'bg-surface-800 hover:bg-surface-700'}`}
-                  >
-                    {f.profilePicOverride || f.currentAvatarThumbnailImageUrl ? (
-                      <img src={f.profilePicOverride || f.currentAvatarThumbnailImageUrl} alt="" className="w-4 h-4 rounded object-cover" />
-                    ) : null}
-                    {f.displayName}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+          <div>
+            <div className="text-xs font-semibold text-surface-200 mb-2">Quick pick</div>
+            <ReportTargetPicker
+              reportType={w.reportType}
+              selectedId={w.targetId}
+              selectedName={w.targetName}
+              onPick={opt => update({
+                targetName: opt.name,
+                targetId: opt.id,
+                targetImageUrl: opt.imageUrl || '',
+              })}
+            />
+          </div>
         </div>
       )}
 
-      {/* Step 3: Category */}
+      {/* Step 3: What happened — scenario presets, category as the fallback */}
       {w.step === 3 && (
         <div className="glass-panel-solid p-6 space-y-4">
-          <h2 className="text-lg font-bold">What happened?</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {categories.map(key => {
-              const def = VIOLATION_CATEGORIES[key];
+          <div>
+            <h2 className="text-lg font-bold">What happened?</h2>
+            <p className="text-xs text-surface-500 mt-1">
+              Pick whichever comes closest — it writes the first draft in plain English and
+              you get to edit every word before anything is sent.
+            </p>
+          </div>
+
+          <div className="relative">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-surface-500" />
+            <input
+              value={scenarioQuery}
+              onChange={e => setScenarioQuery(e.target.value)}
+              placeholder="Describe it — e.g. crasher, slurs, mic spam, followed me…"
+              className="w-full bg-surface-900 text-sm pl-8 pr-3 py-2 rounded-lg border border-surface-700 focus:outline-none focus:border-accent-500 placeholder-surface-600"
+            />
+          </div>
+
+          <div className="max-h-[22rem] overflow-y-auto space-y-1.5 pr-0.5">
+            {matchingScenarios.length === 0 ? (
+              <div className="text-center text-xs text-surface-500 py-6">
+                Nothing matches "{scenarioQuery}". Try fewer words, or choose a category below.
+              </div>
+            ) : matchingScenarios.map(sc => {
+              const def = VIOLATION_CATEGORIES[sc.category];
+              const active = w.scenarioId === sc.id;
               return (
                 <button
-                  key={key}
-                  onClick={() => update({ violationCategory: key, violationSubtype: '' })}
-                  className={`p-3 rounded-xl border-2 text-left transition-colors ${w.violationCategory === key ? 'border-accent-500 bg-accent-500/10' : 'border-surface-700 hover:border-surface-600'}`}
+                  key={sc.id}
+                  onClick={() => {
+                    update({
+                      scenarioId: sc.id,
+                      violationCategory: sc.category,
+                      violationSubtype: sc.subtype ?? '',
+                    });
+                    setBrowseCategories(false);
+                  }}
+                  className={`w-full p-3 rounded-xl border-2 text-left transition-colors ${active ? 'border-accent-500 bg-accent-500/10' : 'border-surface-700 hover:border-surface-600'}`}
                 >
-                  <div className="flex items-start gap-2">
-                    <span className="text-lg flex-shrink-0">{def.emoji}</span>
-                    <div>
-                      <div className="font-semibold text-sm">{def.label}</div>
-                      <div className="text-xs text-surface-500 mt-0.5">{def.description}</div>
+                  <div className="flex items-start gap-2.5">
+                    <span className="text-base flex-shrink-0 mt-0.5">{def.emoji}</span>
+                    <div className="min-w-0">
+                      <div className="font-medium text-sm leading-snug">{sc.label}</div>
+                      <div className="text-xs text-surface-500 mt-0.5">{sc.hint}</div>
+                      <div className="text-[10px] text-surface-600 mt-1 uppercase tracking-wider">
+                        Files as: {def.label}
+                        {def.urgency === 'urgent' && <span className="text-amber-400 ml-1.5">· urgent</span>}
+                      </div>
                     </div>
+                    {active && <Check size={14} className="text-accent-400 flex-shrink-0 ml-auto mt-0.5" />}
                   </div>
                 </button>
               );
             })}
+          </div>
+
+          {/* Category fallback for anything the presets don't cover */}
+          <div className="border-t border-surface-800 pt-3">
+            <button
+              onClick={() => setBrowseCategories(v => !v)}
+              className="text-xs text-surface-400 hover:text-accent-300 flex items-center gap-1.5"
+            >
+              {browseCategories ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+              None of these fit — pick a category myself
+            </button>
+
+            {browseCategories && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+                {categories.map(key => {
+                  const def = VIOLATION_CATEGORIES[key];
+                  const active = w.violationCategory === key && !w.scenarioId;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => update({ violationCategory: key, violationSubtype: '', scenarioId: '' })}
+                      className={`p-3 rounded-xl border-2 text-left transition-colors ${active ? 'border-accent-500 bg-accent-500/10' : 'border-surface-700 hover:border-surface-600'}`}
+                    >
+                      <div className="flex items-start gap-2">
+                        <span className="text-lg flex-shrink-0">{def.emoji}</span>
+                        <div>
+                          <div className="font-semibold text-sm">{def.label}</div>
+                          <div className="text-xs text-surface-500 mt-0.5">{def.description}</div>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -581,6 +658,41 @@ function ReportWizardTab({ prefillInstance }: {
       {w.step === 4 && (
         <div className="glass-panel-solid p-6 space-y-4">
           <h2 className="text-lg font-bold">Details</h2>
+
+          {/* What they picked, with a way back */}
+          {pickedScenario && (
+            <div className="flex items-start gap-2 text-xs bg-surface-800/50 rounded-lg p-2.5">
+              <span className="text-base leading-none">{VIOLATION_CATEGORIES[pickedScenario.category].emoji}</span>
+              <div className="min-w-0 flex-1">
+                <div className="text-surface-200">{pickedScenario.label}</div>
+                <div className="text-[10px] text-surface-500 mt-0.5">
+                  Filing as {VIOLATION_CATEGORIES[pickedScenario.category].label}
+                </div>
+              </div>
+              <button
+                onClick={() => update({ step: 3 })}
+                className="text-accent-400 hover:text-accent-300 flex-shrink-0"
+              >
+                Change
+              </button>
+            </div>
+          )}
+
+          {/* The reporter's own account — the part moderators actually read */}
+          <div className="space-y-2">
+            <label className="text-xs font-semibold text-surface-200 flex items-center gap-1.5">
+              <MessageSquare size={12} className="text-accent-400" />
+              {pickedScenario?.followUp
+                ? pickedScenario.followUp.replace(/\{target\}/g, w.targetName || 'them')
+                : 'What happened, in your own words?'}
+            </label>
+            <textarea
+              value={w.userStatement}
+              onChange={e => update({ userStatement: e.target.value })}
+              placeholder="Optional, but a couple of specific sentences here does more than anything else in this form."
+              className="w-full h-24 bg-surface-900 border border-surface-700 rounded-xl p-3 text-sm resize-none focus:outline-none focus:border-accent-500 placeholder-surface-600"
+            />
+          </div>
 
           {/* Subtype if applicable */}
           {catDef?.subtypes && (

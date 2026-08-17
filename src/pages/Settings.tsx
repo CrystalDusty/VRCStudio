@@ -525,12 +525,21 @@ export default function SettingsPage() {
                     { key: 'cosmic',       label: 'Cosmic',       preview: 'bg-gradient-to-br from-indigo-900 via-purple-900 to-black' },
                     { key: 'synthwave',    label: 'Synthwave',    preview: 'bg-gradient-to-b from-[#2a0845] via-[#ff2d96] to-[#12002e] relative overflow-hidden' },
                     { key: 'asteroids',    label: 'Asteroids',    preview: 'bg-gradient-to-br from-[#050812] via-[#0d1836] to-[#050812] border border-accent-800/40' },
+                    { key: 'koi',          label: 'Koi Pond',     preview: 'bg-gradient-to-br from-[#05202a] via-[#0b3a44] to-[#04161d] relative overflow-hidden' },
                     { key: 'hacker',       label: 'Hacker',       preview: 'bg-black border border-green-500/60 shadow-[inset_0_0_12px_rgba(0,255,100,0.3)] text-green-400 font-mono text-[8px] flex items-center justify-center' },
                   ] as const).map(({ key, label, preview }) => (
                     <button key={key} onClick={() => setPremiumTheme(key)} className={`p-2 rounded-lg border transition-all ${theme.premiumTheme === key ? 'border-accent-500 bg-accent-500/10' : 'border-surface-700 hover:border-surface-600'}`}>
                       <div className={`w-full h-12 rounded mb-1.5 ${preview}`}>
                         {key === 'hacker' && (
                           <span className="text-green-400 font-mono text-[9px] tracking-tight">{'>_ vrc.run()'}</span>
+                        )}
+                        {key === 'koi' && (
+                          <>
+                            <span className="absolute left-[22%] top-[38%] w-3.5 h-1.5 rounded-full bg-orange-300/90 -rotate-12" />
+                            <span className="absolute left-[55%] top-[58%] w-4 h-1.5 rounded-full bg-white/80 rotate-6" />
+                            <span className="absolute left-[62%] top-[26%] w-3 h-1.5 rounded-full bg-amber-200/70 rotate-12" />
+                            <span className="absolute inset-0 rounded-[50%] border border-cyan-200/25 scale-50" />
+                          </>
                         )}
                         {key === 'synthwave' && (
                           <>
@@ -549,6 +558,13 @@ export default function SettingsPage() {
                       <div className="text-xs font-medium">{label}</div>
                     </button>
                   ))}
+                  {theme.premiumTheme === 'koi' && (
+                    <div className="col-span-2 sm:col-span-5 mt-1 text-xs text-surface-400 bg-surface-800/50 rounded-lg p-2.5">
+                      The koi react to you: they scatter from your cursor, your pointer leaves a
+                      wake, and clicking anywhere drops food they'll race for. It never intercepts
+                      your clicks — the UI keeps working normally.
+                    </div>
+                  )}
                   {theme.premiumTheme === 'asteroids' && (
                     <div className="col-span-2 sm:col-span-5 mt-1">
                       <button onClick={openAsteroidsGame} className="btn-primary text-sm flex items-center gap-2">

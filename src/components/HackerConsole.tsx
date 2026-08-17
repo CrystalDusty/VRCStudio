@@ -74,7 +74,7 @@ const ROUTES: Record<string, string> = {
 };
 
 const PREMIUM_THEMES: ThemeConfig['premiumTheme'][] = [
-  'none', 'iridescent', 'holographic', 'aurora', 'cosmic', 'synthwave', 'asteroids', 'hacker',
+  'none', 'iridescent', 'holographic', 'aurora', 'cosmic', 'synthwave', 'asteroids', 'koi', 'hacker',
 ];
 const BORDER_STYLES: BorderStyle[] = [
   'default', 'rainbow', 'neon', 'pulse', 'holographic', 'flame', 'shimmer', 'cyber',

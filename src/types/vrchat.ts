@@ -289,6 +289,10 @@ export interface FiledReport {
   incidentTime: number;
   reportTime: number;
   generatedText: string;
+  /** Preset scenario the wording came from, when one was picked. */
+  scenarioId?: string;
+  /** The reporter's own description of the incident, in their words. */
+  userStatement?: string;
   status: ReportStatus;
   actionedAt?: number;
   actionNotificationId?: string;

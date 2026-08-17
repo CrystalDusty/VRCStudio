@@ -32,7 +32,7 @@ export interface LivelinessConfig {
 export interface ThemeConfig {
   mode: 'dark' | 'light' | 'midnight' | 'oled';
   accentColor: 'blue' | 'purple' | 'green' | 'rose' | 'amber' | 'cyan';
-  premiumTheme: 'none' | 'iridescent' | 'holographic' | 'aurora' | 'cosmic' | 'synthwave' | 'asteroids' | 'hacker';
+  premiumTheme: 'none' | 'iridescent' | 'holographic' | 'aurora' | 'cosmic' | 'synthwave' | 'asteroids' | 'koi' | 'hacker';
   customCSS: string;
   fontSize: 'small' | 'medium' | 'large';
   sidebarWidth: 'compact' | 'normal' | 'wide';
