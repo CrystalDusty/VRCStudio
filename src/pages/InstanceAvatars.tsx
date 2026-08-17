@@ -21,6 +21,7 @@ import {
 } from '../stores/instanceAvatarsStore';
 import { useInstanceHistoryStore } from '../stores/instanceHistoryStore';
 import { useVideoPlayerStore } from '../stores/videoPlayerStore';
+import InstanceAvatarModal from '../components/InstanceAvatarModal';
 import api from '../api/vrchat';
 
 const RANK_COLORS: Record<PerfRank, string> = {
@@ -59,6 +60,10 @@ export default function InstanceAvatarsPage() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  // Keyed by player name rather than holding the object, so the modal keeps
+  // showing live data as the log updates (new stats, avatar swaps).
+  const [selected, setSelected] = useState<string | null>(null);
+  const selectedPlayer = selected ? byPlayer[selected] : undefined;
 
   // Lazily look up every avatar we don't know about yet. The store keeps its
   // own in-flight set and result cache, so re-firing on render is cheap.
@@ -285,12 +290,24 @@ export default function InstanceAvatarsPage() {
               wearingId={wearingId}
               wornId={wornId}
               copiedId={copiedId}
+              onOpen={() => setSelected(p.playerName)}
               onWear={() => handleWear(p)}
               onCopy={(text, id) => copy(text, id)}
               onOpenAvtrdb={() => p.avatarId && openAvtrdb(p.avatarId)}
             />
           ))}
         </div>
+      )}
+
+      {selectedPlayer && (
+        <InstanceAvatarModal
+          player={selectedPlayer}
+          onClose={() => setSelected(null)}
+          onSwitched={id => {
+            setWornId(id);
+            setTimeout(() => setWornId(null), 4000);
+          }}
+        />
       )}
 
       {/* Footer note */}
@@ -333,11 +350,12 @@ function FilterChip({ active, onClick, label, count, colorClass }: {
   );
 }
 
-function PlayerRow({ player, wearingId, wornId, copiedId, onWear, onCopy, onOpenAvtrdb }: {
+function PlayerRow({ player, wearingId, wornId, copiedId, onOpen, onWear, onCopy, onOpenAvtrdb }: {
   player: PlayerAvatar;
   wearingId: string | null;
   wornId: string | null;
   copiedId: string | null;
+  onOpen: () => void;
   onWear: () => void;
   onCopy: (text: string, id: string) => void;
   onOpenAvtrdb: () => void;
@@ -352,7 +370,18 @@ function PlayerRow({ player, wearingId, wornId, copiedId, onWear, onCopy, onOpen
   const canWear = !!player.avatarId;
 
   return (
-    <div className="glass-panel-solid p-3 hover:bg-surface-800/30 transition-colors">
+    // The row body opens the detail modal; the inline buttons stop
+    // propagation so they keep working as shortcuts.
+    <div
+      className="glass-panel-solid p-3 hover:bg-surface-800/30 transition-colors cursor-pointer"
+      onClick={onOpen}
+      role="button"
+      tabIndex={0}
+      onKeyDown={e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); }
+      }}
+      title="Open avatar details"
+    >
       <div className="flex items-start gap-3">
         {/* Thumbnail (from avtrdb match if available) */}
         <div className="flex-shrink-0">
@@ -403,7 +432,7 @@ function PlayerRow({ player, wearingId, wornId, copiedId, onWear, onCopy, onOpen
               <>
                 <span className="text-surface-700">·</span>
                 <button
-                  onClick={() => onCopy(player.avatarId!, `id-${player.avatarId}`)}
+                  onClick={e => { e.stopPropagation(); onCopy(player.avatarId!, `id-${player.avatarId}`); }}
                   className="font-mono text-[10px] text-surface-500 hover:text-surface-300 inline-flex items-center gap-1"
                   title="Copy avatar ID"
                 >
@@ -415,7 +444,11 @@ function PlayerRow({ player, wearingId, wornId, copiedId, onWear, onCopy, onOpen
           </div>
 
           {player.stats && Object.keys(player.stats).length > 0 && (
-            <StatStrip stats={player.stats} expanded={expanded} onToggle={() => setExpanded(!expanded)} />
+            <StatStrip
+              stats={player.stats}
+              expanded={expanded}
+              onToggle={() => setExpanded(!expanded)}
+            />
           )}
         </div>
 
@@ -423,7 +456,7 @@ function PlayerRow({ player, wearingId, wornId, copiedId, onWear, onCopy, onOpen
         <div className="flex items-center gap-1 flex-shrink-0">
           {player.avatarId && (
             <button
-              onClick={onOpenAvtrdb}
+              onClick={e => { e.stopPropagation(); onOpenAvtrdb(); }}
               className="p-1.5 rounded text-surface-500 hover:text-surface-200 hover:bg-surface-800 transition-colors"
               title="Open on avtrdb.com"
             >
@@ -432,7 +465,7 @@ function PlayerRow({ player, wearingId, wornId, copiedId, onWear, onCopy, onOpen
           )}
           {canWear && (
             <button
-              onClick={onWear}
+              onClick={e => { e.stopPropagation(); onWear(); }}
               disabled={isWearing}
               className={`text-[11px] px-2.5 py-1 rounded font-medium transition-colors flex items-center gap-1 ${
                 isWorn
@@ -497,7 +530,7 @@ function StatStrip({ stats, expanded, onToggle }: {
         )}
         {hasSecondary && (
           <button
-            onClick={onToggle}
+            onClick={e => { e.stopPropagation(); onToggle(); }}
             className="text-[10px] text-surface-500 hover:text-accent-400 underline"
           >
             {expanded ? 'Less' : 'More'}
