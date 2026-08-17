@@ -68,10 +68,22 @@ interface ElectronAPI {
   onTraySetStatus: (cb: (status: string) => void) => () => void;
 
   // VRChat log tailing
-  logStartTailing: () => Promise<{ success: boolean; path?: string; error?: string }>;
+  logStartTailing: () => Promise<{ success: boolean; path?: string; error?: string; waiting?: boolean }>;
   logStopTailing: () => Promise<{ success: boolean }>;
   logReadBacklog: (maxLines?: number) => Promise<{ success: boolean; lines?: string[]; path?: string; error?: string }>;
+  logStatus: () => Promise<{
+    success: boolean;
+    active: boolean;
+    watching: boolean;
+    path?: string;
+    position?: number;
+    size?: number;
+    dir: string;
+    searchedDirs: string[];
+    files: Array<{ name: string; size: number; mtime: number }>;
+  }>;
   onVRChatLogLines: (cb: (lines: string[]) => void) => () => void;
+  onVRChatLogStatus: (cb: (status: { active: boolean; path?: string; reason?: string }) => void) => () => void;
 
   // Auto-updater (source-tree updates from GitHub)
   updateGetCurrentCommit: () => Promise<{ sha: string | null; source: string }>;

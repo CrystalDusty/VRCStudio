@@ -91,10 +91,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   logStartTailing: () => ipcRenderer.invoke('log:startTailing'),
   logStopTailing:  () => ipcRenderer.invoke('log:stopTailing'),
   logReadBacklog:  (maxLines?: number) => ipcRenderer.invoke('log:readBacklog', maxLines),
+  logStatus:       () => ipcRenderer.invoke('log:status'),
   onVRChatLogLines: (cb: (lines: string[]) => void) => {
     const handler = (_e: any, lines: string[]) => cb(lines);
     ipcRenderer.on('vrchat:logLines', handler);
     return () => ipcRenderer.removeListener('vrchat:logLines', handler);
+  },
+  onVRChatLogStatus: (cb: (status: { active: boolean; path?: string; reason?: string }) => void) => {
+    const handler = (_e: any, status: any) => cb(status);
+    ipcRenderer.on('vrchat:logStatus', handler);
+    return () => ipcRenderer.removeListener('vrchat:logStatus', handler);
   },
 
   // Auto-updater (source-tree updates from GitHub)

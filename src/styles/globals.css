@@ -277,6 +277,94 @@
   50%      { opacity: 1; }
 }
 
+/* synthwave — retro sunset: a slit-scan sun over a horizon grid that rolls
+   toward the viewer. Built from three layers on one element:
+     .premium-overlay-synthwave  → sky gradient + horizon glow
+     ::before                    → the sun (masked into scanline slits)
+     ::after                     → the perspective grid
+   Same screen-blend rules as the other premium overlays, so UI text on top
+   stays fully legible. */
+.premium-overlay-synthwave {
+  overflow: hidden;
+  background:
+    /* horizon flare, right where the grid meets the sun */
+    radial-gradient(ellipse 70% 12% at 50% 62%, rgba(255,58,161,0.55) 0%, transparent 70%),
+    /* sky */
+    linear-gradient(180deg,
+      rgba(28,0,64,0.00)   0%,
+      rgba(72,16,120,0.42) 30%,
+      rgba(180,36,140,0.50) 52%,
+      rgba(20,0,44,0.00)   66%);
+  animation: synthwave-sky 18s ease-in-out infinite;
+}
+
+.premium-overlay-synthwave::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  /* Centre sits just above the horizon line the grid starts from (58%), so
+     the sun reads as setting into it. */
+  top: 46%;
+  width: min(26vw, 300px);
+  height: min(26vw, 300px);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: linear-gradient(180deg,
+    rgba(255,225,120,0.95) 0%,
+    rgba(255,150,70,0.9)  42%,
+    rgba(255,45,150,0.9) 100%);
+  /* Solid on top, slatted below — the classic sunset-sun cut. */
+  -webkit-mask-image:
+    linear-gradient(180deg, #000 0 42%, transparent 42%),
+    repeating-linear-gradient(180deg, #000 0 7px, transparent 7px 13px);
+  mask-image:
+    linear-gradient(180deg, #000 0 42%, transparent 42%),
+    repeating-linear-gradient(180deg, #000 0 7px, transparent 7px 13px);
+  -webkit-mask-composite: source-over;
+  mask-composite: add;
+  filter: blur(2px) saturate(1.25);
+  opacity: 0.7;
+  animation: synthwave-sun 9s ease-in-out infinite;
+}
+
+/* The ground plane. It hinges at the horizon (transform-origin at its top
+   edge) and sweeps toward the camera, so near lines read thick and far ones
+   converge — the perspective does the work, not hand-tuned spacing. */
+.premium-overlay-synthwave::after {
+  content: '';
+  position: absolute;
+  left: -55%;
+  right: -55%;
+  top: 58%;
+  bottom: -45%;
+  background:
+    repeating-linear-gradient(90deg, rgba(120,255,255,0.55) 0 2px, transparent 2px 62px),
+    repeating-linear-gradient(0deg,  rgba(255,70,205,0.5)   0 2px, transparent 2px 30px);
+  transform: perspective(260px) rotateX(60deg);
+  transform-origin: 50% 0%;
+  opacity: 0.55;
+  filter: drop-shadow(0 0 5px rgba(255,60,200,0.5));
+  /* Fade the far edge into the horizon glow instead of ending in a hard line. */
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 14%, #000 100%);
+  mask-image: linear-gradient(180deg, transparent 0%, #000 14%, #000 100%);
+  animation: synthwave-grid 3.4s linear infinite;
+}
+
+@keyframes synthwave-sky {
+  0%, 100% { filter: saturate(1.05) hue-rotate(0deg); }
+  50%      { filter: saturate(1.25) hue-rotate(-12deg); }
+}
+
+@keyframes synthwave-sun {
+  0%, 100% { opacity: 0.62; filter: blur(2px) saturate(1.25); }
+  50%      { opacity: 0.82; filter: blur(3px) saturate(1.45); }
+}
+
+@keyframes synthwave-grid {
+  0%   { background-position: 0 0, 0 0;     }
+  100% { background-position: 0 0, 0 30px;  }
+}
+
 /* ───────────────────────────────────────────────────────────────────────
    Border-radius theming via --radius-base CSS variable.
    The themeStore sets --radius-base to 0px / 8px / 16px.

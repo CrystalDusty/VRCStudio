@@ -4,6 +4,7 @@ import {
   Palette, Download, Upload, UserCircle, Globe2, Zap, Shield,
   Trash2, Smile, X, Volume2, Moon, Sun, ArrowUpDown, Lock,
   Cpu, Database, Keyboard, Info, ExternalLink, Gamepad2,
+  CheckCircle, XCircle,
 } from 'lucide-react';
 import { VRCDB_PROVIDERS, getProviderId, setProviderId } from '../api/vrcdb';
 import { useAsteroidsGameStore } from '../stores/asteroidsGameStore';
@@ -522,6 +523,7 @@ export default function SettingsPage() {
                     { key: 'holographic',  label: 'Holographic',  preview: 'bg-[conic-gradient(from_0deg,_#f0f,_#0ff,_#ff0,_#f0f)]' },
                     { key: 'aurora',       label: 'Aurora',       preview: 'bg-gradient-to-br from-emerald-500 via-blue-500 to-purple-500' },
                     { key: 'cosmic',       label: 'Cosmic',       preview: 'bg-gradient-to-br from-indigo-900 via-purple-900 to-black' },
+                    { key: 'synthwave',    label: 'Synthwave',    preview: 'bg-gradient-to-b from-[#2a0845] via-[#ff2d96] to-[#12002e] relative overflow-hidden' },
                     { key: 'asteroids',    label: 'Asteroids',    preview: 'bg-gradient-to-br from-[#050812] via-[#0d1836] to-[#050812] border border-accent-800/40' },
                     { key: 'hacker',       label: 'Hacker',       preview: 'bg-black border border-green-500/60 shadow-[inset_0_0_12px_rgba(0,255,100,0.3)] text-green-400 font-mono text-[8px] flex items-center justify-center' },
                   ] as const).map(({ key, label, preview }) => (
@@ -529,6 +531,19 @@ export default function SettingsPage() {
                       <div className={`w-full h-12 rounded mb-1.5 ${preview}`}>
                         {key === 'hacker' && (
                           <span className="text-green-400 font-mono text-[9px] tracking-tight">{'>_ vrc.run()'}</span>
+                        )}
+                        {key === 'synthwave' && (
+                          <>
+                            <span className="absolute left-1/2 top-1.5 -translate-x-1/2 w-5 h-5 rounded-full bg-gradient-to-b from-amber-200 to-pink-500" />
+                            <span
+                              className="absolute inset-x-0 bottom-0 h-1/2 opacity-70"
+                              style={{
+                                backgroundImage:
+                                  'repeating-linear-gradient(90deg, rgba(90,255,255,.7) 0 1px, transparent 1px 8px),' +
+                                  'repeating-linear-gradient(0deg, rgba(255,60,200,.6) 0 1px, transparent 1px 6px)',
+                              }}
+                            />
+                          </>
                         )}
                       </div>
                       <div className="text-xs font-medium">{label}</div>
@@ -632,7 +647,7 @@ export default function SettingsPage() {
                   {VRCDB_PROVIDERS.map(p => (
                     <label key={p.id} className="flex items-center gap-3 cursor-pointer">
                       <input type="radio" name="vrcdb_provider" checked={vrcdbProvider === p.id} onChange={() => { setProviderId(p.id as ProviderId); setVrcdbProviderState(p.id as ProviderId); }} className="accent-accent-500" />
-                      <div><div className="text-sm font-medium">{p.label}</div><div className="text-xs text-surface-500 font-mono">{p.searchUrl('…')}</div></div>
+                      <div><div className="text-sm font-medium">{p.label}</div><div className="text-xs text-surface-500 font-mono">{p.searchPageUrl('…', 25, 1)}</div></div>
                     </label>
                   ))}
                 </div>

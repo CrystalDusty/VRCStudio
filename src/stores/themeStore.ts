@@ -32,7 +32,7 @@ export interface LivelinessConfig {
 export interface ThemeConfig {
   mode: 'dark' | 'light' | 'midnight' | 'oled';
   accentColor: 'blue' | 'purple' | 'green' | 'rose' | 'amber' | 'cyan';
-  premiumTheme: 'none' | 'iridescent' | 'holographic' | 'aurora' | 'cosmic' | 'asteroids' | 'hacker';
+  premiumTheme: 'none' | 'iridescent' | 'holographic' | 'aurora' | 'cosmic' | 'synthwave' | 'asteroids' | 'hacker';
   customCSS: string;
   fontSize: 'small' | 'medium' | 'large';
   sidebarWidth: 'compact' | 'normal' | 'wide';
@@ -341,9 +341,9 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
     // Premium theme — CSS class only for CSS-based overlays (not canvas-based ones like asteroids)
     root.classList.remove(
       'premium-iridescent', 'premium-holographic', 'premium-aurora',
-      'premium-cosmic', 'premium-hacker',
+      'premium-cosmic', 'premium-synthwave', 'premium-hacker',
     );
-    const cssPremiums = ['iridescent', 'holographic', 'aurora', 'cosmic', 'hacker'];
+    const cssPremiums = ['iridescent', 'holographic', 'aurora', 'cosmic', 'synthwave', 'hacker'];
     if (theme.premiumTheme && cssPremiums.includes(theme.premiumTheme)) {
       root.classList.add(`premium-${theme.premiumTheme}`);
     }
