@@ -102,7 +102,7 @@ export default function LivelinessEffects() {
         if (p.y > height + 8) p.y = -8;
 
         ctx.beginPath();
-        ctx.fillStyle = `rgba(${accentRgb.replaceAll(' ', ',')}, ${p.alpha})`;
+        ctx.fillStyle = `rgba(${accentRgb.split(' ').join(',')}, ${p.alpha})`;
         ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
         ctx.fill();
       }

@@ -20,6 +20,7 @@ import {
   type AvatarStats,
 } from '../stores/instanceAvatarsStore';
 import { useInstanceHistoryStore } from '../stores/instanceHistoryStore';
+import { useAuthStore } from '../stores/authStore';
 import { useVideoPlayerStore } from '../stores/videoPlayerStore';
 import InstanceAvatarModal from '../components/InstanceAvatarModal';
 import api from '../api/vrchat';
@@ -49,6 +50,7 @@ export default function InstanceAvatarsPage() {
   const logPath = useInstanceAvatarsStore(s => s.logPath);
   const logError = useInstanceAvatarsStore(s => s.logError);
   const currentInstance = useInstanceHistoryStore(s => s.currentInstance);
+  const me = useAuthStore(s => s.user);
   const tailingActive = useVideoPlayerStore(s => s.tailingActive);
   const tailingPath = useVideoPlayerStore(s => s.tailingPath);
 
@@ -291,6 +293,9 @@ export default function InstanceAvatarsPage() {
               wornId={wornId}
               copiedId={copiedId}
               onOpen={() => setSelected(p.playerName)}
+              selfImageUrl={p.isLocal
+                ? (me?.currentAvatarThumbnailImageUrl || me?.currentAvatarImageUrl || undefined)
+                : undefined}
               onWear={() => handleWear(p)}
               onCopy={(text, id) => copy(text, id)}
               onOpenAvtrdb={() => p.avatarId && openAvtrdb(p.avatarId)}
@@ -350,11 +355,13 @@ function FilterChip({ active, onClick, label, count, colorClass }: {
   );
 }
 
-function PlayerRow({ player, wearingId, wornId, copiedId, onOpen, onWear, onCopy, onOpenAvtrdb }: {
+function PlayerRow({ player, wearingId, wornId, copiedId, selfImageUrl, onOpen, onWear, onCopy, onOpenAvtrdb }: {
   player: PlayerAvatar;
   wearingId: string | null;
   wornId: string | null;
   copiedId: string | null;
+  /** Your own avatar image, straight from your account — no guessing needed. */
+  selfImageUrl?: string;
   onOpen: () => void;
   onWear: () => void;
   onCopy: (text: string, id: string) => void;
@@ -383,11 +390,12 @@ function PlayerRow({ player, wearingId, wornId, copiedId, onOpen, onWear, onCopy
       title="Open avatar details"
     >
       <div className="flex items-start gap-3">
-        {/* Thumbnail (from avtrdb match if available) */}
+        {/* Thumbnail. For yourself VRChat already told us the real image, so
+            prefer that over anything a community index guessed at. */}
         <div className="flex-shrink-0">
-          {match?.thumbnailImageUrl || match?.imageUrl ? (
+          {selfImageUrl || match?.thumbnailImageUrl || match?.imageUrl ? (
             <img
-              src={match.thumbnailImageUrl || match.imageUrl}
+              src={selfImageUrl || match?.thumbnailImageUrl || match?.imageUrl}
               alt=""
               className="w-12 h-12 rounded-lg object-cover bg-surface-800"
               loading="lazy"

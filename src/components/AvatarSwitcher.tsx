@@ -126,7 +126,9 @@ export default function AvatarSwitcher({ open, onClose }: Props) {
   const searchByTag = () => {
     const t = tagQuery.trim();
     if (!t) return;
-    runVrcdbSearch(() => vrcdb.searchByTag(t, 50));
+    // avtrdb has no tag-specific endpoint — its free-text search already
+    // matches tags, so this goes through the same search path.
+    runVrcdbSearch(() => vrcdb.search(t, 50));
   };
 
   const openSimilarImageSearch = (avatarId: string) => {

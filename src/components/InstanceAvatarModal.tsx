@@ -19,6 +19,7 @@ import {
   Monitor, Smartphone, RefreshCw, Search,
 } from 'lucide-react';
 import api, { APIError } from '../api/vrchat';
+import { useAuthStore } from '../stores/authStore';
 import type { VRCAvatar } from '../types/vrchat';
 import type { PlayerAvatar, PerfRank, AvatarStats } from '../stores/instanceAvatarsStore';
 
@@ -66,6 +67,12 @@ interface Props {
 export default function InstanceAvatarModal({ player, onClose, onSwitched }: Props) {
   const avatarId = player.avatarId;
   const match = player.vrcdbMatch;
+  const me = useAuthStore(s => s.user);
+  // Your own avatar image is known for certain — never fall back to a
+  // community index's guess for yourself.
+  const selfImage = player.isLocal
+    ? (me?.currentAvatarImageUrl || me?.currentAvatarThumbnailImageUrl || undefined)
+    : undefined;
 
   const [availability, setAvailability] = useState<Availability>(
     avatarId ? { state: 'checking' } : { state: 'no-id' },
@@ -127,7 +134,7 @@ export default function InstanceAvatarModal({ player, onClose, onSwitched }: Pro
   const displayName = apiAvatar?.name ?? player.avatarName ?? match?.name ?? 'Unknown avatar';
   const authorName = apiAvatar?.authorName ?? match?.authorName;
   const description = apiAvatar?.description ?? match?.description;
-  const image = apiAvatar?.imageUrl || match?.imageUrl || match?.thumbnailImageUrl || apiAvatar?.thumbnailImageUrl;
+  const image = apiAvatar?.imageUrl || selfImage || match?.imageUrl || match?.thumbnailImageUrl || apiAvatar?.thumbnailImageUrl;
 
   const canSwitch = availability.state === 'public' && !!avatarId;
 

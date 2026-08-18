@@ -40,7 +40,10 @@ export const VRCDB_PROVIDERS = [
     searchPageUrl: (q: string, pageSize: number, page: number) =>
       `https://api.avtrdb.com/v3/avatar/search/vrcx?search=${encodeURIComponent(q)}&n=${pageSize}&page=${page}`,
     byAuthorUrl: (id: string) => `https://api.avtrdb.com/v3/avatar/search/vrcx?authorId=${encodeURIComponent(id)}`,
-    byIdUrl: (id: string) => `https://api.avtrdb.com/v3/avatar/search/vrcx?fileId=${encodeURIComponent(id)}`,
+    // Free-text search matches the avatar id. The old `fileId=` param expects
+    // a file_… id, so passing an avtr_… id there returned unrelated rows —
+    // callers must still verify the id on the way out.
+    byIdUrl: (id: string) => `https://api.avtrdb.com/v3/avatar/search/vrcx?search=${encodeURIComponent(id)}&n=25&page=1`,
     webPageUrl: (avatarId: string) => `https://avtrdb.com/avatar/${encodeURIComponent(avatarId)}`,
     headers: AVTRDB_HEADERS,
   },

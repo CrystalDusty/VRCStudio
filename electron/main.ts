@@ -263,6 +263,8 @@ type DiscordActivityPayload = {
   smallImageText?: string;
   startTimestamp?: number;
   instance?: boolean;
+  /** Up to two link buttons on the presence card. */
+  buttons?: Array<{ label: string; url: string }>;
 };
 
 let pendingActivity: DiscordActivityPayload | null = null;
@@ -358,6 +360,10 @@ function applyActivity(activity: DiscordActivityPayload, allowImages = true) {
     smallImageText: withImages ? activity.smallImageText : undefined,
     startTimestamp: activity.startTimestamp,
     instance: activity.instance ?? false,
+    // Discord accepts at most two, each needing a label and an https URL.
+    buttons: withImages
+      ? activity.buttons?.filter(b => b?.label && /^https:\/\//.test(b.url)).slice(0, 2)
+      : undefined,
   };
 
   console.log('[Discord RPC] setActivity', JSON.stringify({
@@ -376,7 +382,7 @@ function applyActivity(activity: DiscordActivityPayload, allowImages = true) {
     .catch((err: any) => {
       const msg = err?.message ?? String(err);
       console.warn('[Discord RPC] setActivity rejected:', msg);
-      const hadImages = !!(payload.largeImageKey || payload.smallImageKey);
+      const hadImages = !!(payload.largeImageKey || payload.smallImageKey || payload.buttons?.length);
       if (hadImages) {
         rpcDroppedImages = true;
         rpcLastError = `Discord refused the presence images (${msg}) — retrying without them`;

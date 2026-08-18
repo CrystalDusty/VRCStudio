@@ -45,6 +45,8 @@ export default function SearchPage() {
   const [vrcPage, setVrcPage] = useState(0);
   const [vrcReachedEnd, setVrcReachedEnd] = useState(false);
   const [vrcLoading, setVrcLoading] = useState(false);
+  const [ownLoading, setOwnLoading] = useState(false);
+  const [favLoading, setFavLoading] = useState(false);
   const [ownPage, setOwnPage] = useState(0);
   const [favPage, setFavPage] = useState(0);
   const [lastQuery, setLastQuery] = useState<string>('');

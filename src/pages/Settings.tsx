@@ -17,6 +17,7 @@ import { useThemeStore } from '../stores/themeStore';
 import { useUpdateStore } from '../stores/updateStore';
 import { useDiscordBotStore } from '../stores/discordBotStore';
 import { useDiscordRpcStore } from '../stores/discordRpcStore';
+import { readConfig as readDiscordConfig, type DiscordConfig, type ImageLayout, type LayoutSwitch } from '../hooks/useDiscordRPC';
 import { useMultiAccountStore } from '../stores/multiAccountStore';
 import { exportAllData, downloadExport, importData, exportFriendsList, downloadCSV } from '../utils/dataExport';
 import { getAvailableLanguages, setLanguage, getLanguage } from '../utils/i18n';
@@ -56,6 +57,159 @@ const SHORTCUT_LIST: Array<{ description: string; keys: string[] }> = [
   { description: 'Focus Search',     keys: ['Ctrl', 'F'] },
   { description: 'Open Settings',    keys: ['Ctrl', ','] },
 ];
+
+// ── Discord presence cosmetics ──────────────────────────────────────────
+
+const LAYOUT_OPTIONS: Array<{ v: ImageLayout; label: string; hint: string }> = [
+  { v: 'world-avatar', label: 'World + you',  hint: 'World big, your avatar in the corner' },
+  { v: 'avatar-world', label: 'You + world',  hint: 'Your avatar big, world in the corner' },
+  { v: 'world-only',   label: 'World only',   hint: 'Just the world thumbnail' },
+  { v: 'avatar-only',  label: 'Avatar only',  hint: 'Just your avatar' },
+  { v: 'none',         label: 'No images',    hint: 'Text presence only' },
+];
+
+/** Miniature of how Discord will arrange the two slots. */
+function LayoutSwatch({ layout }: { layout: ImageLayout }) {
+  const big = layout === 'avatar-world' || layout === 'avatar-only' ? 'avatar'
+    : layout === 'none' ? null : 'world';
+  const small = layout === 'world-avatar' ? 'avatar'
+    : layout === 'avatar-world' ? 'world' : null;
+  const fill = (k: string | null) =>
+    k === 'avatar' ? 'bg-gradient-to-br from-pink-500/70 to-purple-500/70'
+      : k === 'world' ? 'bg-gradient-to-br from-sky-500/70 to-emerald-500/70'
+      : 'bg-surface-700';
+  return (
+    <div className="relative w-9 h-9 rounded-md overflow-hidden flex-shrink-0">
+      <div className={`w-full h-full ${fill(big)}`} />
+      {small && (
+        <span className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border border-surface-900 ${fill(small)}`} />
+      )}
+    </div>
+  );
+}
+
+function LayoutPicker({ value, onChange }: { value: ImageLayout; onChange: (v: ImageLayout) => void }) {
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+      {LAYOUT_OPTIONS.map(o => (
+        <button
+          key={o.v}
+          onClick={() => onChange(o.v)}
+          className={`p-2 rounded-lg border text-left flex items-center gap-2 transition-colors ${
+            value === o.v ? 'border-accent-500 bg-accent-500/10' : 'border-surface-700 hover:border-surface-600'
+          }`}
+        >
+          <LayoutSwatch layout={o.v} />
+          <span className="min-w-0">
+            <span className="block text-xs font-medium">{o.label}</span>
+            <span className="block text-[10px] text-surface-500 leading-tight">{o.hint}</span>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function TemplateField({ label, value, onChange }: {
+  label: string; value: string; onChange: (v: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => { setDraft(value); }, [value]);
+  return (
+    <label className="block">
+      <span className="text-xs text-surface-400">{label}</span>
+      <input
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={() => draft !== value && onChange(draft)}
+        onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+        className="input-field w-full text-sm font-mono mt-0.5"
+      />
+    </label>
+  );
+}
+
+/**
+ * Renders the presence the way Discord will, using the live world/avatar so
+ * changes can be judged without alt-tabbing to Discord.
+ */
+function DiscordPresencePreview({ cfg }: { cfg: DiscordConfig }) {
+  const user = useAuthStore(s => s.user);
+  const current = useInstanceHistoryStore(s => s.currentInstance);
+
+  const instanceType = (current?.instanceType ?? 'public').toLowerCase();
+  const isPublic = instanceType === 'public';
+  const hideWorld = cfg.privacyHideWorld && !isPublic;
+  const worldName = !current ? '' : hideWorld ? 'a private world' : (current.worldName || 'a world');
+
+  const switched =
+    cfg.switchWhen === 'private' ? instanceType === 'private' || instanceType === 'invite'
+    : cfg.switchWhen === 'not-public' ? !isPublic
+    : cfg.switchWhen === 'group' ? instanceType === 'group'
+    : false;
+  const layout = switched ? cfg.altLayout : cfg.layout;
+
+  const vars: Record<string, string> = {
+    name: user?.displayName ?? 'VRChat',
+    world: worldName,
+    avatar: '',
+    status: user?.statusDescription || user?.status || '',
+    instance: current && !hideWorld && !isPublic ? ` · ${instanceType}` : '',
+    players: '',
+  };
+  const fill = (t: string) => t.replace(/\{(\w+)\}/g, (_, k: string) => vars[k] ?? '').replace(/\s{2,}/g, ' ').trim();
+
+  const avatarImg = user?.profilePicOverride || user?.currentAvatarThumbnailImageUrl || user?.userIcon || '';
+  const worldImg = current?.worldImage || '';
+  const bigSrc = layout === 'avatar-world' || layout === 'avatar-only' ? avatarImg
+    : layout === 'none' ? '' : worldImg;
+  const smallSrc = layout === 'world-avatar' ? avatarImg : layout === 'avatar-world' ? worldImg : '';
+
+  const buttons: string[] = [];
+  if (cfg.showWorldButton && current?.worldId && !hideWorld) buttons.push('View World');
+  if (cfg.showProfileButton && user?.id) buttons.push('VRChat Profile');
+
+  return (
+    <div className="rounded-lg border border-surface-700 bg-surface-900/60 p-3">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-surface-500 mb-2">Preview</p>
+      <div className="flex gap-3">
+        {layout !== 'none' && (
+          <div className="relative flex-shrink-0">
+            <div className="w-16 h-16 rounded-lg bg-surface-800 overflow-hidden">
+              {bigSrc
+                ? <img src={bigSrc} alt="" className="w-full h-full object-cover" />
+                : <div className="w-full h-full grid place-items-center text-[9px] text-surface-600">no image</div>}
+            </div>
+            {smallSrc && (
+              <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full overflow-hidden border-2 border-surface-900 bg-surface-800">
+                <img src={smallSrc} alt="" className="w-full h-full object-cover" />
+              </div>
+            )}
+          </div>
+        )}
+        <div className="min-w-0 flex-1 text-xs">
+          <div className="font-semibold truncate">{fill(cfg.detailsTemplate) || '—'}</div>
+          <div className="text-surface-400 truncate">
+            {current ? (fill(cfg.stateTemplate) || '—') : (vars.status || 'Not in a world')}
+          </div>
+          {cfg.showElapsed && <div className="text-surface-500">00:12 elapsed</div>}
+          {buttons.length > 0 && (
+            <div className="flex gap-1.5 mt-1.5">
+              {buttons.map(b => (
+                <span key={b} className="text-[10px] px-2 py-0.5 rounded bg-surface-700 text-surface-300">{b}</span>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      {!current && (
+        <p className="text-[10px] text-surface-600 mt-2">
+          You're not in a world right now, so the world half falls back to your avatar.
+        </p>
+      )}
+    </div>
+  );
+}
 
 function DiscordDiagnostics() {
   const user = useAuthStore(s => s.user);
@@ -133,7 +287,7 @@ function DiscordDiagnostics() {
           {current ? `${current.worldName || current.worldId} (${current.instanceType})` : 'none'}
         </span>
         <span className="text-surface-500">World image</span>
-        <span className="font-mono break-all">{worldImg || '—'}</span>
+        <span className="font-mono break-all">{worldImg ? `${worldImg.slice(0, 60)}…` : '—'}</span>
         <span className="text-surface-500">Avatar image</span>
         <span className="font-mono break-all">{avatarUrl ? `${avatarUrl.slice(0, 60)}…` : '—'}</span>
       </div>
@@ -175,30 +329,23 @@ export default function SettingsPage() {
   const [resetConfirm, setResetConfirm] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
 
-  const [discordEnabled, setDiscordEnabled] = useState(() =>
-    JSON.parse(localStorage.getItem('vrcstudio_discord') || '{"enabled":false,"clientId":""}').enabled
-  );
-  const [discordClientId, setDiscordClientId] = useState(() =>
-    JSON.parse(localStorage.getItem('vrcstudio_discord') || '{"enabled":false,"clientId":""}').clientId
-  );
-  const [discordShowWorld, setDiscordShowWorld] = useState(() =>
-    JSON.parse(localStorage.getItem('vrcstudio_discord') || '{"showWorld":true}').showWorld ?? true
-  );
-  const [discordShowAvatar, setDiscordShowAvatar] = useState(() =>
-    JSON.parse(localStorage.getItem('vrcstudio_discord') || '{"showAvatar":true}').showAvatar ?? true
-  );
+  const [discordCfg, setDiscordCfg] = useState<DiscordConfig>(() => readDiscordConfig());
 
-  const saveDiscord = (enabled: boolean, clientId: string, showWorld: boolean, showAvatar: boolean) => {
-    localStorage.setItem('vrcstudio_discord', JSON.stringify({ enabled, clientId, showWorld, showAvatar }));
-    // Connecting isn't enough — Discord shows nothing until an activity is
-    // set, so ask the presence hook to push one straight away.
+  const patchDiscord = (patch: Partial<DiscordConfig>) => {
+    const next = { ...discordCfg, ...patch };
+    setDiscordCfg(next);
+    localStorage.setItem('vrcstudio_discord', JSON.stringify(next));
+    // Presence only changes when an activity is pushed — ask for one rather
+    // than waiting for the config poll to notice.
     useDiscordRpcStore.getState().requestPush();
-    if (enabled && clientId && window.electronAPI) {
-      window.electronAPI.discordInit(clientId);
-    } else if (!enabled) {
-      window.electronAPI?.discordDisconnect();
+    if (next.enabled && next.clientId && window.electronAPI) {
+      window.electronAPI.discordInit(next.clientId);
+    } else if (!next.enabled && window.electronAPI) {
+      window.electronAPI.discordDisconnect();
     }
   };
+
+
 
   useEffect(() => { window.electronAPI?.getAutoLaunch().then(v => setAutoLaunch(v)); }, []);
 
@@ -705,20 +852,155 @@ export default function SettingsPage() {
                 <p className="text-surface-500 mt-1">The world thumbnail is used automatically as your presence image — no assets to upload.</p>
               </div>
               <DiscordDiagnostics />
-              <Toggle label="Enable Discord Rich Presence" description="Show your current VRChat world and playtime on Discord" checked={discordEnabled} onChange={v => { setDiscordEnabled(v); saveDiscord(v, discordClientId, discordShowWorld, discordShowAvatar); }} />
-              {discordEnabled && (
+              <Toggle
+                label="Enable Discord Rich Presence"
+                description="Show your current VRChat world and playtime on Discord"
+                checked={discordCfg.enabled}
+                onChange={v => patchDiscord({ enabled: v })}
+              />
+              {discordCfg.enabled && (
                 <>
                   <div className="space-y-1.5">
                     <label className="block text-sm font-medium">Discord Application Client ID</label>
                     <p className="text-xs text-surface-500">Required — paste your Discord Application ID here.</p>
                     <div className="flex gap-2">
-                      <input type="text" value={discordClientId} onChange={e => setDiscordClientId(e.target.value)} placeholder="1234567890123456789" className="input-field flex-1 font-mono text-sm" />
-                      <button onClick={() => saveDiscord(discordEnabled, discordClientId, discordShowWorld, discordShowAvatar)} className="btn-primary text-sm">Apply</button>
+                      <input
+                        type="text"
+                        value={discordCfg.clientId}
+                        onChange={e => setDiscordCfg({ ...discordCfg, clientId: e.target.value })}
+                        placeholder="1234567890123456789"
+                        className="input-field flex-1 font-mono text-sm"
+                      />
+                      <button onClick={() => patchDiscord({ clientId: discordCfg.clientId })} className="btn-primary text-sm">Apply</button>
                     </div>
-                    {discordEnabled && !discordClientId && <p className="text-xs text-amber-400">⚠ Enter a Client ID to activate rich presence.</p>}
+                    {!discordCfg.clientId && <p className="text-xs text-amber-400">⚠ Enter a Client ID to activate rich presence.</p>}
                   </div>
-                  <Toggle label="Show Current World" description="Include the world name and how long you've been there" checked={discordShowWorld} onChange={v => { setDiscordShowWorld(v); saveDiscord(discordEnabled, discordClientId, v, discordShowAvatar); }} />
-                  <Toggle label="Show Images" description="Use the world thumbnail and your avatar as the presence images. Turn off if Discord shows the text but no pictures." checked={discordShowAvatar} onChange={v => { setDiscordShowAvatar(v); saveDiscord(discordEnabled, discordClientId, discordShowWorld, v); }} />
+
+                  <DiscordPresencePreview cfg={discordCfg} />
+
+                  {/* ── Images ── */}
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium">Image layout</div>
+                    <p className="text-xs text-surface-500">
+                      Discord draws one large image with a small circular badge over its corner —
+                      the layout itself is Discord's, so an app can't split the panel down the
+                      middle. What you can choose is which picture goes in which slot.
+                    </p>
+                    <LayoutPicker
+                      value={discordCfg.layout}
+                      onChange={v => patchDiscord({ layout: v })}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium">Switch layout when…</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {([
+                        { v: 'never', label: 'Never' },
+                        { v: 'private', label: 'Instance is private' },
+                        { v: 'not-public', label: 'Instance is not public' },
+                        { v: 'group', label: 'Instance is a group' },
+                      ] as Array<{ v: LayoutSwitch; label: string }>).map(o => (
+                        <button
+                          key={o.v}
+                          onClick={() => patchDiscord({ switchWhen: o.v })}
+                          className={`text-[11px] px-2.5 py-1 rounded-lg border transition-colors ${
+                            discordCfg.switchWhen === o.v
+                              ? 'border-accent-500 bg-accent-500/10 text-accent-300'
+                              : 'border-surface-700 text-surface-400 hover:border-surface-600'
+                          }`}
+                        >
+                          {o.label}
+                        </button>
+                      ))}
+                    </div>
+                    {discordCfg.switchWhen !== 'never' && (
+                      <div className="pl-3 border-l-2 border-surface-700 space-y-1.5">
+                        <div className="text-xs text-surface-400">…use this layout instead:</div>
+                        <LayoutPicker
+                          value={discordCfg.altLayout}
+                          onChange={v => patchDiscord({ altLayout: v })}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ── Text ── */}
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium">Text</div>
+                    <p className="text-xs text-surface-500">
+                      Tokens: <code className="text-surface-300">{'{name}'}</code>{' '}
+                      <code className="text-surface-300">{'{world}'}</code>{' '}
+                      <code className="text-surface-300">{'{status}'}</code>{' '}
+                      <code className="text-surface-300">{'{instance}'}</code>
+                    </p>
+                    <TemplateField
+                      label="First line"
+                      value={discordCfg.detailsTemplate}
+                      onChange={v => patchDiscord({ detailsTemplate: v })}
+                    />
+                    <TemplateField
+                      label="Second line"
+                      value={discordCfg.stateTemplate}
+                      onChange={v => patchDiscord({ stateTemplate: v })}
+                    />
+                    <TemplateField
+                      label="Image hover text"
+                      value={discordCfg.largeTextTemplate}
+                      onChange={v => patchDiscord({ largeTextTemplate: v })}
+                    />
+                  </div>
+
+                  {/* ── Extras ── */}
+                  <Toggle
+                    label="Show elapsed time"
+                    description="How long you've been in the instance, counting up on the card"
+                    checked={discordCfg.showElapsed}
+                    onChange={v => patchDiscord({ showElapsed: v })}
+                  />
+                  <Toggle
+                    label="Hide world name outside public instances"
+                    description="Shows &quot;a private world&quot; instead of the name, and drops the world link, so a private gathering isn't broadcast"
+                    checked={discordCfg.privacyHideWorld}
+                    onChange={v => patchDiscord({ privacyHideWorld: v })}
+                  />
+                  <Toggle
+                    label="&quot;View World&quot; button"
+                    description="Adds a link button to the presence card (hidden automatically when the world name is being withheld)"
+                    checked={discordCfg.showWorldButton}
+                    onChange={v => patchDiscord({ showWorldButton: v })}
+                  />
+                  <Toggle
+                    label="&quot;VRChat Profile&quot; button"
+                    description="Links to your own VRChat profile"
+                    checked={discordCfg.showProfileButton}
+                    onChange={v => patchDiscord({ showProfileButton: v })}
+                  />
+                  <Toggle
+                    label="Show Current World"
+                    description="Master switch — turn off to keep world details out of the presence entirely"
+                    checked={discordCfg.showWorld}
+                    onChange={v => patchDiscord({ showWorld: v })}
+                  />
+                  <Toggle
+                    label="Show Images"
+                    description="Turn off if Discord shows your text but no pictures"
+                    checked={discordCfg.showAvatar}
+                    onChange={v => patchDiscord({ showAvatar: v })}
+                  />
+
+                  <button
+                    onClick={() => patchDiscord({
+                      layout: 'world-avatar', altLayout: 'avatar-only', switchWhen: 'never',
+                      detailsTemplate: '{name}', stateTemplate: 'In {world}{instance}',
+                      largeTextTemplate: '{world}', privacyHideWorld: false, showElapsed: true,
+                      showWorldButton: false, showProfileButton: false,
+                    })}
+                    className="btn-secondary text-xs"
+                  >
+                    Reset cosmetics to defaults
+                  </button>
+
                   <div className="text-xs text-surface-500 bg-surface-800/40 rounded-lg p-2.5 space-y-1">
                     <p className="text-surface-300 font-semibold">Still not showing?</p>
                     <ul className="list-disc list-inside space-y-0.5">

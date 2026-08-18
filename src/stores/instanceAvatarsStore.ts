@@ -562,7 +562,11 @@ export const useInstanceAvatarsStore = create<State>((set, get) => ({
       let match: VRCDBAvatar | null = null;
       if (p.avatarId) {
         const results = await vrcdb.getById(p.avatarId);
-        match = results.find(r => r.id === p.avatarId) ?? results[0] ?? null;
+        // Exact id only. The old `?? results[0]` fallback meant that whenever
+        // the provider answered with something unrelated we showed a
+        // stranger's avatar picture next to the right avatar name. No
+        // thumbnail beats the wrong thumbnail.
+        match = results.find(r => r.id === p.avatarId) ?? null;
       } else if (p.avatarName) {
         const results = await vrcdb.search(p.avatarName, 25);
         const wanted = p.avatarName.toLowerCase();
