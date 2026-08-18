@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Grab, Search, Sticker, Smile, Printer, Image as ImageIcon, Compass, Users,
-  Trash2, EyeOff, Eye, Info, LayoutGrid, RefreshCw, Check, AlertCircle,
+  Trash2, EyeOff, Eye, Info, LayoutGrid, RefreshCw, Check, AlertCircle, Package,
 } from 'lucide-react';
 import { useGrabberStore, type GrabbedItem, type GrabKind } from '../stores/grabberStore';
 import { useInstanceAvatarsStore } from '../stores/instanceAvatarsStore';
@@ -25,10 +25,10 @@ import GrabbedItemModal from '../components/GrabbedItemModal';
 import PortalsPanel from '../components/PortalsPanel';
 import InstancePeoplePanel from '../components/InstancePeoplePanel';
 
-type TabKey = 'people' | 'portal' | 'print' | 'sticker' | 'emoji' | 'image' | 'all';
+type TabKey = 'people' | 'portal' | 'print' | 'sticker' | 'emoji' | 'item' | 'image' | 'all';
 type SortMode = 'recent' | 'oldest' | 'seen';
 
-const MEDIA_KINDS: GrabKind[] = ['print', 'sticker', 'emoji', 'image'];
+const MEDIA_KINDS: GrabKind[] = ['print', 'sticker', 'emoji', 'item', 'image'];
 
 const TAB_META: Record<Exclude<TabKey, 'all'>, { label: string; icon: typeof Sticker }> = {
   people:  { label: 'People',   icon: Users },
@@ -36,6 +36,9 @@ const TAB_META: Record<Exclude<TabKey, 'all'>, { label: string; icon: typeof Sti
   print:   { label: 'Prints',   icon: Printer },
   sticker: { label: 'Stickers', icon: Sticker },
   emoji:   { label: 'Emoji',    icon: Smile },
+  // Props, drone and portal skins, warp effects, profile banners and effects —
+  // everything else the inventory hands back, under one tab rather than six.
+  item:    { label: 'Items',    icon: Package },
   image:   { label: 'Images',   icon: ImageIcon },
 };
 
@@ -44,6 +47,7 @@ const KIND_BADGE: Record<GrabKind, string> = {
   print:   'text-sky-300 bg-sky-500/15 border-sky-500/30',
   sticker: 'text-pink-300 bg-pink-500/15 border-pink-500/30',
   emoji:   'text-amber-300 bg-amber-500/15 border-amber-500/30',
+  item:    'text-violet-300 bg-violet-500/15 border-violet-500/30',
   image:   'text-surface-300 bg-surface-700/40 border-surface-600/40',
 };
 
@@ -58,6 +62,7 @@ export default function InstanceGrabberPage() {
   const lastSyncAt = useGrabberStore(s => s.lastSyncAt);
   const syncError = useGrabberStore(s => s.syncError);
   const syncSummary = useGrabberStore(s => s.syncSummary);
+  const inspectMedia = useGrabberStore(s => s.inspectMedia);
   const tailingActive = useVideoPlayerStore(s => s.tailingActive);
 
   const [tab, setTab] = useState<TabKey>('people');
@@ -71,7 +76,7 @@ export default function InstanceGrabberPage() {
   const all = useMemo(() => Object.values(items), [items]);
 
   const counts = useMemo(() => {
-    const c: Record<GrabKind, number> = { portal: 0, print: 0, sticker: 0, emoji: 0, image: 0 };
+    const c: Record<GrabKind, number> = { portal: 0, print: 0, sticker: 0, emoji: 0, item: 0, image: 0 };
     for (const it of all) if (!it.hidden) c[it.kind]++;
     return c;
   }, [all]);
@@ -94,6 +99,11 @@ export default function InstanceGrabberPage() {
         i.authorName?.toLowerCase().includes(q) ||
         i.worldName?.toLowerCase().includes(q) ||
         i.id.toLowerCase().includes(q) ||
+        i.itemType?.toLowerCase().includes(q) ||
+        i.mediaFormat?.includes(q) ||
+        // "gif" and "animated" both find the moving ones, whatever container
+        // they actually came in.
+        (i.animated && ('animated'.includes(q) || 'gif'.includes(q))) ||
         i.kind.includes(q),
       );
     }
@@ -104,6 +114,14 @@ export default function InstanceGrabberPage() {
       default:       return [...list].sort((a, b) => b.lastSeenAt - a.lastSeenAt);
     }
   }, [all, tab, search, sort, showHidden]);
+
+  // Read the header bytes of whatever is on screen, so animations get badged
+  // without anyone having to click them. inspectMedia skips ids it already has
+  // an answer for, so this settles after a pass or two rather than looping.
+  useEffect(() => {
+    const ids = gridItems.filter(i => i.url && !i.inspectedAt).slice(0, 60).map(i => i.id);
+    if (ids.length > 0) inspectMedia(ids);
+  }, [gridItems, inspectMedia]);
 
   const selectedIndex = selectedId ? gridItems.findIndex(i => i.id === selectedId) : -1;
   const selected = selectedIndex >= 0 ? gridItems[selectedIndex] : undefined;
@@ -195,7 +213,16 @@ export default function InstanceGrabberPage() {
             <span className="text-surface-300">Sync from VRChat</span> is the other half: the log
             can only guess what a file is from the words around it, which is why things pile up
             under "Images". Your inventory and prints state their own types, so a sync gives
-            everything its real category and fills in names, authors and worlds.
+            everything its real category and fills in names, authors and worlds. Props, skins,
+            warp effects, profile banners and effects all land under "Items".
+          </p>
+          <p>
+            Each file's first few kilobytes are read to work out what it actually is, because
+            VRChat serves everything from one extension-less URL. Anything with more than one
+            frame is badged <span className="text-emerald-300">GIF</span> /{' '}
+            <span className="text-emerald-300">ANIM</span> in the grid, and downloads keep the
+            animation by default — every other export goes through a canvas, and a canvas only
+            ever holds one frame.
           </p>
         </div>
       )}
@@ -412,6 +439,15 @@ function Thumbnail({ item, onOpen }: { item: GrabbedItem; onOpen: () => void }) 
       <span className={`absolute top-1 left-1 p-0.5 rounded border ${KIND_BADGE[item.kind]}`}>
         <Icon size={9} />
       </span>
+
+      {/* Animations play in the grid on their own — the badge is so you can
+          tell one is animated before it loops back round to a still-looking
+          frame, and so you know the download will keep the motion. */}
+      {item.animated && (
+        <span className="absolute bottom-1 left-1 text-[8px] font-bold px-1 rounded bg-black/70 text-emerald-300 border border-emerald-500/40 uppercase tracking-wider">
+          {item.mediaFormat === 'gif' ? 'GIF' : item.mediaFormat === 'apng' ? 'APNG' : 'ANIM'}
+        </span>
+      )}
 
       {item.seenCount > 1 && (
         <span className="absolute top-1 right-1 text-[9px] font-bold px-1 rounded bg-black/60 text-surface-300">

@@ -25,6 +25,17 @@ interface ElectronAPI {
     lastPushAt: number | null;
     lastPushOk: boolean;
     imagesDropped: boolean;
+    /** Why an image slot was dropped before sending, if any. */
+    imageIssues: string[];
+    probes: Array<{
+      url: string;
+      ok: boolean;
+      status: number;
+      finalUrl?: string;
+      contentType?: string;
+      reason?: string;
+      at: number;
+    }>;
   }>;
   setAutoLaunch: (enabled: boolean) => Promise<void>;
   getAutoLaunch: () => Promise<boolean>;
@@ -67,6 +78,33 @@ interface ElectronAPI {
     contentType?: string;
     base64?: string;
     error?: string;
+  }>;
+
+  /**
+   * Identify an image from its bytes — VRChat's file URLs carry no extension,
+   * so this is the only way to know a GIF/APNG/animated WebP from a still.
+   */
+  inspectImage: (url: string) => Promise<{
+    ok: boolean;
+    status: number;
+    error?: string;
+    format: 'gif' | 'png' | 'apng' | 'webp' | 'jpeg' | 'avif' | 'bmp' | 'svg' | 'unknown';
+    animated: boolean;
+    frameCount?: number;
+    width?: number;
+    height?: number;
+    extension: string;
+    mimeType: string;
+  }>;
+  /** Can a third party (i.e. Discord's media proxy) load this image URL? */
+  probePublicImage: (url: string) => Promise<{
+    url: string;
+    ok: boolean;
+    status: number;
+    finalUrl?: string;
+    contentType?: string;
+    reason?: string;
+    at: number;
   }>;
 
   // Persistent app data

@@ -54,9 +54,22 @@ export interface DiscordConfig {
   largeTextTemplate: string;
   /**
    * Asset key uploaded to your Discord application, used when there's no
-   * world or avatar picture to show. Prevents a broken-image box.
+   * world or avatar picture to show — or when the picture we have turns out
+   * to be one Discord can't fetch. Prevents a broken-image box.
    */
   fallbackImageKey: string;
+  /**
+   * Asset keys that replace the VRChat pictures outright.
+   *
+   * VRChat serves world and avatar thumbnails from an endpoint that needs a
+   * login. Our own window can show them because Electron carries the session
+   * cookie; Discord's media proxy fetches the URL from its own servers with no
+   * cookie at all, so for many accounts it gets a 401 and renders a "?" box.
+   * Setting a key here sidesteps the whole question — Discord resolves keys
+   * against your application's uploaded art, which always works.
+   */
+  worldImageKey: string;
+  avatarImageKey: string;
   /** Resolve and show the group's name for group instances. */
   showGroupName: boolean;
 }
@@ -77,6 +90,8 @@ export const DISCORD_DEFAULTS: DiscordConfig = {
   showProfileButton: false,
   largeTextTemplate: '{world}',
   fallbackImageKey: '',
+  worldImageKey: '',
+  avatarImageKey: '',
   showGroupName: true,
 };
 
@@ -174,7 +189,10 @@ export function useDiscordRPC() {
       : worldKnown ? currentInstance.worldName
       : 'a world';
 
-    const avatarImage = user?.profilePicOverride || user?.currentAvatarThumbnailImageUrl || user?.userIcon || '';
+    // An explicit asset key always wins over the VRChat URL — see the config
+    // comment: keys are the only image source Discord can resolve reliably.
+    const avatarImage = cfg.avatarImageKey.trim()
+      || user?.profilePicOverride || user?.currentAvatarThumbnailImageUrl || user?.userIcon || '';
 
     // A world change lands in two steps: the instance switches with an empty
     // worldImage, then the world fetch fills it in a moment later. Pushing
@@ -188,7 +206,8 @@ export function useDiscordRPC() {
       // Genuinely a different world with no image yet — don't show the old one.
       lastWorldImageRef.current = { worldId: currentInstance.worldId, url: '' };
     }
-    const worldImage = liveWorldImage || lastWorldImageRef.current.url || '';
+    const worldImage = cfg.worldImageKey.trim()
+      || liveWorldImage || lastWorldImageRef.current.url || '';
 
     // Which layout applies right now.
     const switched =
@@ -242,12 +261,9 @@ export function useDiscordRPC() {
     largeImageKey = usable(largeImageKey);
     smallImageKey = usable(smallImageKey);
 
-    // When we have no picture at all — new world still resolving, or Discord
-    // refused the URLs — fall back to a static asset key from the app so the
-    // card shows the app icon instead of a broken-image box.
-    if (!largeImageKey && cfg.fallbackImageKey.trim()) {
-      largeImageKey = cfg.fallbackImageKey.trim();
-    }
+    // The fallback key is applied in the main process instead of here: only
+    // that side knows whether a URL survived the "can a stranger fetch this?"
+    // probe, and substituting early would hide a dead URL behind a good one.
 
     const largeImageText = renderTemplate(cfg.largeTextTemplate || '{world}', vars) || undefined;
     const smallImageText = layout === 'world-avatar' ? user?.displayName
@@ -285,6 +301,7 @@ export function useDiscordRPC() {
       startTimestamp,
       instance: !!currentInstance,
       buttons: buttons.length > 0 ? buttons.slice(0, 2) : undefined,
+      fallbackImageKey: cfg.fallbackImageKey.trim() || undefined,
     };
 
     // Discord rate-limits SET_ACTIVITY, and the heartbeat below fires every

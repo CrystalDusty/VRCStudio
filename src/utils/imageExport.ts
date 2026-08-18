@@ -17,13 +17,30 @@ export interface ExportSettings {
   border: 'keep' | 'auto' | 'manual';
   /** Percent of each edge to trim when border === 'manual'. */
   manualInset: number;
-  format: 'png' | 'jpeg' | 'webp';
+  /**
+   * `original` saves the bytes VRChat served, untouched.
+   *
+   * It exists because everything else here goes through a canvas, and a canvas
+   * holds exactly one frame — exporting an animated emoji as PNG silently
+   * throws away every frame but the first. Cropping, scaling, padding and
+   * rounding are all canvas operations, so they don't apply to `original`.
+   */
+  format: 'png' | 'jpeg' | 'webp' | 'original';
   quality: number;          // 0.1–1, lossy formats only
   scale: number;            // 1 = native pixels
   background: 'transparent' | 'white' | 'black' | 'custom';
   customBackground: string;
   padding: number;          // px added around the image, post-scale
   cornerRadius: number;     // px, 0 = square
+  /**
+   * What to do with a file that turned out to be animated.
+   *
+   * `original` saves it as it is, motion intact. `still` runs it through the
+   * canvas like any other picture, which keeps the first frame and all the
+   * crop/scale/format controls. Separate from `format` so choosing PNG for
+   * prints doesn't quietly flatten every emoji as well.
+   */
+  animatedMode: 'original' | 'still';
 }
 
 export const DEFAULT_EXPORT: ExportSettings = {
@@ -36,6 +53,7 @@ export const DEFAULT_EXPORT: ExportSettings = {
   customBackground: '#0f172a',
   padding: 0,
   cornerRadius: 0,
+  animatedMode: 'original',
 };
 
 export interface LoadedImage {
@@ -244,6 +262,8 @@ function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: num
 }
 
 export function canvasToBlob(canvas: HTMLCanvasElement, settings: ExportSettings): Promise<Blob> {
+  // 'original' never reaches here — it bypasses the canvas entirely — so it
+  // falls through to PNG, which is the right answer for a still export.
   const mime = settings.format === 'jpeg' ? 'image/jpeg'
     : settings.format === 'webp' ? 'image/webp'
     : 'image/png';
@@ -282,4 +302,34 @@ export function buildFilename(
     .replace(/\{date\}/g, stamp);
   const safe = filled.replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim() || 'vrchat-image';
   return `${safe}.${ext}`;
+}
+
+/** File extension for a saved export, given the chosen format. */
+export function exportExtension(settings: ExportSettings, originalExtension?: string): string {
+  if (settings.format === 'original') return originalExtension || 'png';
+  return settings.format === 'jpeg' ? 'jpg' : settings.format;
+}
+
+/**
+ * The bytes exactly as VRChat served them.
+ *
+ * Used for the `original` format. Nothing is decoded or re-encoded, so an
+ * animated GIF/APNG/WebP arrives on disk still animated — which a canvas
+ * export cannot do.
+ */
+export async function fetchOriginal(url: string): Promise<{ blob: Blob; contentType: string }> {
+  const api = window.electronAPI;
+  if (api?.httpGetBinary) {
+    const res = await api.httpGetBinary(url);
+    if (!res.ok || !res.base64) {
+      throw new Error(res.error ?? `Could not fetch image (HTTP ${res.status})`);
+    }
+    const contentType = res.contentType?.split(';')[0] || 'application/octet-stream';
+    return { blob: new Blob([base64ToBytes(res.base64)], { type: contentType }), contentType };
+  }
+  // Browser dev mode — no main process to proxy through.
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Could not fetch image (HTTP ${res.status})`);
+  const blob = await res.blob();
+  return { blob, contentType: blob.type };
 }

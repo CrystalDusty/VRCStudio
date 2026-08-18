@@ -19,7 +19,10 @@ import { create } from 'zustand';
 import api from '../api/vrchat';
 import { useAuthStore } from './authStore';
 
-export type GrabKind = 'portal' | 'print' | 'sticker' | 'emoji' | 'image';
+export type GrabKind = 'portal' | 'print' | 'sticker' | 'emoji' | 'item' | 'image';
+
+/** What the bytes turned out to be. `unknown` means we couldn't tell. */
+export type MediaFormat = 'gif' | 'png' | 'apng' | 'webp' | 'jpeg' | 'avif' | 'bmp' | 'svg' | 'unknown';
 
 export interface GrabbedItem {
   /** file_… / print_… id — the stable identity. */
@@ -46,6 +49,26 @@ export interface GrabbedItem {
   /** Set once we've asked the API about it (successfully or not). */
   resolved?: boolean;
   hidden?: boolean;
+  /** VRChat's own item type for inventory items — droneskin, warpeffect, … */
+  itemType?: string;
+
+  // ── What the file actually is ──
+  //
+  // VRChat serves everything from /api/1/file/<id>/1/file: no extension, and
+  // often a content-type of application/octet-stream. So the only way to know
+  // an animated emoji from a still one is to read the header bytes, which the
+  // main process does on demand and we cache here.
+  /** True only when the container proves more than one frame. */
+  animated?: boolean;
+  mediaFormat?: MediaFormat;
+  frameCount?: number;
+  imageWidth?: number;
+  imageHeight?: number;
+  /** Extension to save the untouched bytes under. */
+  mediaExtension?: string;
+  /** When we last looked; also set on failure so we don't retry in a loop. */
+  inspectedAt?: number;
+  inspectError?: string;
 
   // ── Portals only ──
   /** Destination world of a dropped portal. */
@@ -83,6 +106,12 @@ interface State {
 
   setContext: (ctx: Ctx) => void;
   syncFromVRChat: () => Promise<void>;
+  /**
+   * Read the header bytes of anything not yet identified, so the grid can
+   * badge animations and the export modal can offer the untouched file.
+   * Safe to call repeatedly — already-inspected ids are skipped.
+   */
+  inspectMedia: (ids: string[]) => Promise<void>;
   ingestLines: (lines: string[]) => void;
   addItems: (items: GrabbedItem[]) => void;
   markResolved: (id: string, patch: Partial<GrabbedItem>) => void;
@@ -93,6 +122,8 @@ interface State {
 
 const STORAGE_KEY = 'vrcstudio_grabber';
 const MAX_ITEMS = 2000;
+/** Ids currently being sniffed, so overlapping calls don't double-fetch. */
+const inFlight = new Set<string>();
 
 // ── Patterns ────────────────────────────────────────────────────────────
 
@@ -121,12 +152,44 @@ function instanceTypeFromTags(tail: string): string {
   return 'public';
 }
 
+/**
+ * VRChat's inventory itemType → our tab.
+ *
+ * The list grows (props, drone skins, portal skins, warp effects, and the
+ * profile banners and effects added since) and every addition would otherwise
+ * silently land in "Images". Anything unrecognised becomes an Item, which
+ * keeps it findable, and the raw itemType is stored alongside so the modal can
+ * still name it exactly.
+ */
+function kindFromItemType(itemType?: string, label?: string): GrabKind {
+  const t = (itemType ?? '').toLowerCase();
+  if (t === 'sticker') return 'sticker';
+  if (t === 'emoji') return 'emoji';
+  if (t === 'print' || t === 'photo') return 'print';
+  if (t) return 'item';
+  // No itemType at all — fall back to whatever the label says it is.
+  const l = (label ?? '').toLowerCase();
+  if (l.includes('sticker')) return 'sticker';
+  if (l.includes('emoji')) return 'emoji';
+  if (l.includes('print')) return 'print';
+  return l ? 'item' : 'image';
+}
+
 function classify(line: string, id: string): GrabKind {
   const l = line.toLowerCase();
   if (id.startsWith('print_') || l.includes('print')) return 'print';
   if (id.startsWith('sticker_') || l.includes('sticker')) return 'sticker';
   if (id.startsWith('emoji_') || l.includes('emoji')) return 'emoji';
   return 'image';
+}
+
+/** Blanks the sniffed media fields — used when an item's URL changes. */
+function clearMediaInfo(_item: GrabbedItem): Partial<GrabbedItem> {
+  return {
+    animated: undefined, mediaFormat: undefined, frameCount: undefined,
+    imageWidth: undefined, imageHeight: undefined, mediaExtension: undefined,
+    inspectedAt: undefined, inspectError: undefined,
+  };
 }
 
 function fileUrlFor(id: string, version = 1): string {
@@ -338,7 +401,15 @@ export const useGrabberStore = create<State>((set, get) => ({
       const existing = items[id];
       if (existing) {
         if (existing.kind !== kind) reclassified++;
-        items[id] = { ...existing, ...patch, kind, resolved: true, source: 'api' };
+        // A new URL means the cached "is this animated?" answer describes a
+        // file we're no longer pointing at.
+        const urlChanged = !!patch.url && patch.url !== existing.url;
+        items[id] = {
+          ...existing,
+          ...(urlChanged ? clearMediaInfo(existing) : null),
+          ...patch,
+          kind, resolved: true, source: 'api',
+        };
       } else {
         items[id] = {
           id, kind, url: '', source: 'api',
@@ -354,10 +425,7 @@ export const useGrabberStore = create<State>((set, get) => ({
       const inv = await api.getInventory({ n: 100 });
       for (const it of inv) {
         if (!it?.id) continue;
-        const kind: GrabKind =
-          it.itemType === 'sticker' ? 'sticker'
-          : it.itemType === 'emoji' ? 'emoji'
-          : 'image';
+        const kind = kindFromItemType(it.itemType, it.itemTypeLabel);
         // Key by the image's file id when there is one, so an item we already
         // spotted in the log is corrected rather than duplicated.
         const fileId = it.imageUrl?.match(/(file_[0-9a-fA-F-]{20,})/)?.[1];
@@ -366,6 +434,7 @@ export const useGrabberStore = create<State>((set, get) => ({
           name: it.name,
           url: it.imageUrl ?? '',
           tags: it.tags,
+          itemType: it.itemTypeLabel || it.itemType,
           createdAt: it.created_at,
           hidden: it.isArchived ? true : items[id]?.hidden,
         }, kind);
@@ -409,6 +478,71 @@ export const useGrabberStore = create<State>((set, get) => ({
       syncError: problems.length ? problems.join(' · ') : undefined,
       syncSummary: { inventory: inventoryCount, prints: printCount, reclassified },
     });
+    savePersisted(items);
+  },
+
+  inspectMedia: async (ids) => {
+    const inspect = window.electronAPI?.inspectImage;
+    if (!inspect) return;
+
+    // Only ids we have a URL for and haven't already answered. A failure is
+    // remembered too — a 404 doesn't become more true by asking again — but
+    // is retried after an hour in case it was the network's fault.
+    const now = Date.now();
+    const pending = ids.filter(id => {
+      const it = get().items[id];
+      if (!it?.url || inFlight.has(id)) return false;
+      if (!it.inspectedAt) return true;
+      return !!it.inspectError && now - it.inspectedAt > 60 * 60 * 1000;
+    });
+    if (pending.length === 0) return;
+
+    // Three at a time: enough to fill a screen of thumbnails quickly without
+    // opening a connection per item in a 2000-item history.
+    const queue = [...pending];
+    const patches: Record<string, Partial<GrabbedItem>> = {};
+
+    const worker = async () => {
+      for (let id = queue.shift(); id; id = queue.shift()) {
+        const item = get().items[id];
+        if (!item?.url) continue;
+        inFlight.add(id);
+        try {
+          const info = await inspect(item.url);
+          patches[id] = info.ok
+            ? {
+                animated: info.animated,
+                mediaFormat: info.format,
+                frameCount: info.frameCount,
+                imageWidth: info.width,
+                imageHeight: info.height,
+                mediaExtension: info.extension,
+                inspectedAt: Date.now(),
+                inspectError: undefined,
+              }
+            : { inspectedAt: Date.now(), inspectError: info.error ?? `HTTP ${info.status}` };
+        } catch (err) {
+          patches[id] = {
+            inspectedAt: Date.now(),
+            inspectError: err instanceof Error ? err.message : String(err),
+          };
+        } finally {
+          inFlight.delete(id);
+        }
+      }
+    };
+
+    await Promise.all([worker(), worker(), worker()]);
+
+    const items = { ...get().items };
+    let changed = false;
+    for (const [id, patch] of Object.entries(patches)) {
+      if (!items[id]) continue;
+      items[id] = { ...items[id], ...patch };
+      changed = true;
+    }
+    if (!changed) return;
+    set({ items });
     savePersisted(items);
   },
 

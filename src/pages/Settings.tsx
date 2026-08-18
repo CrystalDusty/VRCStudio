@@ -130,6 +130,23 @@ function TemplateField({ label, value, onChange }: {
 }
 
 /**
+ * One image slot in the preview. The value is either a VRChat URL, which we
+ * can show directly because this window is logged in, or an asset key, which
+ * only Discord can resolve — so we show the key itself rather than pretending
+ * to know what art it points at.
+ */
+function PresenceSlotImage({ value, small }: { value: string; small?: boolean }) {
+  if (/^https?:\/\//i.test(value)) {
+    return <img src={value} alt="" className="w-full h-full object-cover" />;
+  }
+  return (
+    <div className={`w-full h-full grid place-items-center bg-surface-700 text-surface-300 font-mono text-center px-0.5 ${small ? 'text-[6px]' : 'text-[8px]'}`}>
+      {small ? value.slice(0, 4) : value}
+    </div>
+  );
+}
+
+/**
  * Renders the presence the way Discord will, using the live world/avatar so
  * changes can be judged without alt-tabbing to Discord.
  */
@@ -166,12 +183,15 @@ function DiscordPresencePreview({ cfg }: { cfg: DiscordConfig }) {
   };
   const fill = (t: string) => t.replace(/\{(\w+)\}/g, (_, k: string) => vars[k] ?? '').replace(/\s{2,}/g, ' ').trim();
 
-  const avatarImg = user?.profilePicOverride || user?.currentAvatarThumbnailImageUrl || user?.userIcon || '';
-  const worldImg = current?.worldImage || '';
-  const bigSrc = layout === 'avatar-world' || layout === 'avatar-only' ? avatarImg
+  // Mirrors the hook: an asset key set here replaces the VRChat picture.
+  const avatarImg = cfg.avatarImageKey.trim()
+    || user?.profilePicOverride || user?.currentAvatarThumbnailImageUrl || user?.userIcon || '';
+  const worldImg = cfg.worldImageKey.trim() || current?.worldImage || '';
+  const bigVal = layout === 'avatar-world' || layout === 'avatar-only' ? avatarImg
     : layout === 'none' ? '' : worldImg;
-  const usingFallback = layout !== 'none' && !bigSrc && !!cfg.fallbackImageKey.trim();
-  const smallSrc = layout === 'world-avatar' ? avatarImg : layout === 'avatar-world' ? worldImg : '';
+  const smallVal = layout === 'world-avatar' ? avatarImg : layout === 'avatar-world' ? worldImg : '';
+  const fallbackKey = cfg.fallbackImageKey.trim();
+  const usingFallback = layout !== 'none' && !bigVal && !!fallbackKey;
 
   const buttons: string[] = [];
   if (cfg.showWorldButton && current?.worldId && !hideWorld) buttons.push('View World');
@@ -184,15 +204,15 @@ function DiscordPresencePreview({ cfg }: { cfg: DiscordConfig }) {
         {layout !== 'none' && (
           <div className="relative flex-shrink-0">
             <div className="w-16 h-16 rounded-lg bg-surface-800 overflow-hidden">
-              {bigSrc
-                ? <img src={bigSrc} alt="" className="w-full h-full object-cover" />
+              {bigVal
+                ? <PresenceSlotImage value={bigVal} />
                 : usingFallback
-                  ? <div className="w-full h-full grid place-items-center text-[8px] text-surface-400 text-center px-1 font-mono">{cfg.fallbackImageKey}</div>
+                  ? <div className="w-full h-full grid place-items-center text-[8px] text-surface-400 text-center px-1 font-mono">{fallbackKey}</div>
                   : <div className="w-full h-full grid place-items-center text-[9px] text-surface-600">no image</div>}
             </div>
-            {smallSrc && (
+            {smallVal && bigVal && (
               <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full overflow-hidden border-2 border-surface-900 bg-surface-800">
-                <img src={smallSrc} alt="" className="w-full h-full object-cover" />
+                <PresenceSlotImage value={smallVal} small />
               </div>
             )}
           </div>
@@ -228,6 +248,8 @@ function DiscordDiagnostics() {
   const [rpc, setRpc] = useState<{
     connected: boolean; lastError: string | null;
     lastPushAt: number | null; lastPushOk: boolean; imagesDropped: boolean;
+    imageIssues?: string[];
+    probes?: Array<{ url: string; ok: boolean; status: number; reason?: string }>;
   } | null>(null);
   const requestPush = useDiscordRpcStore(s => s.requestPush);
 
@@ -277,6 +299,26 @@ function DiscordDiagnostics() {
             <span className="text-surface-500">Images</span>
             <span className="text-amber-400">
               Discord refused the image URLs, so presence is running text-only
+            </span>
+          </>
+        )}
+        {/* The "?" box case: we could load the picture, Discord's proxy can't. */}
+        {!!rpc?.imageIssues?.length && (
+          <>
+            <span className="text-surface-500">Image check</span>
+            <span className="text-amber-400 break-words">
+              {rpc.imageIssues.map(i => <span key={i} className="block">{i}</span>)}
+              <span className="block text-surface-500 mt-1">
+                Set an asset key below and Discord will show that instead of a placeholder.
+              </span>
+            </span>
+          </>
+        )}
+        {!rpc?.imageIssues?.length && rpc?.probes?.some(pr => pr.ok) && (
+          <>
+            <span className="text-surface-500">Image check</span>
+            <span className="text-green-400">
+              Presence images load without a VRChat login — Discord can fetch them
             </span>
           </>
         )}
@@ -966,22 +1008,62 @@ export default function SettingsPage() {
                     </p>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <label className="block text-sm font-medium">Fallback image key</label>
+                  {/* ── Asset keys ── */}
+                  <div className="space-y-2 rounded-lg border border-surface-700 bg-surface-900/40 p-3">
+                    <p className="text-sm font-medium">Asset keys</p>
                     <p className="text-xs text-surface-500">
-                      Shown when there's no world or avatar picture to use — while a new world is
-                      still loading, or if Discord refuses the URLs. This is the name of an image
-                      you uploaded under <span className="text-surface-300">Rich Presence → Art Assets</span> on
-                      your Discord application; leave it empty to show nothing instead.
+                      Discord fetches image URLs from its own servers, with no VRChat login. This
+                      window can show world and avatar thumbnails because it's signed in; Discord
+                      often can't, and draws a grey <span className="text-surface-300">?</span> box
+                      instead. Every URL is now checked before it's sent — see{' '}
+                      <span className="text-surface-300">Image check</span> in Live status above — and
+                      anything Discord couldn't load is swapped for a key from here.
                     </p>
-                    <input
-                      type="text"
-                      value={discordCfg.fallbackImageKey}
-                      onChange={e => setDiscordCfg({ ...discordCfg, fallbackImageKey: e.target.value })}
-                      onBlur={e => patchDiscord({ fallbackImageKey: e.target.value })}
-                      placeholder="e.g. vrchat_logo"
-                      className="input-field w-full font-mono text-sm"
-                    />
+                    <p className="text-xs text-surface-500">
+                      Keys are the names of images uploaded under{' '}
+                      <span className="text-surface-300">Rich Presence → Art Assets</span> on your
+                      Discord application. Setting one replaces that picture permanently, which is
+                      the only way to guarantee an image shows.
+                    </p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <label className="block space-y-1">
+                        <span className="text-xs text-surface-400">World image key</span>
+                        <input
+                          type="text"
+                          value={discordCfg.worldImageKey}
+                          onChange={e => setDiscordCfg({ ...discordCfg, worldImageKey: e.target.value })}
+                          onBlur={e => patchDiscord({ worldImageKey: e.target.value })}
+                          placeholder="leave empty to use the world thumbnail"
+                          className="input-field w-full font-mono text-sm"
+                        />
+                      </label>
+                      <label className="block space-y-1">
+                        <span className="text-xs text-surface-400">Avatar image key</span>
+                        <input
+                          type="text"
+                          value={discordCfg.avatarImageKey}
+                          onChange={e => setDiscordCfg({ ...discordCfg, avatarImageKey: e.target.value })}
+                          onBlur={e => patchDiscord({ avatarImageKey: e.target.value })}
+                          placeholder="leave empty to use your avatar picture"
+                          className="input-field w-full font-mono text-sm"
+                        />
+                      </label>
+                      <label className="block space-y-1 sm:col-span-2">
+                        <span className="text-xs text-surface-400">Fallback image key</span>
+                        <input
+                          type="text"
+                          value={discordCfg.fallbackImageKey}
+                          onChange={e => setDiscordCfg({ ...discordCfg, fallbackImageKey: e.target.value })}
+                          onBlur={e => patchDiscord({ fallbackImageKey: e.target.value })}
+                          placeholder="e.g. vrchat_logo"
+                          className="input-field w-full font-mono text-sm"
+                        />
+                        <span className="block text-[10px] text-surface-600">
+                          Used whenever the slot has no usable picture — a world still loading, or a
+                          URL Discord couldn't fetch. Empty means show nothing at all.
+                        </span>
+                      </label>
+                    </div>
                   </div>
 
                   {/* ── Extras ── */}
@@ -1034,7 +1116,8 @@ export default function SettingsPage() {
                       detailsTemplate: '{name}', stateTemplate: 'In {world}{instance}',
                       largeTextTemplate: '{world}', privacyHideWorld: false, showElapsed: true,
                       showWorldButton: false, showProfileButton: false,
-                      fallbackImageKey: '', showGroupName: true,
+                      fallbackImageKey: '', worldImageKey: '', avatarImageKey: '',
+                      showGroupName: true,
                     })}
                     className="btn-secondary text-xs"
                   >

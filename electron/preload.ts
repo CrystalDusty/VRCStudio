@@ -63,6 +63,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('http:get', url, headers),
   httpGetBinary: (url: string, headers?: Record<string, string>) =>
     ipcRenderer.invoke('http:getBinary', url, headers),
+  inspectImage: (url: string) => ipcRenderer.invoke('image:inspect', url),
+  probePublicImage: (url: string) => ipcRenderer.invoke('image:probePublic', url),
 
   // OSC (VRChat)
   oscStart: (opts?: { sendHost?: string; sendPort?: number; recvPort?: number }) =>

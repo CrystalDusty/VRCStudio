@@ -5,9 +5,9 @@ import {
 import path from 'path';
 import fs from 'fs';
 import https from 'https';
-import http from 'http';
 import { spawn } from 'child_process';
 import * as discordBot from './discord-bot';
+import { fetchBuffer, inspectImage, probePresenceImage, recentPresenceProbes, vetPresenceImages } from './media';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -265,6 +265,12 @@ type DiscordActivityPayload = {
   instance?: boolean;
   /** Up to two link buttons on the presence card. */
   buttons?: Array<{ label: string; url: string }>;
+  /**
+   * Asset key uploaded to the Discord application, used for any slot whose
+   * picture we couldn't send. Substituted here rather than in the renderer,
+   * because only this side knows whether a URL survived probing.
+   */
+  fallbackImageKey?: string;
 };
 
 let pendingActivity: DiscordActivityPayload | null = null;
@@ -274,6 +280,8 @@ let rpcLastPushAt: number | null = null;
 let rpcLastPushOk = false;
 /** True when Discord refused our image URLs and we fell back to text-only. */
 let rpcDroppedImages = false;
+/** Image URLs we dropped because a stranger couldn't fetch them, with why. */
+let rpcImageIssues: string[] = [];
 
 async function initDiscordRPC(clientId: string) {
   // Require a non-empty, plausible clientId (Discord app IDs are 17-19 digits)
@@ -293,6 +301,7 @@ async function initDiscordRPC(clientId: string) {
   rpcClientId = clientId;
   rpcLastError = null;
   rpcDroppedImages = false;
+  rpcImageIssues = [];
   try {
     const { Client } = await import('discord-rpc');
     discordRPC = new Client({ transport: 'ipc' });
@@ -395,14 +404,17 @@ function applyActivity(activity: DiscordActivityPayload, allowImages = true) {
     });
 }
 
-function setDiscordActivity(activity: DiscordActivityPayload) {
+async function setDiscordActivity(activity: DiscordActivityPayload) {
+  const { activity: vetted, issues } = await vetPresenceImages(activity);
+  rpcImageIssues = issues;
+
   // If not yet connected, hold the most recent activity and push when ready.
   if (!rpcConnected || !discordRPC) {
-    pendingActivity = activity;
+    pendingActivity = vetted;
     console.log('[Discord RPC] Not connected yet — queuing activity for ready event');
     return;
   }
-  applyActivity(activity);
+  applyActivity(vetted);
 }
 
 // ─── IPC Handlers ────────────────────────────────────────────────────────────
@@ -850,6 +862,8 @@ ipcMain.handle('discord:status', () => ({
   lastPushAt: rpcLastPushAt,
   lastPushOk: rpcLastPushOk,
   imagesDropped: rpcDroppedImages,
+  imageIssues: rpcImageIssues,
+  probes: recentPresenceProbes(),
 }));
 
 // Auto-launch
@@ -1149,71 +1163,32 @@ ipcMain.handle('http:get', async (_e, url: string, headers?: Record<string, stri
 //   2. Some file endpoints need the session cookie, which lives here.
 // Returning base64 lets the renderer build a same-origin blob URL instead.
 ipcMain.handle('http:getBinary', async (_e, url: string, headers?: Record<string, string>) => {
-  const MAX_BYTES = 32 * 1024 * 1024;
-
-  const doRequest = (targetUrl: string, hops = 0): Promise<any> => new Promise((resolve) => {
-    let parsed: URL;
-    try { parsed = new URL(targetUrl); } catch {
-      return resolve({ ok: false, status: 0, error: 'Invalid URL' });
-    }
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-      return resolve({ ok: false, status: 0, error: 'Unsupported protocol' });
-    }
-
-    const finalHeaders: Record<string, string> = {
-      'User-Agent': 'VRCX',
-      'Accept': 'image/*,*/*',
-      ...headers,
-    };
-
-    const mod = parsed.protocol === 'http:' ? http : https;
-    const req = mod.request(
-      {
-        hostname: parsed.hostname,
-        port: parsed.port ? Number(parsed.port) : (parsed.protocol === 'http:' ? 80 : 443),
-        path: parsed.pathname + parsed.search,
-        method: 'GET',
-        headers: finalHeaders,
-      },
-      (res) => {
-        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && hops < 4) {
-          const next = new URL(res.headers.location, parsed).toString();
-          res.resume();
-          return resolve(doRequest(next, hops + 1));
-        }
-
-        const chunks: Buffer[] = [];
-        let size = 0;
-        let aborted = false;
-        res.on('data', (chunk: Buffer) => {
-          size += chunk.length;
-          if (size > MAX_BYTES) {
-            aborted = true;
-            req.destroy();
-            return;
-          }
-          chunks.push(chunk);
-        });
-        res.on('end', () => {
-          if (aborted) return resolve({ ok: false, status: res.statusCode, error: 'File too large' });
-          const ok = res.statusCode! >= 200 && res.statusCode! < 300;
-          resolve({
-            ok,
-            status: res.statusCode,
-            contentType: String(res.headers['content-type'] ?? ''),
-            base64: ok ? Buffer.concat(chunks).toString('base64') : undefined,
-            error: ok ? undefined : `HTTP ${res.statusCode}`,
-          });
-        });
-      },
-    );
-    req.on('error', err => resolve({ ok: false, status: 0, error: err.message }));
-    req.setTimeout(20000, () => req.destroy(new Error('Request timeout')));
-    req.end();
-  });
-
-  return doRequest(url);
+  const res = await fetchBuffer(url, { headers });
+  // A truncated body is half an image — worse than none, because it decodes
+  // to a corrupt picture instead of a clear failure.
+  if (res.truncated) {
+    return { ok: false, status: res.status, contentType: res.contentType, error: 'File too large' };
+  }
+  return {
+    ok: res.ok,
+    status: res.status,
+    contentType: res.contentType,
+    base64: res.buffer ? res.buffer.toString('base64') : undefined,
+    error: res.error,
+  };
 });
+
+// What kind of image is this, really?
+//
+// The Instance Grabber uses this to tell an animated emoji from a still one.
+// VRChat's file endpoint gives no extension and often no useful content-type,
+// so the answer has to come from the bytes — and it matters, because exporting
+// an animation through a canvas keeps only its first frame.
+ipcMain.handle('image:inspect', async (_e, url: string) => inspectImage(url));
+
+// Can Discord's media proxy load this image URL? Used by the presence
+// diagnostics panel so the answer is measured rather than guessed.
+ipcMain.handle('image:probePublic', async (_e, url: string) => probePresenceImage(url));
 
 // ─── Auto-updater ─────────────────────────────────────────────────────────────
 //

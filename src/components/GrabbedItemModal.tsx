@@ -7,13 +7,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   X, Download, Copy, Check, ExternalLink, Loader2, AlertCircle, Crop,
-  EyeOff, Trash2, Image as ImageIcon,
+  EyeOff, Trash2, Image as ImageIcon, Film,
 } from 'lucide-react';
 import {
   loadImage, sourceBox, renderExport, canvasToBlob, downloadBlob, buildFilename,
+  exportExtension, fetchOriginal,
   DEFAULT_EXPORT, type ExportSettings, type LoadedImage, type Box,
 } from '../utils/imageExport';
-import type { GrabbedItem } from '../stores/grabberStore';
+import { useGrabberStore, type GrabbedItem } from '../stores/grabberStore';
 
 const SETTINGS_KEY = 'vrcstudio_grabber_export';
 
@@ -31,7 +32,8 @@ function saveSettings(s: ExportSettings) {
 }
 
 const KIND_LABEL: Record<GrabbedItem['kind'], string> = {
-  portal: 'Portal', print: 'Print', sticker: 'Sticker', emoji: 'Emoji', image: 'Image',
+  portal: 'Portal', print: 'Print', sticker: 'Sticker', emoji: 'Emoji',
+  item: 'Item', image: 'Image',
 };
 
 interface Props {
@@ -54,6 +56,30 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
   const [copied, setCopied] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const previewRef = useRef<HTMLDivElement>(null);
+
+  // Ask what the file really is the moment it's opened — the grid may not have
+  // reached this one yet, and everything below hangs off the answer.
+  const inspectMedia = useGrabberStore(s => s.inspectMedia);
+  useEffect(() => {
+    if (item.url && !item.inspectedAt) inspectMedia([item.id]);
+  }, [item.id, item.url, item.inspectedAt, inspectMedia]);
+
+  const isAnimated = !!item.animated;
+  /**
+   * What the download will actually do.
+   *
+   * An animated file defaults to being saved untouched, because every other
+   * path here goes through a canvas and a canvas holds one frame — exporting
+   * an animated emoji as PNG looks like it worked and silently drops the
+   * motion. Picking "Still frame" opts back into the canvas.
+   */
+  const effective: ExportSettings = useMemo(
+    () => (isAnimated && settings.animatedMode === 'original'
+      ? { ...settings, format: 'original' as const }
+      : settings),
+    [settings, isAnimated],
+  );
+  const keepsOriginal = effective.format === 'original';
 
   const update = (patch: Partial<ExportSettings>) => {
     setSettings(prev => {
@@ -92,8 +118,11 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
   // ── Crop box, recomputed only when it can actually change ──
   const box: Box | null = useMemo(() => {
     if (!loaded) return null;
+    // Saving the original means the whole file, untouched — a crop box would
+    // be a promise the export can't keep.
+    if (keepsOriginal) return { x: 0, y: 0, width: loaded.width, height: loaded.height };
     return sourceBox(loaded, settings);
-  }, [loaded, settings.border, settings.manualInset]);
+  }, [loaded, keepsOriginal, settings.border, settings.manualInset]);
 
   const cropped = !!(loaded && box &&
     (box.width !== loaded.width || box.height !== loaded.height));
@@ -102,6 +131,20 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
   useEffect(() => {
     const host = previewRef.current;
     if (!host || !loaded || !box) return;
+    // The original is shown as the file itself, not a canvas render — that's
+    // the only way the preview animates, and it's literally what gets saved.
+    if (keepsOriginal) {
+      const img = document.createElement('img');
+      img.src = loaded.objectUrl;
+      img.alt = item.name ?? item.kind;
+      img.style.maxWidth = '100%';
+      img.style.maxHeight = '46vh';
+      img.style.objectFit = 'contain';
+      img.style.display = 'block';
+      img.style.margin = '0 auto';
+      host.replaceChildren(img);
+      return;
+    }
     const canvas = renderExport(loaded, settings, box);
     canvas.style.maxWidth = '100%';
     canvas.style.maxHeight = '46vh';
@@ -109,7 +152,7 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
     canvas.style.display = 'block';
     canvas.style.margin = '0 auto';
     host.replaceChildren(canvas);
-  }, [loaded, box, settings]);
+  }, [loaded, box, settings, keepsOriginal, item.name, item.kind]);
 
   // ── Keyboard: escape closes, arrows move between items ──
   useEffect(() => {
@@ -124,21 +167,34 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
 
   const outputSize = useMemo(() => {
     if (!box) return null;
+    if (keepsOriginal) return { w: box.width, h: box.height };
     const pad = Math.max(0, Math.round(settings.padding));
     return {
       w: Math.max(1, Math.round(box.width * settings.scale)) + pad * 2,
       h: Math.max(1, Math.round(box.height * settings.scale)) + pad * 2,
     };
-  }, [box, settings.scale, settings.padding]);
+  }, [box, keepsOriginal, settings.scale, settings.padding]);
 
   const handleDownload = useCallback(async () => {
     if (!loaded || !box) return;
     setBusy(true);
     setError(null);
     try {
-      const canvas = renderExport(loaded, settings, box);
-      const blob = await canvasToBlob(canvas, settings);
-      const ext = settings.format === 'jpeg' ? 'jpg' : settings.format;
+      let blob: Blob;
+      if (keepsOriginal) {
+        // loadImage already pulled the bytes into a blob: URL, so read them
+        // back rather than fetching the file a second time. If that blob has
+        // gone (browser dev mode loads the URL directly), refetch.
+        try {
+          blob = await (await fetch(loaded.objectUrl)).blob();
+        } catch {
+          blob = (await fetchOriginal(item.url)).blob;
+        }
+      } else {
+        const canvas = renderExport(loaded, effective, box);
+        blob = await canvasToBlob(canvas, effective);
+      }
+      const ext = exportExtension(effective, item.mediaExtension);
       downloadBlob(blob, buildFilename(filenameTemplate, {
         name: item.name, kind: item.kind, id: item.id,
       }, ext));
@@ -149,7 +205,7 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
       setError(err instanceof Error ? err.message : String(err));
     }
     setBusy(false);
-  }, [loaded, box, settings, filenameTemplate, item]);
+  }, [loaded, box, effective, keepsOriginal, filenameTemplate, item]);
 
   const handleCopyImage = useCallback(async () => {
     if (!loaded || !box) return;
@@ -243,7 +299,12 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                     </span>
                   )}
                 </span>
-                <span>Export {outputSize.w}×{outputSize.h} · {settings.format.toUpperCase()}</span>
+                <span>
+                  Export {outputSize.w}×{outputSize.h} ·{' '}
+                  {keepsOriginal
+                    ? `original ${(item.mediaFormat ?? 'file').toUpperCase()}${item.frameCount ? ` · ${item.frameCount} frames` : ''}`
+                    : effective.format.toUpperCase()}
+                </span>
               </div>
             )}
           </div>
@@ -270,7 +331,9 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                 onClick={handleCopyImage}
                 disabled={!loaded || busy}
                 className="btn-secondary text-xs inline-flex items-center gap-1.5 disabled:opacity-40"
-                title="Copy the rendered image to the clipboard"
+                title={isAnimated
+                  ? 'Copies a still frame — the clipboard only takes PNG'
+                  : 'Copy the rendered image to the clipboard'}
               >
                 {copied === 'image' ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
                 {copied === 'image' ? 'Copied' : 'Copy'}
@@ -303,7 +366,12 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                   </Chip>
                 ))}
               </div>
-              {settings.border === 'auto' && (
+              {keepsOriginal && (
+                <p className="text-[10px] text-amber-400/80 mt-1.5">
+                  Not applied — the original is saved whole. Switch to "Just a picture" to crop.
+                </p>
+              )}
+              {!keepsOriginal && settings.border === 'auto' && (
                 <p className="text-[10px] text-surface-500 mt-1.5">
                   {loaded
                     ? cropped
@@ -325,15 +393,55 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
               )}
             </Field>
 
-            <Field label="Format">
-              <div className="flex gap-1.5">
-                {(['png', 'jpeg', 'webp'] as const).map(f => (
-                  <Chip key={f} active={settings.format === f} onClick={() => update({ format: f })}>
-                    {f.toUpperCase()}
+            <Field label={isAnimated ? 'Animation' : 'Format'} icon={isAnimated ? Film : undefined}>
+              {isAnimated && (
+                <>
+                  <div className="flex gap-1.5 flex-wrap">
+                    <Chip
+                      active={settings.animatedMode === 'original'}
+                      onClick={() => update({ animatedMode: 'original' })}
+                    >
+                      Keep the animation
+                    </Chip>
+                    <Chip
+                      active={settings.animatedMode === 'still'}
+                      onClick={() => update({ animatedMode: 'still' })}
+                    >
+                      Just a picture
+                    </Chip>
+                  </div>
+                  <p className="text-[10px] text-surface-500 mt-1.5">
+                    {keepsOriginal
+                      ? `Saves the ${(item.mediaFormat ?? 'file').toUpperCase()} exactly as VRChat serves it${item.frameCount ? `, all ${item.frameCount} frames` : ''}. Cropping, scaling and padding don't apply to an untouched file.`
+                      : 'Renders the first frame only, so the border, size and format controls all apply.'}
+                  </p>
+                </>
+              )}
+              <div className={`flex gap-1.5 flex-wrap ${isAnimated ? 'mt-2' : ''}`}>
+                {(['png', 'jpeg', 'webp', 'original'] as const).map(f => (
+                  <Chip
+                    key={f}
+                    active={effective.format === f}
+                    disabled={keepsOriginal && f !== 'original'}
+                    onClick={() => update(
+                      // Picking a still format for an animated file is also a
+                      // decision to flatten it — say so rather than being
+                      // overruled by animatedMode a moment later.
+                      f === 'original'
+                        ? { format: f, animatedMode: 'original' }
+                        : { format: f, ...(isAnimated ? { animatedMode: 'still' as const } : null) },
+                    )}
+                  >
+                    {f === 'original' ? 'Original' : f.toUpperCase()}
                   </Chip>
                 ))}
               </div>
-              {settings.format !== 'png' && (
+              {effective.format === 'original' && !isAnimated && (
+                <p className="text-[10px] text-surface-500 mt-1.5">
+                  Saves the file byte for byte — nothing re-encoded, no crop, no resize.
+                </p>
+              )}
+              {!keepsOriginal && settings.format !== 'png' && (
                 <label className="block mt-1.5">
                   <span className="text-[10px] text-surface-500">Quality {Math.round(settings.quality * 100)}%</span>
                   <input
@@ -344,7 +452,7 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                   />
                 </label>
               )}
-              {settings.format === 'jpeg' && settings.background === 'transparent' && (
+              {!keepsOriginal && settings.format === 'jpeg' && settings.background === 'transparent' && (
                 <p className="text-[10px] text-amber-400/80 mt-1">
                   JPEG has no transparency — anything see-through becomes white.
                 </p>
@@ -412,7 +520,7 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                 {'{name} {kind} {id} {date}'} · saves as{' '}
                 <span className="text-surface-400">
                   {buildFilename(filenameTemplate, { name: item.name, kind: item.kind, id: item.id },
-                    settings.format === 'jpeg' ? 'jpg' : settings.format)}
+                    exportExtension(effective, item.mediaExtension))}
                 </span>
               </p>
             </Field>
@@ -439,6 +547,30 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                 {copied === 'id' ? <Check size={10} className="text-green-400" /> : <Copy size={10} />}
               </button>
             </div>
+            <div className="flex gap-3">
+              <span className="text-surface-600 w-16 flex-shrink-0">File</span>
+              <span className="text-surface-400">
+                {item.inspectedAt
+                  ? item.inspectError
+                    ? <span className="text-amber-400">couldn't be read — {item.inspectError}</span>
+                    : <>
+                        {(item.mediaFormat ?? 'unknown').toUpperCase()}
+                        {item.imageWidth && item.imageHeight && <> · {item.imageWidth}×{item.imageHeight}</>}
+                        {item.animated
+                          ? <span className="text-emerald-400">
+                              {' '}· animated{item.frameCount ? ` (${item.frameCount} frames)` : ''}
+                            </span>
+                          : <span className="text-surface-500"> · still image</span>}
+                      </>
+                  : <span className="text-surface-600">checking…</span>}
+              </span>
+            </div>
+            {item.itemType && (
+              <div className="flex gap-3">
+                <span className="text-surface-600 w-16 flex-shrink-0">Type</span>
+                <span className="text-surface-400">{item.itemType}</span>
+              </div>
+            )}
             {item.url && (
               <div className="flex gap-3">
                 <span className="text-surface-600 w-16 flex-shrink-0">Source</span>
@@ -495,15 +627,17 @@ function Field({ label, icon: Icon, children }: {
   );
 }
 
-function Chip({ active, onClick, children }: {
+function Chip({ active, onClick, children, disabled }: {
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`text-[11px] px-2.5 py-1 rounded-lg border transition-colors ${
+      disabled={disabled}
+      className={`text-[11px] px-2.5 py-1 rounded-lg border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
         active
           ? 'border-accent-500 bg-accent-500/10 text-accent-300'
           : 'border-surface-700 text-surface-400 hover:border-surface-600'
