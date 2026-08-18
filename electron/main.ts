@@ -266,21 +266,38 @@ type DiscordActivityPayload = {
 };
 
 let pendingActivity: DiscordActivityPayload | null = null;
+let rpcClientId: string | null = null;
+let rpcLastError: string | null = null;
+let rpcLastPushAt: number | null = null;
+let rpcLastPushOk = false;
+/** True when Discord refused our image URLs and we fell back to text-only. */
+let rpcDroppedImages = false;
 
 async function initDiscordRPC(clientId: string) {
   // Require a non-empty, plausible clientId (Discord app IDs are 17-19 digits)
   if (!clientId || clientId.length < 10) {
+    rpcLastError = 'No Application ID set';
     console.warn('[Discord RPC] No valid clientId provided — skipping init');
     return;
   }
+
+  // Already live on this exact ID — tearing the socket down and rebuilding it
+  // drops the activity we just set. The renderer polls its config every few
+  // seconds, so without this guard we reconnected forever and never settled.
+  if (discordRPC && rpcConnected && rpcClientId === clientId) return;
+
   // Disconnect any existing session first
   disconnectDiscordRPC();
+  rpcClientId = clientId;
+  rpcLastError = null;
+  rpcDroppedImages = false;
   try {
     const { Client } = await import('discord-rpc');
     discordRPC = new Client({ transport: 'ipc' });
 
     discordRPC.on('ready', () => {
       rpcConnected = true;
+      rpcLastError = null;
       console.log('[Discord RPC] Connected as', (discordRPC as any).user?.username);
       // Flush any activity that was set while we were still connecting
       if (pendingActivity) {
@@ -292,13 +309,21 @@ async function initDiscordRPC(clientId: string) {
 
     discordRPC.on('disconnected', () => {
       rpcConnected = false;
+      rpcLastError = 'Discord closed the connection';
       console.log('[Discord RPC] Disconnected');
     });
 
     await discordRPC.login({ clientId });
     console.log('[Discord RPC] login() resolved, awaiting ready event…');
   } catch (err: any) {
-    console.warn('[Discord RPC] Failed to connect:', err?.message ?? err);
+    const msg = err?.message ?? String(err);
+    // The two failures worth telling the user apart.
+    rpcLastError = /could not connect|ENOENT|ECONNREFUSED/i.test(msg)
+      ? 'Could not reach Discord — is the desktop app running? (the browser version has no local socket)'
+      : /invalid client|unauthor/i.test(msg)
+        ? 'Discord rejected the Application ID — check it was copied in full'
+        : msg;
+    console.warn('[Discord RPC] Failed to connect:', msg);
     discordRPC = null;
     rpcConnected = false;
   }
@@ -313,29 +338,55 @@ function disconnectDiscordRPC() {
   }
 }
 
-function applyActivity(activity: DiscordActivityPayload) {
+function applyActivity(activity: DiscordActivityPayload, allowImages = true) {
   if (!discordRPC) return;
-  // discord-rpc setActivity returns a Promise — we MUST catch its rejection
-  // or failures are swallowed silently and the activity never appears.
+
+  // Image keys are the fragile part. Discord expects an asset key uploaded to
+  // the application, and depending on the client build it may or may not
+  // accept a plain https:// URL. When it doesn't, it rejects the WHOLE
+  // SET_ACTIVITY — so a bad image URL means no presence at all, which looks
+  // exactly like "I pasted my App ID and nothing happened". If a push with
+  // images is refused we immediately retry without them, so the text presence
+  // always lands.
+  const withImages = allowImages && !rpcDroppedImages;
   const payload = {
     details: activity.details,
     state: activity.state,
-    largeImageKey: activity.largeImageKey,
-    largeImageText: activity.largeImageText,
-    smallImageKey: activity.smallImageKey,
-    smallImageText: activity.smallImageText,
+    largeImageKey: withImages ? activity.largeImageKey : undefined,
+    largeImageText: withImages ? activity.largeImageText : undefined,
+    smallImageKey: withImages ? activity.smallImageKey : undefined,
+    smallImageText: withImages ? activity.smallImageText : undefined,
     startTimestamp: activity.startTimestamp,
     instance: activity.instance ?? false,
   };
+
   console.log('[Discord RPC] setActivity', JSON.stringify({
     details: payload.details,
     state: payload.state,
     largeImageKey: payload.largeImageKey ? `${payload.largeImageKey.slice(0, 60)}…` : undefined,
     startTimestamp: payload.startTimestamp,
   }));
-  Promise.resolve(discordRPC.setActivity(payload)).catch((err: any) => {
-    console.warn('[Discord RPC] setActivity rejected:', err?.message ?? err);
-  });
+
+  Promise.resolve(discordRPC.setActivity(payload))
+    .then(() => {
+      rpcLastPushAt = Date.now();
+      rpcLastPushOk = true;
+      rpcLastError = null;
+    })
+    .catch((err: any) => {
+      const msg = err?.message ?? String(err);
+      console.warn('[Discord RPC] setActivity rejected:', msg);
+      const hadImages = !!(payload.largeImageKey || payload.smallImageKey);
+      if (hadImages) {
+        rpcDroppedImages = true;
+        rpcLastError = `Discord refused the presence images (${msg}) — retrying without them`;
+        applyActivity(activity, false);
+        return;
+      }
+      rpcLastPushAt = Date.now();
+      rpcLastPushOk = false;
+      rpcLastError = msg;
+    });
 }
 
 function setDiscordActivity(activity: DiscordActivityPayload) {
@@ -786,6 +837,14 @@ ipcMain.handle('discord:init', (_e, clientId: string) => initDiscordRPC(clientId
 ipcMain.handle('discord:disconnect', () => disconnectDiscordRPC());
 ipcMain.handle('discord:setActivity', (_e, activity: Parameters<typeof setDiscordActivity>[0]) => setDiscordActivity(activity));
 ipcMain.handle('discord:isConnected', () => rpcConnected);
+ipcMain.handle('discord:status', () => ({
+  connected: rpcConnected,
+  clientId: rpcClientId,
+  lastError: rpcLastError,
+  lastPushAt: rpcLastPushAt,
+  lastPushOk: rpcLastPushOk,
+  imagesDropped: rpcDroppedImages,
+}));
 
 // Auto-launch
 ipcMain.handle('autoLaunch:set', (_e, enabled: boolean) => {

@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   discordDisconnect: () => ipcRenderer.invoke('discord:disconnect'),
   discordSetActivity: (activity: any) => ipcRenderer.invoke('discord:setActivity', activity),
   discordIsConnected: () => ipcRenderer.invoke('discord:isConnected'),
+  discordStatus: () => ipcRenderer.invoke('discord:status'),
 
   // Auto-launch
   setAutoLaunch: (enabled: boolean) => ipcRenderer.invoke('autoLaunch:set', enabled),

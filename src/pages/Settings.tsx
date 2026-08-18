@@ -16,6 +16,7 @@ import { useFriendStore } from '../stores/friendStore';
 import { useThemeStore } from '../stores/themeStore';
 import { useUpdateStore } from '../stores/updateStore';
 import { useDiscordBotStore } from '../stores/discordBotStore';
+import { useDiscordRpcStore } from '../stores/discordRpcStore';
 import { useMultiAccountStore } from '../stores/multiAccountStore';
 import { exportAllData, downloadExport, importData, exportFriendsList, downloadCSV } from '../utils/dataExport';
 import { getAvailableLanguages, setLanguage, getLanguage } from '../utils/i18n';
@@ -60,22 +61,28 @@ function DiscordDiagnostics() {
   const user = useAuthStore(s => s.user);
   const current = useInstanceHistoryStore(s => s.currentInstance);
   const [tick, setTick] = useState(0);
-  const [rpcConnected, setRpcConnected] = useState<boolean | null>(null);
+  const [rpc, setRpc] = useState<{
+    connected: boolean; lastError: string | null;
+    lastPushAt: number | null; lastPushOk: boolean; imagesDropped: boolean;
+  } | null>(null);
+  const requestPush = useDiscordRpcStore(s => s.requestPush);
 
   useEffect(() => {
-    const id = setInterval(() => setTick(t => t + 1), 5000);
+    const id = setInterval(() => setTick(t => t + 1), 3000);
     return () => clearInterval(id);
   }, []);
 
-  // Whether the local Discord client actually accepted our connection — the
-  // one fact that tells you if presence is working.
+  // Connection state plus the outcome of the last push — between them these
+  // answer every "why isn't it showing" case without reading the console.
   useEffect(() => {
     let cancelled = false;
-    window.electronAPI?.discordIsConnected?.()
-      .then(v => { if (!cancelled) setRpcConnected(!!v); })
-      .catch(() => { if (!cancelled) setRpcConnected(false); });
+    window.electronAPI?.discordStatus?.()
+      .then(v => { if (!cancelled) setRpc(v); })
+      .catch(() => { if (!cancelled) setRpc(null); });
     return () => { cancelled = true; };
   }, [tick]);
+
+  const rpcConnected = rpc?.connected ?? null;
 
   const location = user?.location ?? '—';
   const worldId = (user as any)?.worldId ?? '—';
@@ -93,8 +100,28 @@ function DiscordDiagnostics() {
             ? 'checking…'
             : rpcConnected
               ? 'connected to your Discord client'
-              : 'not connected — is Discord running on this machine?'}
+              : 'not connected — is the Discord desktop app running?'}
         </span>
+        <span className="text-surface-500">Last push</span>
+        <span className={rpc?.lastPushAt ? (rpc.lastPushOk ? 'text-green-400' : 'text-amber-400') : 'text-amber-400'}>
+          {rpc?.lastPushAt
+            ? `${rpc.lastPushOk ? 'accepted' : 'rejected'} at ${new Date(rpc.lastPushAt).toLocaleTimeString()}`
+            : 'never — no activity has been sent yet'}
+        </span>
+        {rpc?.imagesDropped && (
+          <>
+            <span className="text-surface-500">Images</span>
+            <span className="text-amber-400">
+              Discord refused the image URLs, so presence is running text-only
+            </span>
+          </>
+        )}
+        {rpc?.lastError && (
+          <>
+            <span className="text-surface-500">Last error</span>
+            <span className="text-amber-400 break-words">{rpc.lastError}</span>
+          </>
+        )}
         <span className="text-surface-500">user.location</span>
         <span className="font-mono text-surface-200 break-all">{location || '—'}</span>
         <span className="text-surface-500">user.worldId</span>
@@ -115,6 +142,14 @@ function DiscordDiagnostics() {
           ⚠ location is <code className="bg-surface-800 px-1 rounded">{location}</code> — not a world instance. Join a world for tracking to begin.
         </p>
       )}
+      <div className="flex items-center gap-2 pt-1">
+        <button onClick={() => { requestPush(); setTick(t => t + 1); }} className="btn-secondary text-xs">
+          Push presence now
+        </button>
+        <span className="text-surface-600 text-[11px]">
+          Forces an update — check your Discord profile straight after.
+        </span>
+      </div>
     </div>
   );
 }
@@ -155,6 +190,9 @@ export default function SettingsPage() {
 
   const saveDiscord = (enabled: boolean, clientId: string, showWorld: boolean, showAvatar: boolean) => {
     localStorage.setItem('vrcstudio_discord', JSON.stringify({ enabled, clientId, showWorld, showAvatar }));
+    // Connecting isn't enough — Discord shows nothing until an activity is
+    // set, so ask the presence hook to push one straight away.
+    useDiscordRpcStore.getState().requestPush();
     if (enabled && clientId && window.electronAPI) {
       window.electronAPI.discordInit(clientId);
     } else if (!enabled) {
@@ -680,6 +718,16 @@ export default function SettingsPage() {
                     {discordEnabled && !discordClientId && <p className="text-xs text-amber-400">⚠ Enter a Client ID to activate rich presence.</p>}
                   </div>
                   <Toggle label="Show Current World" description="Include the world name and how long you've been there" checked={discordShowWorld} onChange={v => { setDiscordShowWorld(v); saveDiscord(discordEnabled, discordClientId, v, discordShowAvatar); }} />
+                  <Toggle label="Show Images" description="Use the world thumbnail and your avatar as the presence images. Turn off if Discord shows the text but no pictures." checked={discordShowAvatar} onChange={v => { setDiscordShowAvatar(v); saveDiscord(discordEnabled, discordClientId, discordShowWorld, v); }} />
+                  <div className="text-xs text-surface-500 bg-surface-800/40 rounded-lg p-2.5 space-y-1">
+                    <p className="text-surface-300 font-semibold">Still not showing?</p>
+                    <ul className="list-disc list-inside space-y-0.5">
+                      <li>Discord must be the <span className="text-surface-300">desktop app</span>, running and signed in — the browser version has no local socket to connect to.</li>
+                      <li>Run both apps at the same privilege level. If VRC Studio is elevated and Discord isn't (or the other way round), the socket isn't visible across them.</li>
+                      <li>Discord → Settings → Activity Privacy → <span className="text-surface-300">Display current activity as a status message</span> has to be on.</li>
+                      <li>Another app broadcasting a VRChat presence (Medal, VRCX) doesn't block this one — Discord stacks them, so check the whole profile card, not just the first row.</li>
+                    </ul>
+                  </div>
                 </>
               )}
             </Section>

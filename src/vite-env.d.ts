@@ -18,6 +18,14 @@ interface ElectronAPI {
   discordDisconnect: () => Promise<void>;
   discordSetActivity: (activity: any) => Promise<void>;
   discordIsConnected: () => Promise<boolean>;
+  discordStatus: () => Promise<{
+    connected: boolean;
+    clientId: string | null;
+    lastError: string | null;
+    lastPushAt: number | null;
+    lastPushOk: boolean;
+    imagesDropped: boolean;
+  }>;
   setAutoLaunch: (enabled: boolean) => Promise<void>;
   getAutoLaunch: () => Promise<boolean>;
   getVersion: () => Promise<string>;
