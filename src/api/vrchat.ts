@@ -1,6 +1,7 @@
 import type {
   VRCInventoryItem,
   VRCInventoryItemType,
+  VRCFileRecord,
   VRCPrint,
   VRCInstanceDetail,
   VRCAPIConfig,
@@ -450,6 +451,17 @@ class VRChatAPI {
     const res = await this.request<any>(`/inventory?${q.toString()}`);
     // The endpoint has returned both a bare array and { data: [...] }.
     return Array.isArray(res) ? res : (res?.data ?? res?.items ?? []);
+  }
+
+  /**
+   * The file record behind an image.
+   *
+   * This is where an animated emoji's `frames` and `framesOverTime` live — the
+   * inventory item only says `metadata.animated: true`, and the image itself is
+   * a flat sprite sheet, so without this the animation can't be reconstructed.
+   */
+  async getFile(fileId: string): Promise<VRCFileRecord> {
+    return this.request<VRCFileRecord>(`/file/${fileId}`);
   }
 
   async getInventoryCollections(): Promise<any[]> {

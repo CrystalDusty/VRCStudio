@@ -103,7 +103,8 @@ export default function InstanceGrabberPage() {
         i.mediaFormat?.includes(q) ||
         // "gif" and "animated" both find the moving ones, whatever container
         // they actually came in.
-        (i.animated && ('animated'.includes(q) || 'gif'.includes(q))) ||
+        ((i.animated || i.spriteAnimated) && ('animated'.includes(q) || 'gif'.includes(q))) ||
+        i.animationStyle?.toLowerCase().includes(q) ||
         i.kind.includes(q),
       );
     }
@@ -218,11 +219,16 @@ export default function InstanceGrabberPage() {
           </p>
           <p>
             Each file's first few kilobytes are read to work out what it actually is, because
-            VRChat serves everything from one extension-less URL. Anything with more than one
-            frame is badged <span className="text-emerald-300">GIF</span> /{' '}
-            <span className="text-emerald-300">ANIM</span> in the grid, and downloads keep the
-            animation by default — every other export goes through a canvas, and a canvas only
-            ever holds one frame.
+            VRChat serves everything from one extension-less URL. Anything that moves is badged
+            in the grid — <span className="text-emerald-300">GIF</span> for a real animated file,
+            a frame count like <span className="text-emerald-300">16f</span> for an emoji.
+          </p>
+          <p>
+            Animated emoji aren't animated files: VRChat stores them as a single PNG holding a
+            grid of frames, plus a frame count and rate on the file record. Downloading that
+            gives you the contact sheet, so opening one rebuilds the frames and offers them back
+            as an animated GIF or a video — with the sprite sheet and a single still frame still
+            available if that's what you wanted.
           </p>
         </div>
       )}
@@ -440,12 +446,14 @@ function Thumbnail({ item, onOpen }: { item: GrabbedItem; onOpen: () => void }) 
         <Icon size={9} />
       </span>
 
-      {/* Animations play in the grid on their own — the badge is so you can
-          tell one is animated before it loops back round to a still-looking
-          frame, and so you know the download will keep the motion. */}
-      {item.animated && (
+      {/* Two different kinds of "moves". A real GIF animates in this grid on
+          its own; a VRChat emoji is a still sprite sheet that only moves once
+          it's rebuilt, so the badge is the only sign it isn't a contact sheet. */}
+      {(item.animated || item.spriteAnimated || (item.spriteFrames ?? 0) > 1) && (
         <span className="absolute bottom-1 left-1 text-[8px] font-bold px-1 rounded bg-black/70 text-emerald-300 border border-emerald-500/40 uppercase tracking-wider">
-          {item.mediaFormat === 'gif' ? 'GIF' : item.mediaFormat === 'apng' ? 'APNG' : 'ANIM'}
+          {item.animated
+            ? (item.mediaFormat === 'gif' ? 'GIF' : item.mediaFormat === 'apng' ? 'APNG' : 'ANIM')
+            : item.spriteFrames ? `${item.spriteFrames}f` : 'ANIM'}
         </span>
       )}
 

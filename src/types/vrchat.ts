@@ -328,7 +328,51 @@ export interface VRCInventoryItem {
   expiryDate?: string | null;
   created_at?: string;
   updated_at?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: VRCInventoryMetadata;
+}
+
+/**
+ * The inventory item's metadata block.
+ *
+ * `animated` is the only authoritative "does this move?" signal VRChat gives —
+ * the image URL points at a still sprite sheet either way, so sniffing the
+ * bytes says PNG for both. `fileId` is the handle needed to look up the frame
+ * count and rate.
+ */
+export interface VRCInventoryMetadata {
+  animated?: boolean;
+  animationStyle?: string;
+  assetBundleId?: string;
+  fileId?: string;
+  imageUrl?: string;
+  maskTag?: string;
+  propId?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * A file record from `GET /file/{fileId}`.
+ *
+ * Only the fields that matter for animation are typed. `frames` and
+ * `framesOverTime` are the whole reason this endpoint is called: an animated
+ * emoji is stored as a still sprite sheet, and these two numbers are what say
+ * how to cut it up and how fast to play it.
+ */
+export interface VRCFileRecord {
+  id: string;
+  name?: string;
+  extension?: string;
+  mimeType?: string;
+  ownerId?: string;
+  /** Number of frames on the sprite sheet, 2–64. Absent for still images. */
+  frames?: number;
+  /** Playback rate in frames per second, 1–64. */
+  framesOverTime?: number;
+  loopStyle?: 'linear' | 'pingpong';
+  animationStyle?: string;
+  maskTag?: string;
+  tags?: string[];
+  versions?: Array<{ version: number; status?: string; file?: { url?: string; sizeInBytes?: number } }>;
 }
 
 export interface VRCPrint {

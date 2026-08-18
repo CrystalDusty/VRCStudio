@@ -33,14 +33,24 @@ export interface ExportSettings {
   padding: number;          // px added around the image, post-scale
   cornerRadius: number;     // px, 0 = square
   /**
-   * What to do with a file that turned out to be animated.
+   * What to do with something that moves.
    *
-   * `original` saves it as it is, motion intact. `still` runs it through the
-   * canvas like any other picture, which keeps the first frame and all the
-   * crop/scale/format controls. Separate from `format` so choosing PNG for
-   * prints doesn't quietly flatten every emoji as well.
+   *   original — the file exactly as VRChat serves it. For a real GIF that's
+   *              the animation; for an emoji that's the sprite sheet, because
+   *              that genuinely is what VRChat stores.
+   *   gif      — rebuild the frames and encode an animated GIF. The format
+   *              that plays anywhere an image is accepted.
+   *   video    — rebuild the frames and record WebM or MP4. No alpha, so
+   *              transparency is flattened onto the chosen background.
+   *   still    — one frame through the canvas, with every crop/scale/format
+   *              control applying as usual.
+   *
+   * Separate from `format` so choosing PNG for prints doesn't quietly flatten
+   * every emoji as well.
    */
-  animatedMode: 'original' | 'still';
+  animatedMode: 'original' | 'gif' | 'video' | 'still';
+  /** Which video container to record, when animatedMode is 'video'. */
+  videoExtension: 'webm' | 'mp4';
 }
 
 export const DEFAULT_EXPORT: ExportSettings = {
@@ -53,7 +63,8 @@ export const DEFAULT_EXPORT: ExportSettings = {
   customBackground: '#0f172a',
   padding: 0,
   cornerRadius: 0,
-  animatedMode: 'original',
+  animatedMode: 'gif',
+  videoExtension: 'webm',
 };
 
 export interface LoadedImage {

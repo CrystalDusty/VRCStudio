@@ -66,6 +66,25 @@ export interface GrabbedItem {
   imageHeight?: number;
   /** Extension to save the untouched bytes under. */
   mediaExtension?: string;
+
+  // ── Sprite-sheet animation ──
+  //
+  // VRChat animated emoji are not animated image files. The URL serves a still
+  // PNG holding a grid of frames, and the motion lives in two numbers on the
+  // file record. So `animated` above (sniffed from the bytes) says "no" for an
+  // animated emoji, and these say "yes" — both are true of different things,
+  // and only these can rebuild the animation.
+  /** VRChat says this item animates, whatever the image bytes look like. */
+  spriteAnimated?: boolean;
+  /** Frames on the sheet, 2–64. */
+  spriteFrames?: number;
+  /** Playback rate, 1–64 fps. */
+  spriteFps?: number;
+  spriteLoopStyle?: 'linear' | 'pingpong';
+  /** VRChat's own motion preset — spin, bounce, rain… Cosmetic, shown as-is. */
+  animationStyle?: string;
+  /** The file id behind the image, used to look the above up. */
+  fileId?: string;
   /** When we last looked; also set on failure so we don't retry in a loop. */
   inspectedAt?: number;
   inspectError?: string;
@@ -112,6 +131,12 @@ interface State {
    * Safe to call repeatedly — already-inspected ids are skipped.
    */
   inspectMedia: (ids: string[]) => Promise<void>;
+  /**
+   * Ask VRChat for the frame count and rate behind an animated item. Needed
+   * because the image itself is a flat sprite sheet that says nothing about
+   * how it moves.
+   */
+  loadAnimationDetails: (id: string) => Promise<void>;
   ingestLines: (lines: string[]) => void;
   addItems: (items: GrabbedItem[]) => void;
   markResolved: (id: string, patch: Partial<GrabbedItem>) => void;
@@ -430,12 +455,19 @@ export const useGrabberStore = create<State>((set, get) => ({
         // spotted in the log is corrected rather than duplicated.
         const fileId = it.imageUrl?.match(/(file_[0-9a-fA-F-]{20,})/)?.[1];
         const id = fileId ?? it.id;
+        // metadata.animated is VRChat's own answer, and the only reliable one:
+        // an animated emoji's image URL serves a still sprite sheet, so reading
+        // the bytes says "PNG, one frame" for animated and static alike.
+        const meta = it.metadata ?? {};
         mergeItem(id, {
           name: it.name,
           url: it.imageUrl ?? '',
           tags: it.tags,
           itemType: it.itemTypeLabel || it.itemType,
           createdAt: it.created_at,
+          spriteAnimated: meta.animated === true ? true : undefined,
+          animationStyle: typeof meta.animationStyle === 'string' ? meta.animationStyle : undefined,
+          fileId: typeof meta.fileId === 'string' ? meta.fileId : fileId,
           hidden: it.isArchived ? true : items[id]?.hidden,
         }, kind);
         inventoryCount++;
@@ -544,6 +576,34 @@ export const useGrabberStore = create<State>((set, get) => ({
     if (!changed) return;
     set({ items });
     savePersisted(items);
+  },
+
+  loadAnimationDetails: async (id) => {
+    const item = get().items[id];
+    if (!item) return;
+    // Already answered, or nothing to ask about.
+    if (item.spriteFrames !== undefined) return;
+    const fileId = item.fileId
+      ?? item.url.match(/(file_[0-9a-fA-F-]{20,})/)?.[1]
+      ?? (item.id.startsWith('file_') ? item.id : undefined);
+    if (!fileId) return;
+
+    try {
+      const file = await api.getFile(fileId);
+      const frames = typeof file.frames === 'number' && file.frames > 1 ? file.frames : undefined;
+      get().markResolved(id, {
+        fileId,
+        spriteFrames: frames ?? 0,   // 0 records "asked, it's a still" so we stop asking
+        spriteFps: file.framesOverTime,
+        spriteLoopStyle: file.loopStyle,
+        animationStyle: file.animationStyle ?? item.animationStyle,
+        spriteAnimated: frames ? true : item.spriteAnimated,
+        mediaExtension: file.extension?.replace(/^\./, '') || item.mediaExtension,
+      });
+    } catch {
+      // Age-gated, deleted, or rate-limited. Leave it unanswered so opening it
+      // again can retry — this is a single request on a single click.
+    }
   },
 
   addItems: (incoming) => {

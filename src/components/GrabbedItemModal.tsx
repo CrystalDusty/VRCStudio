@@ -15,6 +15,11 @@ import {
   DEFAULT_EXPORT, type ExportSettings, type LoadedImage, type Box,
 } from '../utils/imageExport';
 import { useGrabberStore, type GrabbedItem } from '../stores/grabberStore';
+import {
+  guessSpriteLayout, framesFromSpriteSheet, framesFromAnimatedFile,
+  supportedVideoFormats, toGif, toVideo,
+  type ExtractedFrames, type LoopStyle,
+} from '../utils/animation';
 
 const SETTINGS_KEY = 'vrcstudio_grabber_export';
 
@@ -24,6 +29,20 @@ function loadSettings(): ExportSettings {
     return raw ? { ...DEFAULT_EXPORT, ...JSON.parse(raw) } : DEFAULT_EXPORT;
   } catch {
     return DEFAULT_EXPORT;
+  }
+}
+
+/**
+ * Video containers here carry no alpha, so a transparent emoji has to land on
+ * something. Honour the chosen background, and use black when the answer is
+ * "transparent" — an invisible choice can't be honoured.
+ */
+function backgroundForVideo(s: ExportSettings): string {
+  switch (s.background) {
+    case 'white': return '#ffffff';
+    case 'black': return '#000000';
+    case 'custom': return s.customBackground;
+    default: return '#000000';
   }
 }
 
@@ -60,26 +79,119 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
   // Ask what the file really is the moment it's opened — the grid may not have
   // reached this one yet, and everything below hangs off the answer.
   const inspectMedia = useGrabberStore(s => s.inspectMedia);
+  const loadAnimationDetails = useGrabberStore(s => s.loadAnimationDetails);
   useEffect(() => {
     if (item.url && !item.inspectedAt) inspectMedia([item.id]);
   }, [item.id, item.url, item.inspectedAt, inspectMedia]);
+  // And ask VRChat how it moves. An animated emoji's image is a still sprite
+  // sheet, so the bytes can't answer this — only the file record can.
+  useEffect(() => {
+    if (item.spriteFrames === undefined) loadAnimationDetails(item.id);
+  }, [item.id, item.spriteFrames, loadAnimationDetails]);
 
-  const isAnimated = !!item.animated;
+  // Two independent ways a thing can move, and an item may be either.
+  const sheetFrames = item.spriteFrames && item.spriteFrames > 1 ? item.spriteFrames : 0;
+  const isSheet = sheetFrames > 0;
+  const isAnimatedFile = !!item.animated;
+  const movesAtAll = isSheet || isAnimatedFile;
+
+  const [extracted, setExtracted] = useState<ExtractedFrames | null>(null);
+  const [extractError, setExtractError] = useState<string | null>(null);
+  const [gridOverride, setGridOverride] = useState<{ columns: number; rows: number } | null>(null);
+  const [fpsOverride, setFpsOverride] = useState<number | null>(null);
+  const [loopOverride, setLoopOverride] = useState<LoopStyle | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
+  useEffect(() => {
+    setGridOverride(null); setFpsOverride(null); setLoopOverride(null);
+  }, [item.id]);
+
+  const videoFormats = useMemo(() => supportedVideoFormats(), []);
+  const videoFormat = useMemo(
+    () => videoFormats.find(f => f.extension === settings.videoExtension) ?? videoFormats[0],
+    [videoFormats, settings.videoExtension],
+  );
+
+  const fps = fpsOverride ?? item.spriteFps ?? 12;
+  const loopStyle: LoopStyle = loopOverride ?? item.spriteLoopStyle ?? 'linear';
+  const layout = useMemo(
+    () => {
+      if (!loaded || !isSheet) return null;
+      const guess = guessSpriteLayout(loaded.width, loaded.height, sheetFrames);
+      if (!gridOverride) return guess;
+      const { columns, rows } = gridOverride;
+      return {
+        columns, rows, count: sheetFrames,
+        frameWidth: Math.max(1, Math.floor(loaded.width / columns)),
+        frameHeight: Math.max(1, Math.floor(loaded.height / rows)),
+      };
+    },
+    [loaded, isSheet, sheetFrames, gridOverride],
+  );
+
+  // ── Rebuild the frames ──
+  useEffect(() => {
+    let cancelled = false;
+    setExtractError(null);
+    if (!loaded || !movesAtAll) { setExtracted(null); return; }
+
+    if (isSheet && layout) {
+      try {
+        setExtracted(framesFromSpriteSheet(loaded.image, layout, {
+          frameCount: sheetFrames, fps, loopStyle,
+        }));
+      } catch (err) {
+        setExtracted(null);
+        setExtractError(err instanceof Error ? err.message : String(err));
+      }
+      return;
+    }
+
+    // A real animated file — decode it rather than guessing at a grid.
+    (async () => {
+      try {
+        const blob = await (await fetch(loaded.objectUrl)).blob();
+        const frames = await framesFromAnimatedFile(blob, loaded.contentType || 'image/gif');
+        if (cancelled) return;
+        setExtracted(frames);
+        if (!frames) {
+          setExtractError('This build could not decode the frames, so only the original file can be saved.');
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setExtracted(null);
+          setExtractError(err instanceof Error ? err.message : String(err));
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [loaded, movesAtAll, isSheet, layout, sheetFrames, fps, loopStyle]);
+
+  const canRebuild = !!extracted && extracted.frames.length > 1;
+
   /**
    * What the download will actually do.
    *
-   * An animated file defaults to being saved untouched, because every other
-   * path here goes through a canvas and a canvas holds one frame — exporting
-   * an animated emoji as PNG looks like it worked and silently drops the
-   * motion. Picking "Still frame" opts back into the canvas.
+   * Anything that moves defaults to being rebuilt as a GIF, because that's the
+   * only output that both moves and goes anywhere. The canvas path holds one
+   * frame, so it is never chosen for an animation unless asked for; and
+   * "original" is honest about what VRChat stores, which for an emoji is a
+   * sprite sheet rather than an animation.
    */
+  const mode: ExportSettings['animatedMode'] = !movesAtAll
+    ? 'still'
+    : (settings.animatedMode === 'gif' || settings.animatedMode === 'video') && !canRebuild
+      ? 'original'
+      : settings.animatedMode === 'video' && !videoFormat
+        ? 'gif'
+        : settings.animatedMode;
+
   const effective: ExportSettings = useMemo(
-    () => (isAnimated && settings.animatedMode === 'original'
-      ? { ...settings, format: 'original' as const }
-      : settings),
-    [settings, isAnimated],
+    () => (mode === 'original' ? { ...settings, format: 'original' as const } : settings),
+    [settings, mode],
   );
   const keepsOriginal = effective.format === 'original';
+  // GIF and video bypass the canvas pipeline entirely.
+  const rebuilding = mode === 'gif' || mode === 'video';
 
   const update = (patch: Partial<ExportSettings>) => {
     setSettings(prev => {
@@ -131,6 +243,35 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
   useEffect(() => {
     const host = previewRef.current;
     if (!host || !loaded || !box) return;
+    // A rebuilt animation is previewed by playing the actual frames, so the
+    // grid guess and the frame rate can be judged rather than trusted.
+    if (rebuilding && extracted && extracted.frames.length > 0) {
+      const canvas = document.createElement('canvas');
+      canvas.width = extracted.width;
+      canvas.height = extracted.height;
+      canvas.style.maxWidth = '100%';
+      canvas.style.maxHeight = '46vh';
+      canvas.style.objectFit = 'contain';
+      canvas.style.display = 'block';
+      canvas.style.margin = '0 auto';
+      canvas.style.imageRendering = extracted.width < 128 ? 'pixelated' : 'auto';
+      const ctx = canvas.getContext('2d');
+      host.replaceChildren(canvas);
+      if (!ctx) return;
+
+      let frame = 0;
+      let timer: ReturnType<typeof setTimeout>;
+      const tick = () => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.putImageData(extracted.frames[frame], 0, 0);
+        const delay = extracted.delays[frame] ?? 100;
+        frame = (frame + 1) % extracted.frames.length;
+        timer = setTimeout(tick, delay);
+      };
+      tick();
+      return () => clearTimeout(timer);
+    }
+
     // The original is shown as the file itself, not a canvas render — that's
     // the only way the preview animates, and it's literally what gets saved.
     if (keepsOriginal) {
@@ -152,7 +293,7 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
     canvas.style.display = 'block';
     canvas.style.margin = '0 auto';
     host.replaceChildren(canvas);
-  }, [loaded, box, settings, keepsOriginal, item.name, item.kind]);
+  }, [loaded, box, settings, keepsOriginal, rebuilding, extracted, item.name, item.kind]);
 
   // ── Keyboard: escape closes, arrows move between items ──
   useEffect(() => {
@@ -181,7 +322,27 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
     setError(null);
     try {
       let blob: Blob;
-      if (keepsOriginal) {
+      let ext: string;
+
+      if (mode === 'gif' && extracted) {
+        setProgress('Encoding GIF…');
+        // Yield a frame so the label paints before the encoder blocks.
+        await new Promise(r => setTimeout(r, 0));
+        blob = toGif(extracted, { scale: settings.scale });
+        ext = 'gif';
+      } else if (mode === 'video' && extracted && videoFormat) {
+        // Recording runs in real time, so say how long it will take rather
+        // than looking frozen.
+        const seconds = Math.max(2, Math.round(
+          extracted.delays.reduce((a, b) => a + b, 0) / 1000));
+        setProgress(`Recording ${videoFormat.label}… about ${seconds}s`);
+        blob = await toVideo(extracted, videoFormat, {
+          fps,
+          scale: settings.scale,
+          background: backgroundForVideo(settings),
+        });
+        ext = videoFormat.extension;
+      } else if (keepsOriginal) {
         // loadImage already pulled the bytes into a blob: URL, so read them
         // back rather than fetching the file a second time. If that blob has
         // gone (browser dev mode loads the URL directly), refetch.
@@ -190,11 +351,13 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
         } catch {
           blob = (await fetchOriginal(item.url)).blob;
         }
+        ext = exportExtension(effective, item.mediaExtension);
       } else {
         const canvas = renderExport(loaded, effective, box);
         blob = await canvasToBlob(canvas, effective);
+        ext = exportExtension(effective, item.mediaExtension);
       }
-      const ext = exportExtension(effective, item.mediaExtension);
+
       downloadBlob(blob, buildFilename(filenameTemplate, {
         name: item.name, kind: item.kind, id: item.id,
       }, ext));
@@ -204,8 +367,9 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
+    setProgress(null);
     setBusy(false);
-  }, [loaded, box, effective, keepsOriginal, filenameTemplate, item]);
+  }, [loaded, box, effective, keepsOriginal, mode, extracted, videoFormat, fps, settings.scale, filenameTemplate, item]);
 
   const handleCopyImage = useCallback(async () => {
     if (!loaded || !box) return;
@@ -300,10 +464,16 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                   )}
                 </span>
                 <span>
-                  Export {outputSize.w}×{outputSize.h} ·{' '}
-                  {keepsOriginal
-                    ? `original ${(item.mediaFormat ?? 'file').toUpperCase()}${item.frameCount ? ` · ${item.frameCount} frames` : ''}`
-                    : effective.format.toUpperCase()}
+                  Export{' '}
+                  {rebuilding && extracted
+                    ? `${Math.round(extracted.width * settings.scale)}×${Math.round(extracted.height * settings.scale)} · ${
+                        mode === 'gif' ? 'GIF' : videoFormat?.label ?? 'video'
+                      } · ${extracted.frames.length} frames at ${fps}fps`
+                    : `${outputSize.w}×${outputSize.h} · ${
+                        keepsOriginal
+                          ? `original ${(item.mediaFormat ?? 'file').toUpperCase()}${isSheet ? ` sprite sheet, ${sheetFrames} frames` : ''}`
+                          : effective.format.toUpperCase()
+                      }`}
                 </span>
               </div>
             )}
@@ -331,7 +501,7 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                 onClick={handleCopyImage}
                 disabled={!loaded || busy}
                 className="btn-secondary text-xs inline-flex items-center gap-1.5 disabled:opacity-40"
-                title={isAnimated
+                title={movesAtAll
                   ? 'Copies a still frame — the clipboard only takes PNG'
                   : 'Copy the rendered image to the clipboard'}
               >
@@ -346,7 +516,7 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                 {busy ? <Loader2 size={12} className="animate-spin" />
                   : saved ? <Check size={12} />
                   : <Download size={12} />}
-                {saved ? 'Saved' : 'Download'}
+                {progress ?? (saved ? 'Saved' : 'Download')}
               </button>
             </div>
           </div>
@@ -366,12 +536,14 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                   </Chip>
                 ))}
               </div>
-              {keepsOriginal && (
+              {(keepsOriginal || rebuilding) && (
                 <p className="text-[10px] text-amber-400/80 mt-1.5">
-                  Not applied — the original is saved whole. Switch to "Just a picture" to crop.
+                  {rebuilding
+                    ? 'Not applied — each frame is taken whole so the animation stays aligned.'
+                    : 'Not applied — the original is saved whole. Switch to "Still frame" to crop.'}
                 </p>
               )}
-              {!keepsOriginal && settings.border === 'auto' && (
+              {!keepsOriginal && !rebuilding && settings.border === 'auto' && (
                 <p className="text-[10px] text-surface-500 mt-1.5">
                   {loaded
                     ? cropped
@@ -393,55 +565,139 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
               )}
             </Field>
 
-            <Field label={isAnimated ? 'Animation' : 'Format'} icon={isAnimated ? Film : undefined}>
-              {isAnimated && (
-                <>
-                  <div className="flex gap-1.5 flex-wrap">
-                    <Chip
-                      active={settings.animatedMode === 'original'}
-                      onClick={() => update({ animatedMode: 'original' })}
-                    >
-                      Keep the animation
-                    </Chip>
-                    <Chip
-                      active={settings.animatedMode === 'still'}
-                      onClick={() => update({ animatedMode: 'still' })}
-                    >
-                      Just a picture
-                    </Chip>
+            {movesAtAll && (
+              <Field label="Animation" icon={Film}>
+                <div className="flex gap-1.5 flex-wrap">
+                  <Chip
+                    active={mode === 'gif'}
+                    disabled={!canRebuild}
+                    onClick={() => update({ animatedMode: 'gif' })}
+                  >
+                    Animated GIF
+                  </Chip>
+                  <Chip
+                    active={mode === 'video'}
+                    disabled={!canRebuild || !videoFormat}
+                    onClick={() => update({ animatedMode: 'video' })}
+                  >
+                    Video{videoFormat ? ` (${videoFormat.label})` : ''}
+                  </Chip>
+                  <Chip active={mode === 'original'} onClick={() => update({ animatedMode: 'original' })}>
+                    {isSheet ? 'Sprite sheet' : 'Original file'}
+                  </Chip>
+                  <Chip active={mode === 'still'} onClick={() => update({ animatedMode: 'still' })}>
+                    Still frame
+                  </Chip>
+                </div>
+
+                {videoFormats.length > 1 && mode === 'video' && (
+                  <div className="flex gap-1.5 mt-1.5">
+                    {videoFormats.map(f => (
+                      <Chip
+                        key={f.extension}
+                        active={settings.videoExtension === f.extension}
+                        onClick={() => update({ videoExtension: f.extension as 'webm' | 'mp4' })}
+                      >
+                        {f.label}
+                      </Chip>
+                    ))}
                   </div>
-                  <p className="text-[10px] text-surface-500 mt-1.5">
-                    {keepsOriginal
-                      ? `Saves the ${(item.mediaFormat ?? 'file').toUpperCase()} exactly as VRChat serves it${item.frameCount ? `, all ${item.frameCount} frames` : ''}. Cropping, scaling and padding don't apply to an untouched file.`
-                      : 'Renders the first frame only, so the border, size and format controls all apply.'}
+                )}
+
+                <p className="text-[10px] text-surface-500 mt-1.5">
+                  {mode === 'gif'
+                    ? 'Rebuilt frame by frame and encoded here. Plays anywhere an image is accepted, and keeps transparency — though GIF transparency is on-or-off, so soft edges harden.'
+                    : mode === 'video'
+                      ? 'Recorded frame by frame in real time, so this takes about as long as the clip runs. Video has no transparency, so clear pixels land on the background colour below.'
+                      : mode === 'original'
+                        ? isSheet
+                          ? `Saves the PNG VRChat actually stores: all ${sheetFrames} frames laid out in a ${layout?.columns ?? '?'}×${layout?.rows ?? '?'} grid, not an animation.`
+                          : `Saves the ${(item.mediaFormat ?? 'file').toUpperCase()} exactly as VRChat serves it. Cropping, scaling and padding don't apply to an untouched file.`
+                        : 'One frame through the canvas, so the border, size and format controls all apply.'}
+                </p>
+
+                {isSheet && (
+                  <p className="text-[10px] text-surface-500 mt-1">
+                    VRChat stores this as a sprite sheet — {sheetFrames} frames at{' '}
+                    {item.spriteFps ?? '?'}fps
+                    {item.spriteLoopStyle === 'pingpong' && ', ping-pong looping'}
+                    {item.animationStyle && <> · style <span className="text-surface-400">{item.animationStyle}</span></>}.
                   </p>
-                </>
-              )}
-              <div className={`flex gap-1.5 flex-wrap ${isAnimated ? 'mt-2' : ''}`}>
+                )}
+                {extractError && (
+                  <p className="text-[10px] text-amber-400/80 mt-1">{extractError}</p>
+                )}
+
+                {/* The grid is deduced from the image size, not published by
+                    VRChat, so it has to be correctable when the guess is off. */}
+                {isSheet && layout && (
+                  <div className="mt-2 space-y-1.5">
+                    <div className="flex items-center gap-2 flex-wrap text-[10px] text-surface-500">
+                      <span>Grid</span>
+                      <NumberBox
+                        value={layout.columns}
+                        min={1} max={sheetFrames}
+                        onChange={v => setGridOverride({ columns: v, rows: Math.ceil(sheetFrames / v) })}
+                      />
+                      <span>×</span>
+                      <NumberBox
+                        value={layout.rows}
+                        min={1} max={sheetFrames}
+                        onChange={v => setGridOverride({ columns: Math.ceil(sheetFrames / v), rows: v })}
+                      />
+                      <span className="text-surface-600">
+                        {layout.frameWidth}×{layout.frameHeight} per frame
+                      </span>
+                      {gridOverride && (
+                        <button onClick={() => setGridOverride(null)} className="text-accent-400 hover:underline">
+                          reset
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap text-[10px] text-surface-500">
+                      <span>Speed</span>
+                      <NumberBox value={fps} min={1} max={64} onChange={v => setFpsOverride(v)} />
+                      <span>fps</span>
+                      <Chip active={loopStyle === 'linear'} onClick={() => setLoopOverride('linear')}>Loop</Chip>
+                      <Chip active={loopStyle === 'pingpong'} onClick={() => setLoopOverride('pingpong')}>Ping-pong</Chip>
+                    </div>
+                  </div>
+                )}
+              </Field>
+            )}
+
+            <Field label="Format">
+              <div className="flex gap-1.5 flex-wrap">
                 {(['png', 'jpeg', 'webp', 'original'] as const).map(f => (
                   <Chip
                     key={f}
-                    active={effective.format === f}
-                    disabled={keepsOriginal && f !== 'original'}
+                    active={!rebuilding && effective.format === f}
+                    disabled={rebuilding || (keepsOriginal && f !== 'original')}
                     onClick={() => update(
-                      // Picking a still format for an animated file is also a
+                      // Picking a still format for something animated is also a
                       // decision to flatten it — say so rather than being
                       // overruled by animatedMode a moment later.
                       f === 'original'
                         ? { format: f, animatedMode: 'original' }
-                        : { format: f, ...(isAnimated ? { animatedMode: 'still' as const } : null) },
+                        : { format: f, ...(movesAtAll ? { animatedMode: 'still' as const } : null) },
                     )}
                   >
                     {f === 'original' ? 'Original' : f.toUpperCase()}
                   </Chip>
                 ))}
               </div>
-              {effective.format === 'original' && !isAnimated && (
+              {rebuilding && (
+                <p className="text-[10px] text-surface-500 mt-1.5">
+                  Set by the Animation choice above — a {mode === 'gif' ? 'GIF' : 'video'} isn't
+                  encoded through the canvas.
+                </p>
+              )}
+              {!rebuilding && effective.format === 'original' && !movesAtAll && (
                 <p className="text-[10px] text-surface-500 mt-1.5">
                   Saves the file byte for byte — nothing re-encoded, no crop, no resize.
                 </p>
               )}
-              {!keepsOriginal && settings.format !== 'png' && (
+              {!keepsOriginal && !rebuilding && settings.format !== 'png' && (
                 <label className="block mt-1.5">
                   <span className="text-[10px] text-surface-500">Quality {Math.round(settings.quality * 100)}%</span>
                   <input
@@ -452,7 +708,7 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                   />
                 </label>
               )}
-              {!keepsOriginal && settings.format === 'jpeg' && settings.background === 'transparent' && (
+              {!keepsOriginal && !rebuilding && settings.format === 'jpeg' && settings.background === 'transparent' && (
                 <p className="text-[10px] text-amber-400/80 mt-1">
                   JPEG has no transparency — anything see-through becomes white.
                 </p>
@@ -560,11 +816,31 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                           ? <span className="text-emerald-400">
                               {' '}· animated{item.frameCount ? ` (${item.frameCount} frames)` : ''}
                             </span>
-                          : <span className="text-surface-500"> · still image</span>}
+                          // A sprite sheet genuinely IS a still file. Saying so
+                          // and then saying it animates isn't a contradiction —
+                          // it's the whole reason a rebuild is needed.
+                          : isSheet
+                            ? <span className="text-surface-500"> · still sprite sheet</span>
+                            : <span className="text-surface-500"> · still image</span>}
                       </>
                   : <span className="text-surface-600">checking…</span>}
               </span>
             </div>
+            {(isSheet || item.spriteAnimated) && (
+              <div className="flex gap-3">
+                <span className="text-surface-600 w-16 flex-shrink-0">Animation</span>
+                <span className="text-emerald-400">
+                  {isSheet
+                    ? <>
+                        {sheetFrames} frames at {item.spriteFps ?? '?'}fps
+                        {item.spriteLoopStyle === 'pingpong' && ', ping-pong'}
+                        {layout && <span className="text-surface-500"> · {layout.columns}×{layout.rows} grid</span>}
+                      </>
+                    : 'VRChat marks this as animated'}
+                  {item.animationStyle && <span className="text-surface-500"> · {item.animationStyle}</span>}
+                </span>
+              </div>
+            )}
             {item.itemType && (
               <div className="flex gap-3">
                 <span className="text-surface-600 w-16 flex-shrink-0">Type</span>
@@ -624,6 +900,28 @@ function Field({ label, icon: Icon, children }: {
       </div>
       {children}
     </div>
+  );
+}
+
+/** A tight numeric input for grid and frame-rate overrides. */
+function NumberBox({ value, min, max, onChange }: {
+  value: number;
+  min: number;
+  max: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <input
+      type="number"
+      value={value}
+      min={min}
+      max={max}
+      onChange={e => {
+        const v = Number(e.target.value);
+        if (Number.isFinite(v)) onChange(Math.min(max, Math.max(min, Math.round(v))));
+      }}
+      className="w-14 bg-surface-900 text-surface-200 px-1.5 py-0.5 rounded border border-surface-700 focus:outline-none focus:border-accent-500 text-[11px] tabular-nums"
+    />
   );
 }
 
