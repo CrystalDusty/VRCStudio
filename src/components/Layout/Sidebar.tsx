@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, Globe, Shirt, Star, Settings,
   LogOut, Bell, Search, History, UsersRound, FileText, Camera,
   ChevronDown, Flame, BarChart3, CalendarPlus, Paintbrush, Flag, Radio,
-  UserCheck, Images,
+  UserCheck, Grab,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useAuthStore } from '../../stores/authStore';
@@ -33,7 +33,7 @@ const browseNavItems = [
   { to: '/favorites',         icon: Star,      label: 'Favorites',     hackerLabel: '~/favorites' },
   { to: '/notifications',     icon: Bell,      label: 'Notifications', hackerLabel: 'inbox.unread' },
   { to: '/instance-avatars',  icon: UserCheck, label: 'Live Avatars',  hackerLabel: 'instance.players' },
-  { to: '/gallery',           icon: Images,    label: 'Gallery',       hackerLabel: 'media.discovered[]' },
+  { to: '/instance-grabber',  icon: Grab,      label: 'Instance Grabber', hackerLabel: 'instance.grab()' },
 ];
 
 const toolsNavItems = [

@@ -1,4 +1,4 @@
-// Enlarged view of one discovered image, with the export controls.
+// Enlarged view of one grabbed image, with the export controls.
 //
 // The preview is the export: every setting redraws the same canvas the
 // download will produce, so what you see is what lands on disk — including
@@ -13,9 +13,9 @@ import {
   loadImage, sourceBox, renderExport, canvasToBlob, downloadBlob, buildFilename,
   DEFAULT_EXPORT, type ExportSettings, type LoadedImage, type Box,
 } from '../utils/imageExport';
-import type { GalleryItem } from '../stores/galleryStore';
+import type { GrabbedItem } from '../stores/grabberStore';
 
-const SETTINGS_KEY = 'vrcstudio_gallery_export';
+const SETTINGS_KEY = 'vrcstudio_grabber_export';
 
 function loadSettings(): ExportSettings {
   try {
@@ -30,12 +30,12 @@ function saveSettings(s: ExportSettings) {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch {}
 }
 
-const KIND_LABEL: Record<GalleryItem['kind'], string> = {
-  print: 'Print', sticker: 'Sticker', emoji: 'Emoji', image: 'Image',
+const KIND_LABEL: Record<GrabbedItem['kind'], string> = {
+  portal: 'Portal', print: 'Print', sticker: 'Sticker', emoji: 'Emoji', image: 'Image',
 };
 
 interface Props {
-  item: GalleryItem;
+  item: GrabbedItem;
   onClose: () => void;
   onHide: (id: string) => void;
   onDelete: (id: string) => void;
@@ -43,10 +43,10 @@ interface Props {
   onNavigate?: (delta: number) => void;
 }
 
-export default function GalleryItemModal({ item, onClose, onHide, onDelete, onNavigate }: Props) {
+export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNavigate }: Props) {
   const [settings, setSettings] = useState<ExportSettings>(loadSettings);
   const [filenameTemplate, setFilenameTemplate] = useState(
-    () => localStorage.getItem('vrcstudio_gallery_filename') || '{kind} {id}',
+    () => localStorage.getItem('vrcstudio_grabber_filename') || '{kind} {id}',
   );
   const [loaded, setLoaded] = useState<LoadedImage | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -142,7 +142,7 @@ export default function GalleryItemModal({ item, onClose, onHide, onDelete, onNa
       downloadBlob(blob, buildFilename(filenameTemplate, {
         name: item.name, kind: item.kind, id: item.id,
       }, ext));
-      localStorage.setItem('vrcstudio_gallery_filename', filenameTemplate);
+      localStorage.setItem('vrcstudio_grabber_filename', filenameTemplate);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (err) {

@@ -62,6 +62,7 @@ const ROUTES: Record<string, string> = {
   '/favorites':        'favorites',
   '/notifications':    'notifications',
   '/instance-avatars': 'instance-avatars',
+  '/instance-grabber': 'instance-grabber',
   '/osc':              'osc',
   '/avatar-editor':    'avatar-editor',
   '/activity':         'activity',
