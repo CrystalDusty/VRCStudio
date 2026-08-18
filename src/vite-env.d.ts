@@ -35,6 +35,10 @@ interface ElectronAPI {
     active: boolean;
     source: 'spotify' | 'youtube' | null;
     title: string | null;
+    /** What the audio actually is — music, a video, a voice call, a game. */
+    kind: 'music' | 'video' | 'call' | 'game' | 'unknown';
+    /** Which app it came from, for display. */
+    app: string | null;
   }>;
   vrchatRequest: (opts: {
     method: string;

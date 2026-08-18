@@ -34,6 +34,7 @@ import UserAvatar from '../components/common/UserAvatar';
 import api from '../api/vrchat';
 import type { FeedEvent, UserStatus } from '../types/vrchat';
 import { getBestAvatarUrl } from '../utils/avatar';
+import { useMediaDetection, type MediaInfo } from '../hooks/useAudioVisualizer';
 import WorldAnalyticsPanel from '../components/WorldAnalyticsPanel';
 import VideoPlayerWidget from '../components/VideoPlayerWidget';
 
@@ -378,10 +379,60 @@ const weatherColorMap: Record<WeatherInfo['icon'], string> = {
   snow: 'text-cyan-300', storm: 'text-yellow-300', fog: 'text-surface-500', wind: 'text-surface-400',
 };
 
-function getCasualGreeting(h: number, name: string): string {
-  if (h >= 22 || h < 5) return `isn't it a little late to be jammin', ${name}?`;
-  if (h >= 5 && h < 12) return `starting the day off with a bang! I like it, ${name}`;
-  return `I like your style, ${name}`;
+/**
+ * The headline greeting.
+ *
+ * The old version was three hardcoded time brackets, and the 22:00–05:00 one
+ * asserted you were listening to music ("isn't it a little late to be
+ * jammin'?") no matter what you were actually doing — in a Discord call,
+ * watching a video, or nothing at all. Because it's the always-rendered
+ * headline, that one guess drowned out everything else the dashboard knows.
+ *
+ * Now it picks from what's actually true, most specific first, and only
+ * mentions music when a music player is genuinely playing.
+ */
+function getCasualGreeting(
+  h: number,
+  name: string,
+  ctx: {
+    media: MediaInfo;
+    inWorld: boolean;
+    worldName?: string;
+    onlineCount: number;
+    joinMeCount: number;
+  },
+): string {
+  const { media, inWorld, worldName, onlineCount, joinMeCount } = ctx;
+
+  // ── Things we actually know, in order of how specific they are ──
+  if (inWorld && worldName) return `you're in ${worldName}, ${name}`;
+  if (inWorld) return `you're in world, ${name} — have fun out there`;
+
+  // Only claim music when it IS music. A voice call or game audio is not a
+  // playlist, and an open-but-paused player is not playback.
+  if (media.active && media.kind === 'music' && media.title) {
+    return h >= 22 || h < 5
+      ? `still spinning ${media.title}? it's late, ${name}`
+      : `${media.title} is a good pick, ${name}`;
+  }
+  if (media.active && media.kind === 'music') return `good tunes, ${name}`;
+  if (media.active && media.kind === 'video') return `enjoying the watch, ${name}?`;
+  if (media.active && media.kind === 'call') return `mid-call, ${name}? don't let me interrupt`;
+
+  if (joinMeCount > 0) {
+    return joinMeCount === 1
+      ? `someone's got their doors open, ${name}`
+      : `${joinMeCount} doors are open for you, ${name}`;
+  }
+  if (onlineCount >= 10) return `it's busy out there, ${name}`;
+
+  // ── Time of day, as the fallback it always should have been ──
+  if (h >= 22 || h < 5) return onlineCount === 0
+    ? `it's quiet at this hour, ${name}`
+    : `still up, ${name}?`;
+  if (h < 12) return `starting the day off with a bang! I like it, ${name}`;
+  if (h < 18) return `I like your style, ${name}`;
+  return `evening, ${name} — good time to be online`;
 }
 
 // ─── Dashboard Greeting component ─────────────────────────────────────────────
@@ -390,7 +441,10 @@ function DashboardGreeting() {
   const { user } = useAuthStore();
   const { settings } = useSettingsStore();
   const { onlineFriends } = useFriendStore();
-  const { history } = useInstanceHistoryStore();
+  const { history, currentInstance } = useInstanceHistoryStore();
+  // What's making sound right now — used only where it's genuinely relevant,
+  // and never to assume music.
+  const media = useMediaDetection();
 
   const [now, setNow] = useState(() => new Date());
   const [weather, setWeather] = useState<WeatherInfo | null>(null);
@@ -466,6 +520,24 @@ function DashboardGreeting() {
       if (recent) msgs.push({ text: `You just left ${worldLabel}`, sub: `Spent ${Math.round((last.leftAt! - last.joinedAt) / 60000)}m there` });
     }
 
+    // What's making noise, described accurately. A Discord call says call, a
+    // video says video, and only a music player gets called music.
+    if (media.active) {
+      if (media.kind === 'music') {
+        msgs.push({
+          text: media.title ? `Playing: ${media.title}` : 'Music is playing',
+          sub: media.app ? `via ${media.app}` : undefined,
+        });
+      } else if (media.kind === 'video') {
+        msgs.push({
+          text: media.title ? `Watching: ${media.title}` : 'A video is open',
+          sub: media.app ? `via ${media.app}` : undefined,
+        });
+      } else if (media.kind === 'call') {
+        msgs.push({ text: `In a call on ${media.app ?? 'voice chat'}`, sub: 'Sound here is voice, not music' });
+      }
+    }
+
     if (weather) {
       const { temp, condition, icon } = weather;
       let commentary = '';
@@ -480,7 +552,7 @@ function DashboardGreeting() {
     }
 
     return msgs;
-  }, [now, onlineFriends, joinMeFriends, weather, history]);
+  }, [now, onlineFriends, joinMeFriends, weather, history, media]);
 
   useEffect(() => {
     if (tickerRef.current) clearInterval(tickerRef.current);
@@ -509,7 +581,17 @@ function DashboardGreeting() {
     <div className="flex items-start justify-between gap-6 w-full">
       <div className="min-w-0">
         <h1 className="text-xl font-semibold text-surface-100">
-          <span className="text-gradient">{getCasualGreeting(hour, displayName)}</span>
+          <span className="text-gradient">
+            {getCasualGreeting(hour, displayName, {
+              media,
+              inWorld: !!currentInstance,
+              worldName: currentInstance?.worldName && !currentInstance.worldName.startsWith('wrld_')
+                ? currentInstance.worldName
+                : undefined,
+              onlineCount: onlineFriends.length,
+              joinMeCount: joinMeFriends.length,
+            })}
+          </span>
         </h1>
         <div className="mt-1.5 h-9 overflow-hidden">
           <div key={safeTicker} className="animate-fade-in">

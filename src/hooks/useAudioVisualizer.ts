@@ -5,18 +5,29 @@ export interface MediaInfo {
   active: boolean;
   source: 'spotify' | 'youtube' | null;
   title: string | null;
+  /**
+   * What the sound actually is. Anything that isn't 'music' must never be
+   * described as listening to music — a Discord call and VRChat itself both
+   * make noise, and neither is a playlist.
+   */
+  kind: 'music' | 'video' | 'call' | 'game' | 'unknown';
+  app: string | null;
 }
 
 /**
- * Polls Electron main process for Spotify/YouTube playback status.
- * Falls back to "always active" when running outside Electron.
+ * Polls the main process for what's currently making sound. Reports nothing
+ * when it can't tell, rather than assuming.
  */
 export function useMediaDetection(): MediaInfo {
-  const [info, setInfo] = useState<MediaInfo>({ active: false, source: null, title: null });
+  const [info, setInfo] = useState<MediaInfo>({
+    active: false, source: null, title: null, kind: 'unknown', app: null,
+  });
 
   useEffect(() => {
     if (!window.electronAPI?.detectMedia) {
-      setInfo({ active: true, source: null, title: null });
+      // Outside Electron we can't see any windows. The old default here was
+      // `active: true`, which asserted playback we had no evidence for.
+      setInfo({ active: false, source: null, title: null, kind: 'unknown', app: null });
       return;
     }
 

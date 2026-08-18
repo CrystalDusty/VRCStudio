@@ -881,42 +881,117 @@ ipcMain.handle('audio:getDesktopSources', async () => {
   }
 });
 
-// Detects whether Spotify or YouTube is currently playing by scanning
-// window titles. Returns a small object the renderer can react to.
+// What's actually making noise, and whether it's music.
+//
+// The old version answered "music" far too readily. Its Spotify branch was:
+//
+//     titles.some(x => /Spotify/i.test(x)) && / - /.test(t)
+//
+// — i.e. if ANY window belonged to Spotify (even paused), then ANY OTHER
+// window whose title contained " - " was reported as the playing track. A
+// Discord window ("#general - MyServer - Discord") or a browser ("something
+// - Google Chrome") would come back as music. The YouTube branch matched any
+// title containing "YouTube", so an open-but-paused tab counted as playback.
+//
+// Now: a window only counts if it belongs to a known player, and we say what
+// KIND of audio it is so callers can tell music from a video or a voice call.
+//
+// Known limitation, chosen deliberately: window titles are all Electron gives
+// us — there's no owning-process name — and Spotify on Windows replaces its
+// title with a bare "Artist - Track" while playing, with nothing identifying
+// the app. That playback is missed. Detecting it would mean treating any
+// "X - Y" window as music, which is the exact bug being fixed here. Missing
+// some music is the right side to err on; inventing it is not. Reliable
+// detection needs the OS media-session API (SMTC on Windows), which is a
+// native module, not a window-title scan.
+
+type MediaKind = 'music' | 'video' | 'call' | 'game' | 'unknown';
+
+/** Apps whose window title genuinely means "music is playing". */
+const MUSIC_APPS: Array<{ re: RegExp; name: string }> = [
+  { re: /^Spotify$/i,                     name: 'Spotify' },   // idle — title is bare
+  { re: /\bSpotify\b/i,                   name: 'Spotify' },
+  { re: /\bYouTube Music\b/i,             name: 'YouTube Music' },
+  { re: /\bApple Music\b|\biTunes\b/i,   name: 'Apple Music' },
+  { re: /\bTIDAL\b/i,                     name: 'TIDAL' },
+  { re: /\bDeezer\b/i,                    name: 'Deezer' },
+  { re: /\bfoobar2000\b/i,                name: 'foobar2000' },
+  { re: /\bMusicBee\b/i,                  name: 'MusicBee' },
+  { re: /\bAIMP\b/i,                      name: 'AIMP' },
+  { re: /\bwinamp\b/i,                    name: 'Winamp' },
+];
+
+/** Things that make sound but are emphatically not music. */
+const NOT_MUSIC = [
+  { re: /\bDiscord\b/i,   kind: 'call'  as MediaKind, name: 'Discord' },
+  { re: /\bVRChat\b/i,    kind: 'game'  as MediaKind, name: 'VRChat' },
+  { re: /\bTeamSpeak\b/i, kind: 'call'  as MediaKind, name: 'TeamSpeak' },
+  { re: /\bZoom\b/i,      kind: 'call'  as MediaKind, name: 'Zoom' },
+  { re: /\bSteam\b/i,     kind: 'game'  as MediaKind, name: 'Steam' },
+];
+
 ipcMain.handle('audio:detectMedia', async () => {
+  const idle = { active: false, source: null, title: null, kind: 'unknown' as MediaKind, app: null };
   try {
     const sources = await desktopCapturer.getSources({
       types: ['window'],
       thumbnailSize: { width: 0, height: 0 },
     });
-    const titles = sources.map(s => s.name);
+    const titles = sources.map(s => s.name).filter(Boolean);
 
-    // Spotify: title becomes "Track - Artist" while playing, "Spotify Free"/"Spotify Premium" when idle
-    const spotifyTitle = titles.find(t =>
-      /^Spotify(?:\s|$)/i.test(t) === false &&
-      titles.some(x => /Spotify/i.test(x)) &&
-      / - /.test(t) &&
-      !/^Spotify (Free|Premium)$/i.test(t)
-    );
-    // Heuristic: any window owned by Spotify with a "X - Y" track title
-    const spotifyPlaying = titles.find(t => / - /.test(t) && /Spotify/i.test(t));
+    // ── Music ──
+    for (const app of MUSIC_APPS) {
+      const hit = titles.find(t => app.re.test(t));
+      if (!hit) continue;
 
-    // YouTube: browser tab title pattern "Video Title - YouTube — Browser"
-    const youtubePlaying = titles.find(t => /\sYouTube\b/i.test(t) || /\)\s*-\s*YouTube/i.test(t));
+      // Spotify's window title IS the track while playing ("Artist - Title")
+      // and is bare ("Spotify", "Spotify Premium") when paused or stopped.
+      const bareIdle = /^Spotify(\s+(Free|Premium))?$/i.test(hit.trim())
+        || /^YouTube Music$/i.test(hit.trim())
+        || new RegExp(`^${app.name}$`, 'i').test(hit.trim());
+      if (bareIdle) continue;   // player open but not playing — not "listening"
 
-    if (spotifyPlaying || spotifyTitle) {
-      const t = spotifyPlaying || spotifyTitle!;
-      return { active: true, source: 'spotify' as const, title: t.replace(/\s*[—-]\s*Spotify.*$/i, '').trim() };
+      const title = hit
+        .replace(/\s*[—-]\s*(Spotify|YouTube Music|Apple Music|TIDAL|Deezer).*$/i, '')
+        .trim();
+      if (!title || title.length < 2) continue;
+
+      return {
+        active: true,
+        source: /spotify/i.test(app.name) ? 'spotify' as const : 'youtube' as const,
+        title,
+        kind: 'music' as MediaKind,
+        app: app.name,
+      };
     }
-    if (youtubePlaying) {
-      return { active: true, source: 'youtube' as const, title: youtubePlaying.replace(/\s*-\s*YouTube.*$/i, '').trim() };
+
+    // ── Video (a YouTube tab that isn't YouTube Music) ──
+    // Being open is not the same as playing, and a window title can't tell us
+    // which — so this is reported as a video, never as "listening to music".
+    const yt = titles.find(t => /\bYouTube\b/i.test(t) && !/\bYouTube Music\b/i.test(t));
+    if (yt) {
+      return {
+        active: true,
+        source: 'youtube' as const,
+        title: yt.replace(/\s*[-—]\s*(YouTube).*$/i, '').trim(),
+        kind: 'video' as MediaKind,
+        app: 'YouTube',
+      };
     }
-    return { active: false, source: null, title: null };
+
+    // ── Voice / game audio ──
+    for (const other of NOT_MUSIC) {
+      const hit = titles.find(t => other.re.test(t));
+      if (hit) {
+        return { active: true, source: null, title: null, kind: other.kind, app: other.name };
+      }
+    }
+
+    return idle;
   } catch {
-    return { active: false, source: null, title: null };
+    return idle;
   }
 });
-
 
 // ─── OSC IPC ─────────────────────────────────────────────────────────────────
 
