@@ -149,13 +149,20 @@ function DiscordPresencePreview({ cfg }: { cfg: DiscordConfig }) {
     : false;
   const layout = switched ? cfg.altLayout : cfg.layout;
 
+  // Mirrors the resolution in useDiscordRPC, including the group-name swap.
+  const groupLabel = !hideWorld && cfg.showGroupName && (current as any)?.groupName
+    ? String((current as any).groupName)
+    : '';
   const vars: Record<string, string> = {
     name: user?.displayName ?? 'VRChat',
     world: worldName,
     avatar: '',
     status: user?.statusDescription || user?.status || '',
-    instance: current && !hideWorld && !isPublic ? ` · ${instanceType}` : '',
+    instance: groupLabel
+      ? ` · ${groupLabel}`
+      : current && !hideWorld && !isPublic ? ` · ${instanceType}` : '',
     players: '',
+    group: groupLabel,
   };
   const fill = (t: string) => t.replace(/\{(\w+)\}/g, (_, k: string) => vars[k] ?? '').replace(/\s{2,}/g, ' ').trim();
 
@@ -163,6 +170,7 @@ function DiscordPresencePreview({ cfg }: { cfg: DiscordConfig }) {
   const worldImg = current?.worldImage || '';
   const bigSrc = layout === 'avatar-world' || layout === 'avatar-only' ? avatarImg
     : layout === 'none' ? '' : worldImg;
+  const usingFallback = layout !== 'none' && !bigSrc && !!cfg.fallbackImageKey.trim();
   const smallSrc = layout === 'world-avatar' ? avatarImg : layout === 'avatar-world' ? worldImg : '';
 
   const buttons: string[] = [];
@@ -178,7 +186,9 @@ function DiscordPresencePreview({ cfg }: { cfg: DiscordConfig }) {
             <div className="w-16 h-16 rounded-lg bg-surface-800 overflow-hidden">
               {bigSrc
                 ? <img src={bigSrc} alt="" className="w-full h-full object-cover" />
-                : <div className="w-full h-full grid place-items-center text-[9px] text-surface-600">no image</div>}
+                : usingFallback
+                  ? <div className="w-full h-full grid place-items-center text-[8px] text-surface-400 text-center px-1 font-mono">{cfg.fallbackImageKey}</div>
+                  : <div className="w-full h-full grid place-items-center text-[9px] text-surface-600">no image</div>}
             </div>
             {smallSrc && (
               <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full overflow-hidden border-2 border-surface-900 bg-surface-800">
@@ -949,9 +959,38 @@ export default function SettingsPage() {
                       value={discordCfg.largeTextTemplate}
                       onChange={v => patchDiscord({ largeTextTemplate: v })}
                     />
+                    <p className="text-[10px] text-surface-600">
+                      In a group instance, <code className="text-surface-400">{'{instance}'}</code> becomes
+                      the group's name once it resolves — "· Furry Hideout" rather than "· group".
+                      Use <code className="text-surface-400">{'{group}'}</code> to place it yourself.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-sm font-medium">Fallback image key</label>
+                    <p className="text-xs text-surface-500">
+                      Shown when there's no world or avatar picture to use — while a new world is
+                      still loading, or if Discord refuses the URLs. This is the name of an image
+                      you uploaded under <span className="text-surface-300">Rich Presence → Art Assets</span> on
+                      your Discord application; leave it empty to show nothing instead.
+                    </p>
+                    <input
+                      type="text"
+                      value={discordCfg.fallbackImageKey}
+                      onChange={e => setDiscordCfg({ ...discordCfg, fallbackImageKey: e.target.value })}
+                      onBlur={e => patchDiscord({ fallbackImageKey: e.target.value })}
+                      placeholder="e.g. vrchat_logo"
+                      className="input-field w-full font-mono text-sm"
+                    />
                   </div>
 
                   {/* ── Extras ── */}
+                  <Toggle
+                    label="Show the group's name"
+                    description="In a group instance, resolve and display the group rather than just the word &quot;group&quot;"
+                    checked={discordCfg.showGroupName}
+                    onChange={v => patchDiscord({ showGroupName: v })}
+                  />
                   <Toggle
                     label="Show elapsed time"
                     description="How long you've been in the instance, counting up on the card"
@@ -995,6 +1034,7 @@ export default function SettingsPage() {
                       detailsTemplate: '{name}', stateTemplate: 'In {world}{instance}',
                       largeTextTemplate: '{world}', privacyHideWorld: false, showElapsed: true,
                       showWorldButton: false, showProfileButton: false,
+                      fallbackImageKey: '', showGroupName: true,
                     })}
                     className="btn-secondary text-xs"
                   >

@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { useInstanceHistoryStore } from '../stores/instanceHistoryStore';
 import { useDiscordRpcStore } from '../stores/discordRpcStore';
+import api from '../api/vrchat';
 
 /**
  * What goes in Discord's two image slots.
@@ -51,6 +52,13 @@ export interface DiscordConfig {
   showProfileButton: boolean;
   /** Text shown when hovering the large image. */
   largeTextTemplate: string;
+  /**
+   * Asset key uploaded to your Discord application, used when there's no
+   * world or avatar picture to show. Prevents a broken-image box.
+   */
+  fallbackImageKey: string;
+  /** Resolve and show the group's name for group instances. */
+  showGroupName: boolean;
 }
 
 export const DISCORD_DEFAULTS: DiscordConfig = {
@@ -68,6 +76,8 @@ export const DISCORD_DEFAULTS: DiscordConfig = {
   showWorldButton: false,
   showProfileButton: false,
   largeTextTemplate: '{world}',
+  fallbackImageKey: '',
+  showGroupName: true,
 };
 
 export function readConfig(): DiscordConfig {
@@ -103,6 +113,10 @@ export function useDiscordRPC() {
   // Skip identical pushes — Discord rate-limits SET_ACTIVITY.
   const lastPayloadRef = useRef('');
   const lastPushAtRef = useRef(0);
+  // Last world thumbnail we had, so a world change doesn't flash a gap.
+  const lastWorldImageRef = useRef<{ worldId?: string; url: string }>({ url: '' });
+  // Resolved group names, keyed by group id.
+  const groupNameRef = useRef<Record<string, string>>({});
 
   // ------------------------------------------------------------------
   // applyConfig: connect / disconnect discord RPC based on settings.
@@ -146,6 +160,7 @@ export function useDiscordRPC() {
     if (!window.electronAPI || !initialized.current) return;
     const cfg = cfgRef.current;
 
+    const groupId = currentInstance?.groupId;
     const instanceType = (currentInstance?.instanceType ?? 'public').toLowerCase();
     const isPublic = instanceType === 'public';
     const worldKnown = !!currentInstance?.worldName &&
@@ -160,7 +175,20 @@ export function useDiscordRPC() {
       : 'a world';
 
     const avatarImage = user?.profilePicOverride || user?.currentAvatarThumbnailImageUrl || user?.userIcon || '';
-    const worldImage = currentInstance?.worldImage || '';
+
+    // A world change lands in two steps: the instance switches with an empty
+    // worldImage, then the world fetch fills it in a moment later. Pushing
+    // through that gap swapped the large image to your avatar and back, which
+    // is what "changing world breaks the icons" looks like from outside.
+    // Hold the previous world's image until the new one actually arrives.
+    const liveWorldImage = currentInstance?.worldImage || '';
+    if (liveWorldImage) {
+      lastWorldImageRef.current = { worldId: currentInstance?.worldId, url: liveWorldImage };
+    } else if (currentInstance && lastWorldImageRef.current.worldId !== currentInstance.worldId) {
+      // Genuinely a different world with no image yet — don't show the old one.
+      lastWorldImageRef.current = { worldId: currentInstance.worldId, url: '' };
+    }
+    const worldImage = liveWorldImage || lastWorldImageRef.current.url || '';
 
     // Which layout applies right now.
     const switched =
@@ -185,7 +213,12 @@ export function useDiscordRPC() {
       status: user?.statusDescription || user?.status || '',
       instance: currentInstance && !hideWorld && !isPublic ? ` · ${instanceType}` : '',
       players: '',
+      // Group instances get the group's actual name once it resolves, not
+      // just the word "group".
+      group: (!hideWorld && cfg.showGroupName && groupId && groupNameRef.current[groupId]) || '',
     };
+    // "· group" becomes "· Furry Hideout" when we know the name.
+    if (vars.group) vars.instance = ` · ${vars.group}`;
 
     const details = renderTemplate(cfg.detailsTemplate || '{name}', vars) || (user?.displayName ?? 'VRChat');
     let state = renderTemplate(cfg.stateTemplate || 'In {world}', vars);
@@ -202,16 +235,31 @@ export function useDiscordRPC() {
       case 'avatar-only':  largeImageKey = avatarImage; break;
       case 'none':         break;
     }
-    if (largeImageKey && !largeImageKey.startsWith('https://')) largeImageKey = undefined;
-    if (smallImageKey && !smallImageKey.startsWith('https://')) smallImageKey = undefined;
+    // Anything that isn't an https URL is treated as an asset KEY uploaded to
+    // the Discord application, which is the only image source Discord can
+    // always render. Empty stays empty.
+    const usable = (v: string | undefined) => (v && v.trim() ? v : undefined);
+    largeImageKey = usable(largeImageKey);
+    smallImageKey = usable(smallImageKey);
+
+    // When we have no picture at all — new world still resolving, or Discord
+    // refused the URLs — fall back to a static asset key from the app so the
+    // card shows the app icon instead of a broken-image box.
+    if (!largeImageKey && cfg.fallbackImageKey.trim()) {
+      largeImageKey = cfg.fallbackImageKey.trim();
+    }
 
     const largeImageText = renderTemplate(cfg.largeTextTemplate || '{world}', vars) || undefined;
     const smallImageText = layout === 'world-avatar' ? user?.displayName
       : layout === 'avatar-world' ? (hideWorld ? undefined : worldLabel)
       : undefined;
 
+    // MILLISECONDS, not seconds. discord-rpc passes this straight through
+    // (it only converts a Date via getTime(), and range-checks against
+    // 2147483647000), so a seconds value lands in January 1970 and the
+    // elapsed counter renders as nonsense that never advances sensibly.
     const startTimestamp = cfg.showElapsed
-      ? Math.floor((currentInstance ? currentInstance.joinedAt : sessionStartTs.current) / 1000)
+      ? (currentInstance ? currentInstance.joinedAt : sessionStartTs.current)
       : undefined;
 
     // Buttons are suppressed whenever they'd leak a world the user chose to
@@ -253,6 +301,24 @@ export function useDiscordRPC() {
   }
 
   pushRef.current = pushActivity;
+
+  // Resolve the group behind a group instance, once per group. The name is
+  // what people actually want on their profile — "· group" says nothing.
+  useEffect(() => {
+    const gid = currentInstance?.groupId;
+    if (!gid || groupNameRef.current[gid]) return;
+    let cancelled = false;
+    api.getGroup(gid)
+      .then(g => {
+        const name = g?.name ?? g?.shortCode;
+        if (cancelled || !name) return;
+        groupNameRef.current[gid] = name;
+        // The name arriving changes the payload, so ask for a fresh push.
+        pushRef.current?.();
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [currentInstance?.groupId]);
 
   // ------------------------------------------------------------------
   // Effect 1: connect/disconnect when login state or clientId changes.
