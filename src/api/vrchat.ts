@@ -1,4 +1,9 @@
 import type {
+  VRCInventoryItem,
+  VRCInventoryItemType,
+  VRCPrint,
+  VRCInstanceDetail,
+  VRCAPIConfig,
   VRCCurrentUser,
   VRCUser,
   VRCWorld,
@@ -420,6 +425,173 @@ class VRChatAPI {
     await this.request(`/groups/${groupId}/represent`, {
       method: 'PUT',
     });
+  }
+
+  // ── Inventory (emoji / stickers / props / skins) ──────────────────────
+  //
+  // This is where VRChat actually keeps the things the Instance Grabber has
+  // been guessing at from log text. Every item carries an `itemType`, so a
+  // sync here replaces keyword-sniffing with the real classification.
+
+  async getInventory(params: {
+    n?: number;
+    offset?: number;
+    itemType?: VRCInventoryItemType;
+    order?: 'ascending' | 'descending';
+    /** Archived items are hidden from the in-game UI but still owned. */
+    isArchived?: boolean;
+  } = {}): Promise<VRCInventoryItem[]> {
+    const q = new URLSearchParams();
+    q.set('n', String(params.n ?? 100));
+    if (params.offset) q.set('offset', String(params.offset));
+    if (params.itemType) q.set('itemType', params.itemType);
+    if (params.order) q.set('order', params.order);
+    if (params.isArchived !== undefined) q.set('isArchived', String(params.isArchived));
+    const res = await this.request<any>(`/inventory?${q.toString()}`);
+    // The endpoint has returned both a bare array and { data: [...] }.
+    return Array.isArray(res) ? res : (res?.data ?? res?.items ?? []);
+  }
+
+  async getInventoryCollections(): Promise<any[]> {
+    const res = await this.request<any>('/inventory/collections');
+    return Array.isArray(res) ? res : (res?.data ?? []);
+  }
+
+  async getInventoryItem(inventoryItemId: string): Promise<VRCInventoryItem> {
+    return this.request<VRCInventoryItem>(`/inventory/${inventoryItemId}`);
+  }
+
+  // ── Prints ────────────────────────────────────────────────────────────
+
+  async getUserPrints(userId: string): Promise<VRCPrint[]> {
+    const res = await this.request<any>(`/prints/user/${userId}`);
+    return Array.isArray(res) ? res : (res?.data ?? []);
+  }
+
+  async getPrint(printId: string): Promise<VRCPrint> {
+    return this.request<VRCPrint>(`/prints/${printId}`);
+  }
+
+  // ── Instances ─────────────────────────────────────────────────────────
+
+  /** Live detail for one instance: occupancy, queue, age gate, closure. */
+  async getInstanceDetail(worldId: string, instanceId: string): Promise<VRCInstanceDetail> {
+    return this.request<VRCInstanceDetail>(`/instances/${worldId}:${instanceId}`);
+  }
+
+  /** Resolve a portal's short name (the code on a portal) to an instance. */
+  async getInstanceByShortName(shortName: string): Promise<VRCInstanceDetail> {
+    return this.request<VRCInstanceDetail>(`/instances/s/${encodeURIComponent(shortName)}`);
+  }
+
+  // ── Moderation reports ────────────────────────────────────────────────
+
+  /**
+   * Files a report with VRChat directly. Categories are not ours to invent —
+   * they're the keys of `reportOptions` in GET /config, fetched below.
+   */
+  async submitModerationReport(payload: {
+    category: string;
+    reason: string;
+    contentType: 'user' | 'world' | 'avatar' | 'group' | 'print' | 'emoji' | 'sticker';
+    contentId: string;
+  }): Promise<any> {
+    return this.request<any>('/moderationReports', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getModerationReports(): Promise<any[]> {
+    const res = await this.request<any>('/moderationReports');
+    return Array.isArray(res) ? res : (res?.results ?? res?.data ?? []);
+  }
+
+  // ── Config ────────────────────────────────────────────────────────────
+
+  /** VRChat's own live constants — report categories, limits, URLs. */
+  async getConfig(): Promise<VRCAPIConfig> {
+    return this.request<VRCAPIConfig>('/config');
+  }
+
+  /** Live concurrent online user count. */
+  async getVisits(): Promise<number> {
+    const res = await this.request<any>('/visits');
+    return typeof res === 'number' ? res : Number(res?.visits ?? res?.count ?? 0);
+  }
+
+  // ── Social extras ─────────────────────────────────────────────────────
+
+  async getMutualGroups(userId: string): Promise<any[]> {
+    const res = await this.request<any>(`/users/${userId}/mutuals/groups`);
+    return Array.isArray(res) ? res : (res?.data ?? []);
+  }
+
+  /** VRChat's poke. Costs nothing and is a genuinely nice social action. */
+  async boopUser(userId: string, emojiId?: string): Promise<void> {
+    await this.request(`/users/${userId}/boop`, {
+      method: 'POST',
+      body: JSON.stringify(emojiId ? { emojiId } : {}),
+    });
+  }
+
+  /** Every private note in one call, instead of one call per person. */
+  async getAllUserNotes(n = 100, offset = 0): Promise<Array<{ id: string; targetUserId: string; note: string }>> {
+    const res = await this.request<any>(`/userNotes?n=${n}&offset=${offset}`);
+    return Array.isArray(res) ? res : (res?.data ?? []);
+  }
+
+  /** Your block/mute list, so the UI can flag people you've moderated. */
+  async getPlayerModerations(type?: 'block' | 'mute' | 'unmute' | 'hideAvatar'): Promise<Array<{
+    id: string; type: string; targetUserId: string; targetDisplayName: string; created: string;
+  }>> {
+    const res = await this.request<any>(`/auth/user/playermoderations${type ? `?type=${type}` : ''}`);
+    return Array.isArray(res) ? res : (res?.data ?? []);
+  }
+
+  async unPlayerModerate(moderated: string, type: string): Promise<void> {
+    await this.request('/auth/user/unplayermoderate', {
+      method: 'PUT',
+      body: JSON.stringify({ moderated, type }),
+    });
+  }
+
+  // ── Notifications (fuller lifecycle) ──────────────────────────────────
+
+  async respondToNotification(notificationId: string, responseType: string, responseData = ''): Promise<any> {
+    return this.request<any>(`/notifications/${notificationId}/respond`, {
+      method: 'POST',
+      body: JSON.stringify({ responseType, responseData }),
+    });
+  }
+
+  async acceptFriendRequest(notificationId: string): Promise<void> {
+    await this.request(`/auth/user/notifications/${notificationId}/accept`, { method: 'PUT' });
+  }
+
+  async hideNotification(notificationId: string): Promise<void> {
+    await this.request(`/auth/user/notifications/${notificationId}/hide`, { method: 'PUT' });
+  }
+
+  async markNotificationSeen(notificationId: string): Promise<void> {
+    await this.request(`/notifications/${notificationId}/see`, { method: 'PUT' });
+  }
+
+  // ── Calendar (real VRChat group events) ───────────────────────────────
+
+  async getCalendarFollowing(n = 30): Promise<any[]> {
+    const res = await this.request<any>(`/calendar/following?n=${n}`);
+    return Array.isArray(res) ? res : (res?.results ?? res?.data ?? []);
+  }
+
+  async getCalendarFeatured(n = 30): Promise<any[]> {
+    const res = await this.request<any>(`/calendar/featured?n=${n}`);
+    return Array.isArray(res) ? res : (res?.results ?? res?.data ?? []);
+  }
+
+  async searchCalendar(query: string, n = 30): Promise<any[]> {
+    const res = await this.request<any>(`/calendar/search?query=${encodeURIComponent(query)}&n=${n}`);
+    return Array.isArray(res) ? res : (res?.results ?? res?.data ?? []);
   }
 
   // --- Status update (used by sidebar preset) ---

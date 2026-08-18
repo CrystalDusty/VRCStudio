@@ -7,6 +7,9 @@ import {
   UserMinus,
   MapPin,
   CircleDot,
+  UsersRound,
+  Hourglass,
+  Globe2,
   Wifi,
   WifiOff,
   TrendingUp,
@@ -43,6 +46,8 @@ const eventIcons: Record<FeedEvent['type'], typeof Activity> = {
   friend_add: UserPlus,
   friend_remove: UserMinus,
   world_visit: Globe,
+  group_update: UsersRound,
+  instance_queue: Hourglass,
 };
 
 const eventColors: Record<FeedEvent['type'], string> = {
@@ -54,6 +59,8 @@ const eventColors: Record<FeedEvent['type'], string> = {
   friend_add: 'text-green-400 bg-green-500/10',
   friend_remove: 'text-red-400 bg-red-500/10',
   world_visit: 'text-blue-400 bg-blue-500/10',
+  group_update: 'text-purple-400 bg-purple-500/10',
+  instance_queue: 'text-cyan-400 bg-cyan-500/10',
 };
 
 function eventMessage(event: FeedEvent): string {
@@ -120,6 +127,21 @@ export default function Dashboard() {
     if (statusGroups[f.status]) statusGroups[f.status].push(f);
   }
 
+  // Global concurrent-player count. Refreshed slowly: it's a worldwide
+  // figure, so a tight poll would be pure noise.
+  const [onlineNow, setOnlineNow] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      api.getVisits()
+        .then(n => { if (!cancelled && n > 0) setOnlineNow(n); })
+        .catch(() => {});
+    };
+    load();
+    const id = setInterval(load, 5 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
   const todayEvents = events.filter(e => Date.now() - e.timestamp < 86400000);
 
   const [feedFilter, setFeedFilter] = useState<'all' | 'worlds' | 'friends'>('all');
@@ -141,6 +163,14 @@ export default function Dashboard() {
         <StatCard icon={Users} label="Total Friends" value={onlineFriends.length + offlineFriends.length} accent="text-blue-400" bg="bg-blue-500/10" />
         <StatCard icon={Globe} label="Join Me" value={statusGroups['join me'].length} accent="text-status-joinme" bg="bg-blue-500/10" />
         <StatCard icon={TrendingUp} label="Events Today" value={todayEvents.length} accent="text-amber-400" bg="bg-amber-500/10" />
+        <StatCard
+          icon={Globe2}
+          label="VRChat Online"
+          value={onlineNow === null ? '—' : onlineNow.toLocaleString()}
+          accent="text-cyan-400"
+          bg="bg-cyan-500/10"
+          detail="players worldwide"
+        />
       </div>
 
       <div className="glass-panel-solid p-4">
@@ -513,7 +543,10 @@ function DashboardGreeting() {
 }
 
 function StatCard({ icon: Icon, label, value, accent, bg, detail }: {
-  icon: typeof Activity; label: string; value: number; accent: string; bg: string; detail?: string;
+  icon: typeof Activity; label: string;
+  /** Formatted counts (e.g. "12,480") arrive as strings. */
+  value: number | string;
+  accent: string; bg: string; detail?: string;
 }) {
   return (
     <div className="stat-card">

@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Grab, Search, Sticker, Smile, Printer, Image as ImageIcon, Compass, Users,
-  Trash2, EyeOff, Eye, Info, LayoutGrid,
+  Trash2, EyeOff, Eye, Info, LayoutGrid, RefreshCw, Check, AlertCircle,
 } from 'lucide-react';
 import { useGrabberStore, type GrabbedItem, type GrabKind } from '../stores/grabberStore';
 import { useInstanceAvatarsStore } from '../stores/instanceAvatarsStore';
@@ -53,6 +53,11 @@ export default function InstanceGrabberPage() {
   const remove = useGrabberStore(s => s.remove);
   const clear = useGrabberStore(s => s.clear);
   const playerCount = useInstanceAvatarsStore(s => Object.keys(s.byPlayer).length);
+  const syncFromVRChat = useGrabberStore(s => s.syncFromVRChat);
+  const syncing = useGrabberStore(s => s.syncing);
+  const lastSyncAt = useGrabberStore(s => s.lastSyncAt);
+  const syncError = useGrabberStore(s => s.syncError);
+  const syncSummary = useGrabberStore(s => s.syncSummary);
   const tailingActive = useVideoPlayerStore(s => s.tailingActive);
 
   const [tab, setTab] = useState<TabKey>('people');
@@ -138,8 +143,42 @@ export default function InstanceGrabberPage() {
           >
             <Info size={13} />
           </button>
+          <button
+            onClick={() => void syncFromVRChat()}
+            disabled={syncing}
+            className="text-xs px-2.5 py-1.5 rounded-lg font-medium bg-accent-600/20 text-accent-300 hover:bg-accent-600/30 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+            title="Pull your emoji, stickers and prints from VRChat — this is what gives them their real categories"
+          >
+            <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
+            {syncing ? 'Syncing…' : 'Sync from VRChat'}
+          </button>
         </div>
       </div>
+
+      {(syncSummary || syncError) && (
+        <div className="glass-panel-solid p-2.5 text-[11px] flex items-start gap-2 flex-wrap">
+          {syncSummary && (
+            <span className="text-surface-300 inline-flex items-center gap-1.5">
+              <Check size={12} className="text-green-400" />
+              Synced {syncSummary.inventory} inventory item{syncSummary.inventory === 1 ? '' : 's'} and{' '}
+              {syncSummary.prints} print{syncSummary.prints === 1 ? '' : 's'}
+              {syncSummary.reclassified > 0 && (
+                <span className="text-accent-300">
+                  · {syncSummary.reclassified} recategorised from the log's guess
+                </span>
+              )}
+            </span>
+          )}
+          {syncError && (
+            <span className="text-amber-400 inline-flex items-start gap-1.5">
+              <AlertCircle size={12} className="mt-0.5 flex-shrink-0" /> {syncError}
+            </span>
+          )}
+          {lastSyncAt && (
+            <span className="text-surface-600 ml-auto">{new Date(lastSyncAt).toLocaleTimeString()}</span>
+          )}
+        </div>
+      )}
 
       {showAbout && (
         <div className="glass-panel-solid p-3 text-[11px] text-surface-400 space-y-1.5">
@@ -151,6 +190,12 @@ export default function InstanceGrabberPage() {
           <p>
             Portals are the one thing you can act on later: the instance behind a portal
             outlives the portal itself, so a logged one stays joinable long after it closes.
+          </p>
+          <p>
+            <span className="text-surface-300">Sync from VRChat</span> is the other half: the log
+            can only guess what a file is from the words around it, which is why things pile up
+            under "Images". Your inventory and prints state their own types, so a sync gives
+            everything its real category and fills in names, authors and worlds.
           </p>
         </div>
       )}

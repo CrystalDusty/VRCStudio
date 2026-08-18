@@ -12,6 +12,8 @@ const eventTitles: Record<NotifEventType, string> = {
   friend_add: 'New Friend',
   friend_remove: 'Friend Removed',
   world_visit: 'World Visit',
+  group_update: 'Group Update',
+  instance_queue: 'Instance Queue',
 };
 
 const settingsKeyMap: Partial<Record<NotifEventType, keyof ReturnType<typeof useSettingsStore.getState>['settings']['notifications']>> = {

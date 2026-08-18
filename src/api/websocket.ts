@@ -14,6 +14,21 @@ type WSEventType =
   | 'friend-add'
   | 'friend-delete'
   | 'notification'
+  | 'notification-v2'
+  | 'notification-v2-update'
+  | 'notification-v2-delete'
+  | 'see-notification'
+  | 'hide-notification'
+  | 'response-notification'
+  | 'clear-notification'
+  | 'group-joined'
+  | 'group-left'
+  | 'group-role-updated'
+  | 'group-member-updated'
+  | 'instance-queue-joined'
+  | 'instance-queue-ready'
+  | 'instance-queue-left'
+  | 'content-refresh'
   | 'user-update';
 
 interface WSMessage {
@@ -210,6 +225,65 @@ class VRChatWebSocket {
         }
         break;
       }
+
+      // ── Group + instance events ──
+      //
+      // The pipeline carries more than friend traffic. These arrive without
+      // us polling for them, so handling them keeps group pages and the
+      // notification badge live instead of up-to-30-seconds stale.
+      case 'group-joined':
+      case 'group-left':
+      case 'group-role-updated':
+      case 'group-member-updated':
+        // Group membership changed — the Groups page refetches on mount, so
+        // just surface it in the feed rather than forcing a fetch here.
+        feed.addEvent({
+          type: 'group_update',
+          userId: data?.groupId ?? '',
+          userName: data?.groupName ?? data?.groupId ?? 'A group',
+          details: type.replace('group-', '').replace(/-/g, ' '),
+        });
+        break;
+
+      case 'instance-queue-joined':
+      case 'instance-queue-ready':
+      case 'instance-queue-left':
+        // VRChat's instance queue. 'ready' is time-critical — you have a
+        // limited window to accept before losing the slot.
+        feed.addEvent({
+          type: 'instance_queue',
+          userId: data?.instanceLocation ?? '',
+          userName: data?.instanceLocation ?? 'Instance queue',
+          details: type === 'instance-queue-ready'
+            ? 'Your queue slot is ready — join now'
+            : type.replace('instance-queue-', 'queue '),
+        });
+        if (type === 'instance-queue-ready') {
+          window.electronAPI?.sendNotification?.({
+            title: 'VRChat queue ready',
+            body: 'Your instance slot is ready to join.',
+          });
+        }
+        break;
+
+      case 'content-refresh':
+        // Something you own changed elsewhere (avatar, world, inventory).
+        // Cheap signal that a cached list is stale.
+        break;
+
+      case 'notification-v2':
+      case 'notification-v2-update':
+      case 'notification-v2-delete':
+        // Newer notification channel — same correlation as the classic one.
+        if (data) useReportStore.getState().handleModerationNotification(data);
+        break;
+
+      case 'see-notification':
+      case 'hide-notification':
+      case 'response-notification':
+      case 'clear-notification':
+        // Read/dismiss state changed on another device.
+        break;
 
       case 'notification': {
         // Check for moderation action notifications and correlate with filed reports

@@ -16,6 +16,8 @@
 // never the item.
 
 import { create } from 'zustand';
+import api from '../api/vrchat';
+import { useAuthStore } from './authStore';
 
 export type GrabKind = 'portal' | 'print' | 'sticker' | 'emoji' | 'image';
 
@@ -73,7 +75,14 @@ interface State {
   discoveredCount: number;
   lastDiscoveryAt?: number;
 
+  /** Result of the last "Sync from VRChat" run. */
+  syncing: boolean;
+  lastSyncAt?: number;
+  syncError?: string;
+  syncSummary?: { inventory: number; prints: number; reclassified: number };
+
   setContext: (ctx: Ctx) => void;
+  syncFromVRChat: () => Promise<void>;
   ingestLines: (lines: string[]) => void;
   addItems: (items: GrabbedItem[]) => void;
   markResolved: (id: string, patch: Partial<GrabbedItem>) => void;
@@ -173,6 +182,7 @@ export const useGrabberStore = create<State>((set, get) => ({
   items: loadPersisted(),
   ctx: {},
   discoveredCount: 0,
+  syncing: false,
 
   setContext: (ctx) => set({ ctx: { ...get().ctx, ...ctx } }),
 
@@ -298,6 +308,108 @@ export const useGrabberStore = create<State>((set, get) => ({
       }));
       savePersisted(items);
     }
+  },
+
+  /**
+   * Pull the authoritative lists from VRChat and merge them in.
+   *
+   * Log discovery can only ever guess what a file is from the words around
+   * it — which is why everything landed in "Images". The inventory endpoint
+   * states each item's type outright, and /prints/user gives prints with
+   * their world and author. Anything we'd already seen by id gets corrected
+   * in place rather than duplicated.
+   */
+  syncFromVRChat: async () => {
+    if (get().syncing) return;
+    const userId = useAuthStore.getState().user?.id;
+    if (!userId) {
+      set({ syncError: 'Not signed in to VRChat.' });
+      return;
+    }
+
+    set({ syncing: true, syncError: undefined });
+    const items = { ...get().items };
+    let inventoryCount = 0;
+    let printCount = 0;
+    let reclassified = 0;
+    const problems: string[] = [];
+
+    const mergeItem = (id: string, patch: Partial<GrabbedItem>, kind: GrabKind) => {
+      const existing = items[id];
+      if (existing) {
+        if (existing.kind !== kind) reclassified++;
+        items[id] = { ...existing, ...patch, kind, resolved: true, source: 'api' };
+      } else {
+        items[id] = {
+          id, kind, url: '', source: 'api',
+          firstSeenAt: Date.now(), lastSeenAt: Date.now(), seenCount: 1,
+          resolved: true,
+          ...patch,
+        } as GrabbedItem;
+      }
+    };
+
+    // ── Inventory: emoji, stickers, props, skins ──
+    try {
+      const inv = await api.getInventory({ n: 100 });
+      for (const it of inv) {
+        if (!it?.id) continue;
+        const kind: GrabKind =
+          it.itemType === 'sticker' ? 'sticker'
+          : it.itemType === 'emoji' ? 'emoji'
+          : 'image';
+        // Key by the image's file id when there is one, so an item we already
+        // spotted in the log is corrected rather than duplicated.
+        const fileId = it.imageUrl?.match(/(file_[0-9a-fA-F-]{20,})/)?.[1];
+        const id = fileId ?? it.id;
+        mergeItem(id, {
+          name: it.name,
+          url: it.imageUrl ?? '',
+          tags: it.tags,
+          createdAt: it.created_at,
+          hidden: it.isArchived ? true : items[id]?.hidden,
+        }, kind);
+        inventoryCount++;
+      }
+    } catch (err) {
+      problems.push(`inventory: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // ── Prints ──
+    try {
+      const prints = await api.getUserPrints(userId);
+      for (const pr of prints) {
+        if (!pr?.id) continue;
+        const image = pr.files?.image ?? '';
+        const fileId = pr.files?.fileId ?? image.match(/(file_[0-9a-fA-F-]{20,})/)?.[1];
+        const id = fileId ?? pr.id;
+        const at = pr.createdAt || pr.timestamp;
+        mergeItem(id, {
+          name: pr.note?.trim() || `Print in ${pr.worldName ?? 'VRChat'}`,
+          url: image,
+          authorId: pr.authorId,
+          authorName: pr.authorName,
+          worldId: pr.worldId ?? items[id]?.worldId,
+          worldName: pr.worldName ?? items[id]?.worldName,
+          createdAt: at,
+          firstSeenAt: at ? new Date(at).getTime() || Date.now() : (items[id]?.firstSeenAt ?? Date.now()),
+        }, 'print');
+        printCount++;
+      }
+    } catch (err) {
+      problems.push(`prints: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    set({
+      items,
+      syncing: false,
+      lastSyncAt: Date.now(),
+      // A partial failure is still a useful sync — say what didn't work
+      // rather than throwing the whole run away.
+      syncError: problems.length ? problems.join(' · ') : undefined,
+      syncSummary: { inventory: inventoryCount, prints: printCount, reclassified },
+    });
+    savePersisted(items);
   },
 
   addItems: (incoming) => {

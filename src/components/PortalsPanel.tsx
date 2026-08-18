@@ -10,11 +10,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Compass, Loader2, Check, AlertCircle, ExternalLink, Copy, LogIn,
-  Trash2, Clock, User as UserIcon,
+  Trash2, Clock, User as UserIcon, Users, DoorClosed, ShieldAlert, Hourglass,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { useGrabberStore, type GrabbedItem } from '../stores/grabberStore';
 import api from '../api/vrchat';
+import type { VRCInstanceDetail } from '../types/vrchat';
 
 const TYPE_COLORS: Record<string, string> = {
   public:   'bg-green-500/15 text-green-400 border-green-500/30',
@@ -34,6 +35,10 @@ export default function PortalsPanel({ portals }: { portals: GrabbedItem[] }) {
   const [joined, setJoined] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState<string | null>(null);
+  // Live occupancy per portal, so you can see it's full or closed before
+  // spending an invite on it.
+  const [live, setLive] = useState<Record<string, VRCInstanceDetail | null>>({});
+  const [checking, setChecking] = useState<string | null>(null);
 
   // Resolve world names so the list reads like places rather than IDs.
   useEffect(() => {
@@ -71,6 +76,20 @@ export default function PortalsPanel({ portals }: { portals: GrabbedItem[] }) {
     () => [...portals].sort((a, b) => b.lastSeenAt - a.lastSeenAt),
     [portals],
   );
+
+  /** Ask VRChat whether that instance is still alive and has room. */
+  const checkLive = async (portal: GrabbedItem) => {
+    if (!portal.targetWorldId || !portal.targetInstanceTail) return;
+    setChecking(portal.id);
+    try {
+      const detail = await api.getInstanceDetail(portal.targetWorldId, portal.targetInstanceTail);
+      setLive(prev => ({ ...prev, [portal.id]: detail }));
+    } catch {
+      // A 404 here is meaningful: the instance is gone, not an app error.
+      setLive(prev => ({ ...prev, [portal.id]: null }));
+    }
+    setChecking(null);
+  };
 
   const join = async (portal: GrabbedItem) => {
     if (!portal.targetWorldId || joining) return;
@@ -170,6 +189,13 @@ export default function PortalsPanel({ portals }: { portals: GrabbedItem[] }) {
                   {portal.seenCount > 1 && <span className="text-surface-600">· {portal.seenCount}×</span>}
                 </div>
 
+                <InstanceState
+                  detail={live[portal.id]}
+                  loading={checking === portal.id}
+                  known={portal.id in live}
+                  onCheck={() => void checkLive(portal)}
+                />
+
                 <button
                   onClick={() => copy(`${portal.targetWorldId}:${portal.targetInstanceTail ?? portal.targetInstanceId}`, portal.id)}
                   className="font-mono text-[10px] text-surface-600 hover:text-surface-300 mt-1 inline-flex items-center gap-1 break-all text-left"
@@ -228,5 +254,72 @@ export default function PortalsPanel({ portals }: { portals: GrabbedItem[] }) {
         );
       })}
     </div>
+  );
+}
+
+/** Occupancy / queue / closure for a portal's destination. */
+function InstanceState({ detail, loading, known, onCheck }: {
+  detail: VRCInstanceDetail | null | undefined;
+  loading: boolean;
+  known: boolean;
+  onCheck: () => void;
+}) {
+  if (loading) {
+    return (
+      <p className="text-[11px] text-surface-500 mt-1 flex w-fit items-center gap-1.5">
+        <Loader2 size={10} className="animate-spin" /> checking the instance…
+      </p>
+    );
+  }
+
+  if (!known) {
+    return (
+      <button
+        onClick={onCheck}
+        className="text-[11px] text-accent-400 hover:text-accent-300 mt-1 flex w-fit items-center gap-1"
+      >
+        <Users size={10} /> Check if it's still open
+      </button>
+    );
+  }
+
+  // null = VRChat wouldn't serve it, which for an instance means it's gone.
+  if (!detail) {
+    return (
+      <p className="text-[11px] text-surface-500 mt-1 flex w-fit items-center gap-1.5">
+        <DoorClosed size={10} className="text-amber-400" />
+        That instance has closed — the invite would fail.
+      </p>
+    );
+  }
+
+  const users = detail.userCount ?? detail.n_users;
+  const closed = !!detail.closedAt || detail.hardClose;
+  const full = detail.full || (detail.hasCapacityForYou === false);
+
+  return (
+    <p className="text-[11px] mt-1 flex items-center gap-2.5 flex-wrap">
+      {closed ? (
+        <span className="text-amber-400 inline-flex items-center gap-1">
+          <DoorClosed size={10} /> closed
+        </span>
+      ) : (
+        <span className={full ? 'text-amber-400' : 'text-green-400'}>
+          <Users size={10} className="inline mr-1" />
+          {users ?? '?'}{detail.capacity ? `/${detail.capacity}` : ''} {full ? '· full' : '· open'}
+        </span>
+      )}
+      {detail.queueEnabled && (
+        <span className="text-surface-400 inline-flex items-center gap-1">
+          <Hourglass size={10} /> queue{detail.queueSize ? ` of ${detail.queueSize}` : ''}
+        </span>
+      )}
+      {detail.ageGate && (
+        <span className="text-surface-400 inline-flex items-center gap-1">
+          <ShieldAlert size={10} /> age-gated
+        </span>
+      )}
+      {detail.region && <span className="text-surface-600 uppercase">{detail.region}</span>}
+    </p>
   );
 }

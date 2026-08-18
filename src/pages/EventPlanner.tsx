@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
   CalendarPlus, Clock, MapPin, Users, Trash2, Edit3, Check, X,
-  Bell, Globe, Send, ChevronDown, Plus,
+  Bell, Globe, Send, ChevronDown, Plus, CalendarDays, AlertCircle,
 } from 'lucide-react';
 import { format, formatDistanceToNow, isPast, isFuture, addHours } from 'date-fns';
 import api from '../api/vrchat';
@@ -104,6 +104,26 @@ export default function EventPlannerPage() {
   const [inviteeNames, setInviteeNames] = useState<string[]>([]);
   const [remindBefore, setRemindBefore] = useState(15);
   const [colorIndex, setColorIndex] = useState(0);
+
+  // ── VRChat's own group calendar ──
+  // Everything above this line is our own local planner. VRChat runs a real
+  // events system for groups, and until now the page ignored it entirely.
+  const [vrcEvents, setVrcEvents] = useState<any[] | null>(null);
+  const [vrcLoading, setVrcLoading] = useState(false);
+  const [vrcError, setVrcError] = useState<string | null>(null);
+  const [vrcTab, setVrcTab] = useState<'following' | 'featured'>('following');
+
+  useEffect(() => {
+    let cancelled = false;
+    setVrcLoading(true);
+    setVrcError(null);
+    const load = vrcTab === 'following' ? api.getCalendarFollowing(30) : api.getCalendarFeatured(30);
+    load
+      .then(rows => { if (!cancelled) setVrcEvents(Array.isArray(rows) ? rows : []); })
+      .catch(err => { if (!cancelled) setVrcError(err instanceof Error ? err.message : String(err)); })
+      .finally(() => { if (!cancelled) setVrcLoading(false); });
+    return () => { cancelled = true; };
+  }, [vrcTab]);
 
   // Reminder notification system
   useEffect(() => {
@@ -235,6 +255,78 @@ export default function EventPlannerPage() {
         <button onClick={openCreate} className="btn-primary text-sm flex items-center gap-1.5">
           <Plus size={14} /> New Event
         </button>
+      </div>
+
+      {/* VRChat's group events — read-only, straight from their calendar */}
+      <div className="glass-panel-solid p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="text-sm font-bold flex items-center gap-2">
+              <CalendarDays size={15} className="text-accent-400" /> VRChat group events
+            </h2>
+            <p className="text-xs text-surface-500 mt-0.5">
+              Real events from VRChat's calendar — separate from your own planner below
+            </p>
+          </div>
+          <div className="flex gap-1">
+            {(['following', 'featured'] as const).map(t => (
+              <button
+                key={t}
+                onClick={() => setVrcTab(t)}
+                className={`text-xs px-2.5 py-1 rounded font-medium capitalize transition-colors ${
+                  vrcTab === t ? 'bg-accent-500/20 text-accent-300' : 'text-surface-500 hover:text-surface-300'
+                }`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {vrcLoading ? (
+          <p className="text-xs text-surface-500 flex items-center gap-1.5 py-3">
+            <Clock size={12} className="animate-spin" /> Loading VRChat's calendar…
+          </p>
+        ) : vrcError ? (
+          <p className="text-xs text-amber-400 flex items-start gap-1.5 py-2">
+            <AlertCircle size={12} className="mt-0.5 flex-shrink-0" />
+            <span>Couldn't load VRChat's calendar ({vrcError}).</span>
+          </p>
+        ) : !vrcEvents || vrcEvents.length === 0 ? (
+          <p className="text-xs text-surface-500 py-2">
+            {vrcTab === 'following'
+              ? "No upcoming events from groups you follow."
+              : 'No featured events right now.'}
+          </p>
+        ) : (
+          <div className="space-y-1.5 max-h-72 overflow-y-auto">
+            {vrcEvents.slice(0, 20).map((e: any, i: number) => {
+              const startsAt = e.startsAt ?? e.startTime ?? e.starts_at;
+              const when = startsAt ? new Date(startsAt) : null;
+              return (
+                <div key={e.id ?? i} className="flex items-start gap-2.5 p-2 rounded-lg bg-surface-800/40">
+                  {e.imageUrl && (
+                    <img src={e.imageUrl} alt="" className="w-10 h-10 rounded object-cover flex-shrink-0" loading="lazy" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-medium truncate">{e.title ?? e.name ?? 'Untitled event'}</div>
+                    <div className="text-[10px] text-surface-500 truncate">
+                      {e.ownerName ?? e.groupName ?? ''}
+                      {when && !isNaN(when.getTime()) && (
+                        <> · {format(when, 'EEE d MMM, HH:mm')} · {formatDistanceToNow(when, { addSuffix: true })}</>
+                      )}
+                    </div>
+                  </div>
+                  {e.isFollowing !== undefined && (
+                    <span className="text-[9px] uppercase tracking-wider text-surface-600 flex-shrink-0">
+                      {e.isFollowing ? 'following' : ''}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Next event countdown */}

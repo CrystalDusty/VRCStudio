@@ -1,9 +1,9 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   Flag, MapPin, ClipboardList, ChevronRight, ChevronLeft,
   Check, AlertTriangle, Clock, Copy, ExternalLink, Trash2,
   Download, CheckCircle, XCircle, HelpCircle, FileText,
-  ChevronDown, ChevronUp, Edit3, Globe, Users, LogIn, Search, MessageSquare,
+  ChevronDown, ChevronUp, Edit3, Globe, Users, LogIn, Search, MessageSquare, Send,
 } from 'lucide-react';
 import api from '../api/vrchat';
 import { format, formatDistanceToNow, isToday, isYesterday } from 'date-fns';
@@ -367,6 +367,30 @@ function ReportWizardTab({ prefillInstance }: {
   const { addReport } = useReportStore();
   const [copied, setCopied] = useState(false);
   const [filed, setFiled] = useState(false);
+  // Direct submission through VRChat's own moderation endpoint, as an
+  // alternative to pasting into the help centre.
+  const [submitting, setSubmitting] = useState(false);
+  const [apiResult, setApiResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [liveCategories, setLiveCategories] = useState<Array<{ key: string; label: string }> | null>(null);
+
+  // VRChat publishes its live report categories in /config. Ours are a
+  // friendlier taxonomy; this maps onto whatever the API actually accepts.
+  useEffect(() => {
+    let cancelled = false;
+    api.getConfig()
+      .then(cfg => {
+        if (cancelled) return;
+        const opts = cfg?.reportOptions?.user ?? cfg?.reportOptions?.User;
+        if (!opts || typeof opts !== 'object') return;
+        const descriptions = cfg?.reportCategories ?? {};
+        setLiveCategories(Object.keys(opts).map(key => ({
+          key,
+          label: (descriptions as any)?.[key]?.text ?? key.replace(/[_-]/g, ' '),
+        })));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   const [scenarioQuery, setScenarioQuery] = useState('');
   const [browseCategories, setBrowseCategories] = useState(false);
 
@@ -417,8 +441,8 @@ function ReportWizardTab({ prefillInstance }: {
     update({ step: w.step - 1 });
   }
 
-  function submitReport() {
-    const report: FiledReport = {
+  function buildReport(): FiledReport {
+    return {
       id: `rpt_${Date.now()}_${Math.random().toString(36).slice(2)}`,
       reportType: w.reportType,
       targetId: w.targetId,
@@ -439,10 +463,51 @@ function ReportWizardTab({ prefillInstance }: {
       status: 'filed',
       witnesses: w.witnesses || undefined,
     };
-    addReport(report);
+  }
+
+  function submitReport() {
+    addReport(buildReport());
     setFiled(true);
     openReportUrl();
     update({ step: 6 });
+  }
+
+  /**
+   * Send the report to VRChat directly. Only offered when we have the target's
+   * id — the endpoint identifies content by id, not by display name.
+   */
+  async function submitViaApi() {
+    if (!w.targetId || submitting) return;
+    setSubmitting(true);
+    setApiResult(null);
+    try {
+      // Prefer a live category whose name resembles ours; fall back to the
+      // raw category key, which is what the endpoint documents.
+      const ours = (w.violationCategory || 'other').toString();
+      const match = liveCategories?.find(c =>
+        c.key.toLowerCase() === ours.toLowerCase() ||
+        c.label.toLowerCase().includes(ours.split('_')[0]),
+      );
+      await api.submitModerationReport({
+        category: match?.key ?? ours,
+        reason: w.generatedText.slice(0, 4000),
+        contentType: w.reportType === 'group' ? 'group' : 'user',
+        contentId: w.targetId,
+      });
+      const report: FiledReport = buildReport();
+      addReport({ ...report, userNotes: 'Submitted directly through VRChat\'s API.' });
+      setApiResult({ ok: true, message: 'Sent to VRChat. It will show up in your report history there.' });
+      setFiled(true);
+      update({ step: 6 });
+    } catch (err) {
+      setApiResult({
+        ok: false,
+        message: err instanceof Error
+          ? `VRChat refused the report (${err.message}). The help-centre route below still works.`
+          : 'VRChat refused the report. The help-centre route below still works.',
+      });
+    }
+    setSubmitting(false);
   }
 
   function reset() {
@@ -826,9 +891,48 @@ function ReportWizardTab({ prefillInstance }: {
             onChange={e => update({ generatedText: e.target.value })}
             className="w-full h-72 bg-surface-900 border border-surface-700 rounded-xl p-3 text-sm font-mono resize-none focus:outline-none focus:border-accent-500"
           />
-          <div className="text-xs text-surface-500 bg-surface-800/50 rounded-lg p-3 flex items-start gap-2">
-            <AlertTriangle size={14} className="text-amber-400 flex-shrink-0 mt-0.5" />
-            <span>Clicking "Submit Report" will save this report to your history and open the VRChat help center in your browser. Copy the text above and paste it into the form.</span>
+          {/* Two ways out: VRChat's own endpoint, or the help centre. */}
+          <div className="space-y-2">
+            <div className="rounded-lg border border-surface-700 p-3 space-y-2">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold flex items-center gap-1.5">
+                    <Send size={13} className="text-accent-400" /> Send to VRChat directly
+                  </div>
+                  <p className="text-xs text-surface-500 mt-0.5">
+                    Files it through VRChat's moderation endpoint — no copying, no browser.
+                    {!w.targetId && ' Needs the target\'s ID, which isn\'t filled in.'}
+                  </p>
+                </div>
+                <button
+                  onClick={submitViaApi}
+                  disabled={!w.targetId || submitting}
+                  className="btn-primary text-sm flex items-center gap-1.5 disabled:opacity-40 flex-shrink-0"
+                >
+                  {submitting ? <Clock size={14} className="animate-spin" /> : <Send size={14} />}
+                  {submitting ? 'Sending…' : 'Submit to VRChat'}
+                </button>
+              </div>
+              {liveCategories && (
+                <p className="text-[10px] text-surface-600">
+                  Using VRChat's live category list ({liveCategories.length} categories from /config).
+                </p>
+              )}
+              {apiResult && (
+                <p className={`text-xs flex items-start gap-1.5 ${apiResult.ok ? 'text-green-400' : 'text-amber-400'}`}>
+                  {apiResult.ok ? <CheckCircle size={13} className="mt-0.5 flex-shrink-0" /> : <AlertTriangle size={13} className="mt-0.5 flex-shrink-0" />}
+                  <span>{apiResult.message}</span>
+                </p>
+              )}
+            </div>
+
+            <div className="text-xs text-surface-500 bg-surface-800/50 rounded-lg p-3 flex items-start gap-2">
+              <AlertTriangle size={14} className="text-amber-400 flex-shrink-0 mt-0.5" />
+              <span>
+                Or use the help centre: "Submit Report" saves this to your history and opens
+                VRChat's form in your browser — paste the text above into it.
+              </span>
+            </div>
           </div>
         </div>
       )}

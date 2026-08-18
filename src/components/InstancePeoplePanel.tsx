@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search, Loader2, UserPlus, UserMinus, Star, StarOff, Send, ExternalLink,
   Copy, Check, StickyNote, RefreshCw, AlertCircle, Users, Shirt, X, Flag,
+  Hand, UsersRound, VolumeX, Ban,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useInstanceAvatarsStore, type PlayerAvatar } from '../stores/instanceAvatarsStore';
@@ -34,6 +35,8 @@ interface Person {
   avatarName?: string;
   rank?: PlayerAvatar['rank'];
   user?: VRCUser;          // full profile, when we have it
+  /** block / mute / hideAvatar entries you already have against them. */
+  moderations?: string[];
   status?: string;
   statusDescription?: string;
   bio?: string;
@@ -60,8 +63,32 @@ export default function InstancePeoplePanel() {
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
   const [failedNames, setFailedNames] = useState<Set<string>>(new Set());
   const [autoLoad, setAutoLoad] = useState(false);
+  // One call for every private note beats one call per person.
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  // Your block/mute list, so people you've already moderated are obvious.
+  const [moderations, setModerations] = useState<Record<string, string[]>>({});
   const queueRef = useRef<string[]>([]);
   const runningRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getAllUserNotes(100).then(rows => {
+      if (cancelled) return;
+      const map: Record<string, string> = {};
+      for (const r of rows) if (r?.targetUserId) map[r.targetUserId] = r.note ?? '';
+      setNotes(map);
+    }).catch(() => {});
+    api.getPlayerModerations().then(rows => {
+      if (cancelled) return;
+      const map: Record<string, string[]> = {};
+      for (const r of rows) {
+        if (!r?.targetUserId) continue;
+        (map[r.targetUserId] ??= []).push(r.type);
+      }
+      setModerations(map);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   const friendByName = useMemo(() => {
     const m = new Map<string, VRCUser>();
@@ -88,6 +115,9 @@ export default function InstancePeoplePanel() {
           bio: user?.bio,
           trust: user?.tags ? getTrustRank(user.tags) : undefined,
           imageUrl: user?.profilePicOverride || user?.currentAvatarThumbnailImageUrl || user?.userIcon,
+          moderations: (p.userId ?? friend?.id ?? fetched?.id)
+            ? moderations[(p.userId ?? friend?.id ?? fetched?.id)!]
+            : undefined,
           loading: loadingIds.has(p.playerName),
           failed: failedNames.has(p.playerName),
         } satisfies Person;
@@ -97,7 +127,7 @@ export default function InstancePeoplePanel() {
         if (a.isFriend !== b.isFriend) return a.isFriend ? -1 : 1;
         return a.name.localeCompare(b.name);
       });
-  }, [byPlayer, friendByName, profiles, loadingIds, failedNames, me?.displayName]);
+  }, [byPlayer, friendByName, profiles, loadingIds, failedNames, moderations, me?.displayName]);
 
   /**
    * Pull one person's profile. Uses the user ID from the log when there is
@@ -182,6 +212,7 @@ export default function InstancePeoplePanel() {
       const hay = [
         p.name, p.userId, p.status, p.statusDescription, p.bio,
         p.trust, p.avatarName, p.isFriend ? 'friend' : '', p.rank,
+        ...(p.moderations ?? []),
       ].filter(Boolean).join(' ').toLowerCase();
       return terms.every(t => hay.includes(t));
     });
@@ -276,6 +307,12 @@ export default function InstancePeoplePanel() {
                   {p.isLocal && <Tag className="bg-accent-500/15 text-accent-300 border-accent-500/30">you</Tag>}
                   {p.isFriend && !p.isLocal && <Tag className="bg-green-500/15 text-green-400 border-green-500/30">friend</Tag>}
                   {p.trust && <Tag className={RANK_COLORS[p.trust]}>{p.trust}</Tag>}
+                  {p.moderations?.includes('block') && (
+                    <Tag className="bg-rose-500/15 text-rose-400 border-rose-500/30">blocked</Tag>
+                  )}
+                  {p.moderations?.includes('mute') && (
+                    <Tag className="bg-amber-500/15 text-amber-400 border-amber-500/30">muted</Tag>
+                  )}
                   {p.loading && <Loader2 size={10} className="animate-spin text-surface-500" />}
                 </div>
                 <div className="text-[10px] text-surface-500 truncate">
@@ -291,6 +328,7 @@ export default function InstancePeoplePanel() {
           ? <PersonDetail
               key={selected.name}
               person={selected}
+              presetNote={selected.userId ? notes[selected.userId] : undefined}
               onClose={() => setSelectedName(null)}
               onRetry={() => {
                 failedLookups.delete(selected.name);
@@ -314,8 +352,10 @@ export default function InstancePeoplePanel() {
 
 // ── Detail panel ────────────────────────────────────────────────────────
 
-function PersonDetail({ person, onClose, onRetry }: {
+function PersonDetail({ person, presetNote, onClose, onRetry }: {
   person: Person;
+  /** Note preloaded from the bulk /userNotes call. */
+  presetNote?: string;
   onClose: () => void;
   onRetry: () => void;
 }) {
@@ -323,8 +363,10 @@ function PersonDetail({ person, onClose, onRetry }: {
   const currentInstance = useInstanceHistoryStore(s => s.currentInstance);
   const { addFavorite, removeFavorite, isFavorite } = useFavoriteStore();
 
-  const [note, setNote] = useState('');
-  const [noteLoaded, setNoteLoaded] = useState(false);
+  const [note, setNote] = useState(presetNote ?? '');
+  const [noteLoaded, setNoteLoaded] = useState(presetNote !== undefined);
+  const [mutuals, setMutuals] = useState<{ friends: number; groups: number } | null>(null);
+  const [mutualsLoading, setMutualsLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -340,6 +382,20 @@ function PersonDetail({ person, onClose, onRetry }: {
       .then(r => { setNote(r?.note ?? ''); setNoteLoaded(true); })
       .catch(() => setNoteLoaded(true));
   }, [userId, noteLoaded]);
+
+  // What you have in common — the most useful thing to know about a stranger.
+  useEffect(() => {
+    if (!userId || person.isLocal || mutuals || mutualsLoading) return;
+    setMutualsLoading(true);
+    Promise.allSettled([api.getMutualFriends(userId), api.getMutualGroups(userId)])
+      .then(([f, g]) => {
+        setMutuals({
+          friends: f.status === 'fulfilled' ? (f.value?.length ?? 0) : 0,
+          groups: g.status === 'fulfilled' ? (g.value?.length ?? 0) : 0,
+        });
+      })
+      .finally(() => setMutualsLoading(false));
+  }, [userId, person.isLocal, mutuals, mutualsLoading]);
 
   const flash = (key: string) => {
     setDone(key);
@@ -421,6 +477,44 @@ function PersonDetail({ person, onClose, onRetry }: {
         </div>
       )}
 
+      {!person.isLocal && (mutuals || mutualsLoading) && (
+        <div className="text-[11px] text-surface-500 flex items-center gap-1.5">
+          <UsersRound size={11} />
+          {mutualsLoading && !mutuals ? (
+            <span className="inline-flex items-center gap-1"><Loader2 size={10} className="animate-spin" /> checking mutuals…</span>
+          ) : (mutuals!.friends + mutuals!.groups) === 0 ? (
+            <span>No mutual friends or groups</span>
+          ) : (
+            <span>
+              <span className="text-surface-300">{mutuals!.friends}</span> mutual friend{mutuals!.friends === 1 ? '' : 's'}
+              {' · '}
+              <span className="text-surface-300">{mutuals!.groups}</span> shared group{mutuals!.groups === 1 ? '' : 's'}
+            </span>
+          )}
+        </div>
+      )}
+
+      {person.moderations && person.moderations.length > 0 && userId && (
+        <div className="text-[11px] rounded-lg bg-surface-800/50 p-2 space-y-1.5">
+          <p className="text-surface-300 flex items-center gap-1.5">
+            {person.moderations.includes('block')
+              ? <><Ban size={11} className="text-rose-400" /> You have this person blocked</>
+              : <><VolumeX size={11} className="text-amber-400" /> You have this person muted</>}
+          </p>
+          <div className="flex gap-1.5 flex-wrap">
+            {person.moderations.map(t => (
+              <button
+                key={t}
+                onClick={() => run(`un-${t}`, () => api.unPlayerModerate(userId, t))}
+                className="text-[10px] px-2 py-0.5 rounded border border-surface-700 text-surface-300 hover:border-surface-600"
+              >
+                {done === `un-${t}` ? 'Done' : `Undo ${t}`}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Private note — the most useful per-person setting there is */}
       {userId && !person.isLocal && (
         <div>
@@ -496,6 +590,14 @@ function PersonDetail({ person, onClose, onRetry }: {
                   setCopied(true);
                   setTimeout(() => setCopied(false), 1500);
                 }}
+              />
+            )}
+            {userId && (
+              <Action
+                icon={done === 'boop' ? Check : Hand}
+                label={done === 'boop' ? 'Booped' : 'Boop'}
+                busy={busy === 'boop'}
+                onClick={() => run('boop', () => api.boopUser(userId))}
               />
             )}
             {userId && (

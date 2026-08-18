@@ -167,7 +167,8 @@ export interface VRCGroup {
 export interface FeedEvent {
   id: string;
   type: 'friend_online' | 'friend_offline' | 'friend_location' | 'friend_status'
-    | 'friend_avatar' | 'friend_add' | 'friend_remove' | 'world_visit';
+    | 'friend_avatar' | 'friend_add' | 'friend_remove' | 'world_visit'
+    | 'group_update' | 'instance_queue';
   userId?: string;
   userName?: string;
   userAvatar?: string;
@@ -298,4 +299,95 @@ export interface FiledReport {
   actionNotificationId?: string;
   userNotes?: string;
   witnesses?: string;
+}
+
+// ─── Inventory / prints / instances ───────────────────────────────────────
+//
+// Shapes taken from the community OpenAPI spec (vrchat SDK 2.22.8, Aug 2026).
+// Everything optional that we don't strictly need, so a field VRChat renames
+// degrades to "missing" rather than breaking a page.
+
+export type VRCInventoryItemType =
+  | 'bundle' | 'droneskin' | 'emoji' | 'portalskin' | 'prop' | 'sticker' | 'warpeffect';
+
+export interface VRCInventoryItem {
+  id: string;
+  name: string;
+  description?: string;
+  itemType: VRCInventoryItemType;
+  itemTypeLabel?: string;
+  imageUrl?: string;
+  holderId?: string;
+  templateId?: string;
+  collections?: string[];
+  tags?: string[];
+  flags?: string[];
+  isArchived?: boolean;
+  isSeen?: boolean;
+  quantifiable?: boolean;
+  expiryDate?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface VRCPrint {
+  id: string;
+  authorId: string;
+  authorName: string;
+  note?: string;
+  worldId?: string;
+  worldName?: string;
+  createdAt?: string;
+  timestamp?: string;
+  ownerId?: string;
+  files?: {
+    fileId?: string;
+    /** Direct image URL, e.g. https://api.vrchat.cloud/api/1/file/file_x/1/file */
+    image?: string;
+  };
+}
+
+/** The instance fields our own VRCInstance type was missing. */
+export interface VRCInstanceDetail {
+  id?: string;
+  instanceId?: string;
+  worldId?: string;
+  name?: string;
+  displayName?: string;
+  type?: string;
+  ownerId?: string;
+  region?: string;
+  photonRegion?: string;
+  capacity?: number;
+  recommendedCapacity?: number;
+  n_users?: number;
+  userCount?: number;
+  full?: boolean;
+  hasCapacityForYou?: boolean;
+  queueEnabled?: boolean;
+  queueSize?: number;
+  closedAt?: string | null;
+  hardClose?: boolean;
+  ageGate?: boolean;
+  roleRestricted?: boolean;
+  strict?: boolean;
+  active?: boolean;
+  canRequestInvite?: boolean;
+  platforms?: Record<string, number>;
+  shortName?: string;
+  secureName?: string;
+  groupAccessType?: string;
+  tags?: string[];
+  world?: VRCWorld;
+}
+
+/** GET /config — VRChat's own live constants. */
+export interface VRCAPIConfig {
+  /** Report categories keyed by content type, e.g. reportOptions.user.<category>. */
+  reportOptions?: Record<string, Record<string, unknown>>;
+  /** Human descriptions for the above. */
+  reportCategories?: Record<string, { text?: string; tooltip?: string; description?: string }>;
+  reportReasons?: Record<string, unknown>;
+  [key: string]: unknown;
 }
