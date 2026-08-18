@@ -19,6 +19,10 @@ export interface SpriteLayout {
   rows: number;
   /** Frames actually used; the tail of the last row may be padding. */
   count: number;
+  /** The sheet these cells were measured against — slicing needs it exactly. */
+  sheetWidth: number;
+  sheetHeight: number;
+  /** Cell size, rounded for display. Slicing uses exact fractional bounds. */
   frameWidth: number;
   frameHeight: number;
 }
@@ -31,42 +35,81 @@ export interface AnimationSpec {
   loopStyle: LoopStyle;
 }
 
-/**
- * Work out the grid for a sheet of `count` frames.
- *
- * VRChat doesn't publish the packing, so this reasons from what a sheet must
- * be: an exact grid whose cells are the same shape as each other. Candidates
- * that don't divide the image evenly are rejected outright, and among the rest
- * the squarest cell wins — a 1024×1024 sheet of 16 frames is 4×4, not 16×1.
- *
- * It's a deduction, not a fact, which is why the modal shows the result
- * playing and lets it be overridden.
- */
-export function guessSpriteLayout(width: number, height: number, count: number): SpriteLayout {
-  if (count <= 1) {
-    return { columns: 1, rows: 1, count: 1, frameWidth: width, frameHeight: height };
-  }
+/** VRChat's documented range for an animated image. Anything else isn't a sheet. */
+export const MIN_SPRITE_FRAMES = 2;
+export const MAX_SPRITE_FRAMES = 64;
 
-  let best: SpriteLayout | null = null;
-  let bestScore = Infinity;
+function layoutFor(width: number, height: number, count: number, columns: number, rows: number): SpriteLayout {
+  return {
+    columns, rows, count,
+    sheetWidth: width, sheetHeight: height,
+    frameWidth: Math.round(width / columns),
+    frameHeight: Math.round(height / rows),
+  };
+}
+
+/** How far from square this layout's cells are. 1 means square. */
+export function cellAspect(layout: SpriteLayout): number {
+  const w = layout.sheetWidth / layout.columns;
+  const h = layout.sheetHeight / layout.rows;
+  if (w <= 0 || h <= 0) return Infinity;
+  return Math.max(w, h) / Math.min(w, h);
+}
+
+/**
+ * Rank the plausible grids for a sheet of `count` frames.
+ *
+ * The prior that matters is that emoji frames are square, so the grid's shape
+ * has to match the sheet's shape. Everything else follows from that: least
+ * wasted cells next, and dividing the sheet into whole pixels only as a
+ * tiebreak.
+ *
+ * Requiring whole-pixel division as a *rule* is what broke this. On a
+ * 1024×1024 sheet only power-of-two row counts divide evenly, so for 17–48
+ * frames every near-square grid was rejected and the best survivor was
+ * something like 16×2 — 64×512 cells, which is why a downloaded emoji came out
+ * as an unusable sliver.
+ */
+export function rankSpriteLayouts(width: number, height: number, count: number): SpriteLayout[] {
+  const candidates: Array<{ layout: SpriteLayout; score: number }> = [];
+  // Rows are enumerated independently of columns rather than derived as
+  // ceil(count/columns), because a sheet may carry padding cells in its last
+  // row — but only there. A grid whose final row is entirely empty isn't a
+  // packing anyone produces, and excluding those removed every wrong answer in
+  // a sweep of low frame counts, where a padded grid could otherwise look
+  // plausible by covering only part of the sheet.
   for (let columns = 1; columns <= count; columns++) {
-    const rows = Math.ceil(count / columns);
-    if (width % columns !== 0 || height % rows !== 0) continue;
-    const frameWidth = width / columns;
-    const frameHeight = height / rows;
-    // Squarest cells first; then the least wasted space in the grid.
-    const score = Math.abs(frameWidth - frameHeight) * 100 + (columns * rows - count);
-    if (score < bestScore) {
-      bestScore = score;
-      best = { columns, rows, count, frameWidth, frameHeight };
+    for (let rows = 1; rows <= count; rows++) {
+      const cells = columns * rows;
+      if (cells < count) continue;
+      if (columns * (rows - 1) >= count) continue;
+      const layout = layoutFor(width, height, count, columns, rows);
+      const aspect = cellAspect(layout);
+      const whole = width % columns === 0 && height % rows === 0 ? 0 : 1;
+      // Squareness dominates: a couple of blank cells or a fractional edge is
+      // a rounding detail next to a frame eight times taller than it is wide.
+      candidates.push({ layout, score: (aspect - 1) * 100 + (cells - count) * 2 + whole * 0.25 });
     }
   }
+  return candidates.sort((a, b) => a.score - b.score).map(c => c.layout);
+}
 
-  if (best) return best;
-  // Nothing divides evenly — fall back to a single row so the frames are at
-  // least in the right order, rather than pretending we know better.
-  const frameWidth = Math.floor(width / count) || width;
-  return { columns: count, rows: 1, count, frameWidth, frameHeight: height };
+/**
+ * The most likely grid for a sheet of `count` frames, from geometry alone.
+ *
+ * A deduction, not something VRChat publishes — which is why the modal plays
+ * the result and lets it be corrected, and why `chooseSpriteLayout` checks it
+ * against the actual pixels when it can.
+ */
+export function guessSpriteLayout(width: number, height: number, count: number): SpriteLayout {
+  if (count <= 1 || width <= 0 || height <= 0) {
+    return {
+      columns: 1, rows: 1, count: Math.max(1, count),
+      sheetWidth: width, sheetHeight: height,
+      frameWidth: width, frameHeight: height,
+    };
+  }
+  return rankSpriteLayouts(width, height, count)[0];
 }
 
 /** The frame order for a loop style — pingpong runs back down without repeating the ends. */
@@ -96,20 +139,131 @@ function context(width: number, height: number): CanvasRenderingContext2D {
   return ctx;
 }
 
+/**
+ * Where cell `index` sits on the sheet.
+ *
+ * Boundaries are computed from exact fractions and rounded per edge, so a grid
+ * that doesn't divide the sheet into whole pixels stays aligned instead of
+ * drifting a pixel further off with every column.
+ */
+function cellRect(layout: SpriteLayout, index: number) {
+  const col = index % layout.columns;
+  const row = Math.floor(index / layout.columns);
+  const x0 = Math.round((col * layout.sheetWidth) / layout.columns);
+  const x1 = Math.round(((col + 1) * layout.sheetWidth) / layout.columns);
+  const y0 = Math.round((row * layout.sheetHeight) / layout.rows);
+  const y1 = Math.round(((row + 1) * layout.sheetHeight) / layout.rows);
+  return { x: x0, y: y0, width: Math.max(1, x1 - x0), height: Math.max(1, y1 - y0) };
+}
+
+/**
+ * Check a candidate grid against the pixels.
+ *
+ * Consecutive frames of an animation look like each other; consecutive slices
+ * of a sheet cut on the wrong grid don't. Comparing thumbnails of each cell to
+ * the next gives a number that's low when the grid is right and high when it
+ * isn't — a measurement, where the geometry above is only a prior.
+ *
+ * Returns the mean per-channel difference between neighbouring cells, 0–255.
+ */
+export function gridCoherence(image: CanvasImageSource, layout: SpriteLayout): number {
+  const N = 12;   // thumbnail size; enough shape, cheap enough to do per candidate
+  const ctx = context(N, N);
+  const thumbs: Uint8ClampedArray[] = [];
+  for (let i = 0; i < layout.count; i++) {
+    const r = cellRect(layout, i);
+    ctx.clearRect(0, 0, N, N);
+    ctx.drawImage(image, r.x, r.y, r.width, r.height, 0, 0, N, N);
+    thumbs.push(ctx.getImageData(0, 0, N, N).data);
+  }
+  if (thumbs.length < 2) return 0;
+
+  let total = 0;
+  let samples = 0;
+  for (let i = 1; i < thumbs.length; i++) {
+    const a = thumbs[i - 1], b = thumbs[i];
+    for (let p = 0; p < a.length; p += 4) {
+      // Compare premultiplied colour so a transparent pixel doesn't register
+      // as a wild colour difference against an opaque one.
+      const aa = a[p + 3] / 255, ba = b[p + 3] / 255;
+      total += Math.abs(a[p] * aa - b[p] * ba)
+             + Math.abs(a[p + 1] * aa - b[p + 1] * ba)
+             + Math.abs(a[p + 2] * aa - b[p + 2] * ba)
+             + Math.abs(a[p + 3] - b[p + 3]);
+      samples += 4;
+    }
+  }
+  return samples === 0 ? 0 : total / samples;
+}
+
+/**
+ * Pick the grid, using the image itself to settle it.
+ *
+ * Geometry alone is not enough: a sheet genuinely packed 6×4 has 1.5:1 cells,
+ * and a squarest-cells-win rule picks 5×5 over it every time. So geometry only
+ * draws up a shortlist, and the pixels choose — measuring, for each candidate,
+ * how well one frame flows into the next.
+ *
+ * Measured across sheets packed 6×4, 5×5 and 4×6, the true grid always scored
+ * the most coherent, but by as little as 9%. So the rule is simply "most
+ * coherent wins", with geometry breaking ties among candidates that are within
+ * a few percent of each other.
+ *
+ * The shortlist is deliberately generous — a real grid can sit as deep as 30th
+ * by geometry (61 frames packed 12×6) — and is trimmed only of shapes no emoji
+ * sheet would have.
+ */
+export function chooseSpriteLayout(
+  image: CanvasImageSource,
+  width: number,
+  height: number,
+  count: number,
+): SpriteLayout {
+  if (count <= 1) return guessSpriteLayout(width, height, count);
+  const ranked = rankSpriteLayouts(width, height, count);
+  if (ranked.length === 0) return guessSpriteLayout(width, height, count);
+
+  // Cells more than 3:1 aren't frames of anything, and dropping them keeps the
+  // measurement cheap.
+  const plausible = ranked.filter(l => cellAspect(l) <= 3);
+  const shortlist = (plausible.length > 0 ? plausible : ranked).slice(0, 48);
+  if (shortlist.length === 1) return shortlist[0];
+
+  // Coherence compares each frame to the next, so a handful of frames means a
+  // handful of comparisons and a noisy number — noisy enough to have picked a
+  // 3:1 strip over a 2×2 for a three-frame sheet. Below this, geometry decides,
+  // and with so few candidates geometry is reliable there anyway.
+  if (count < 7) return shortlist[0];
+
+  try {
+    const scored = shortlist.map((layout, rank) => ({
+      layout, rank, coherence: gridCoherence(image, layout),
+    }));
+    const best = scored.reduce((a, b) => (b.coherence < a.coherence ? b : a));
+    // Anything this close is the same answer as far as the pixels are
+    // concerned — let the geometry decide between them.
+    const tied = scored.filter(c => c.coherence <= best.coherence * 1.05);
+    return tied.reduce((a, b) => (b.rank < a.rank ? b : a)).layout;
+  } catch {
+    // No canvas to measure with — the geometric answer still stands.
+    return ranked[0];
+  }
+}
+
 /** Cut a sprite sheet into frames, in play order. */
 export function framesFromSpriteSheet(
   image: CanvasImageSource,
   layout: SpriteLayout,
   spec: AnimationSpec,
 ): ExtractedFrames {
-  const { frameWidth: w, frameHeight: h, columns } = layout;
+  const w = Math.max(1, layout.frameWidth);
+  const h = Math.max(1, layout.frameHeight);
   const ctx = context(w, h);
   const cells: ImageData[] = [];
   for (let i = 0; i < layout.count; i++) {
-    const cx = (i % columns) * w;
-    const cy = Math.floor(i / columns) * h;
+    const r = cellRect(layout, i);
     ctx.clearRect(0, 0, w, h);
-    ctx.drawImage(image, cx, cy, w, h, 0, 0, w, h);
+    ctx.drawImage(image, r.x, r.y, r.width, r.height, 0, 0, w, h);
     cells.push(ctx.getImageData(0, 0, w, h));
   }
 

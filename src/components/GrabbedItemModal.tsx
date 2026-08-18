@@ -16,8 +16,9 @@ import {
 } from '../utils/imageExport';
 import { useGrabberStore, type GrabbedItem } from '../stores/grabberStore';
 import {
-  guessSpriteLayout, framesFromSpriteSheet, framesFromAnimatedFile,
+  chooseSpriteLayout, cellAspect, framesFromSpriteSheet, framesFromAnimatedFile,
   supportedVideoFormats, toGif, toVideo,
+  MIN_SPRITE_FRAMES, MAX_SPRITE_FRAMES,
   type ExtractedFrames, type LoopStyle,
 } from '../utils/animation';
 
@@ -90,7 +91,12 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
   }, [item.id, item.spriteFrames, loadAnimationDetails]);
 
   // Two independent ways a thing can move, and an item may be either.
-  const sheetFrames = item.spriteFrames && item.spriteFrames > 1 ? item.spriteFrames : 0;
+  // Outside VRChat's own 2–64 range it isn't a sprite sheet, and slicing on a
+  // bad number is how you get a hundred one-pixel frames.
+  const sheetFrames = item.spriteFrames
+    && item.spriteFrames >= MIN_SPRITE_FRAMES
+    && item.spriteFrames <= MAX_SPRITE_FRAMES
+    ? item.spriteFrames : 0;
   const isSheet = sheetFrames > 0;
   const isAnimatedFile = !!item.animated;
   const movesAtAll = isSheet || isAnimatedFile;
@@ -116,17 +122,22 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
   const layout = useMemo(
     () => {
       if (!loaded || !isSheet) return null;
-      const guess = guessSpriteLayout(loaded.width, loaded.height, sheetFrames);
-      if (!gridOverride) return guess;
+      // Geometry proposes, the pixels settle it — see chooseSpriteLayout.
+      if (!gridOverride) return chooseSpriteLayout(loaded.image, loaded.width, loaded.height, sheetFrames);
       const { columns, rows } = gridOverride;
       return {
         columns, rows, count: sheetFrames,
-        frameWidth: Math.max(1, Math.floor(loaded.width / columns)),
-        frameHeight: Math.max(1, Math.floor(loaded.height / rows)),
+        sheetWidth: loaded.width, sheetHeight: loaded.height,
+        frameWidth: Math.max(1, Math.round(loaded.width / columns)),
+        frameHeight: Math.max(1, Math.round(loaded.height / rows)),
       };
     },
     [loaded, isSheet, sheetFrames, gridOverride],
   );
+  // A legitimate packing tops out around 2:1 — five frames can't fill a square
+  // sheet with square cells. Past that the grid is wrong, and saying so beats
+  // quietly exporting a sliver.
+  const skewed = layout ? cellAspect(layout) > 2.2 : false;
 
   // ── Rebuild the frames ──
   useEffect(() => {
@@ -626,6 +637,13 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                 )}
                 {extractError && (
                   <p className="text-[10px] text-amber-400/80 mt-1">{extractError}</p>
+                )}
+                {skewed && layout && (
+                  <p className="text-[10px] text-amber-400 mt-1">
+                    ⚠ These frames come out {layout.frameWidth}×{layout.frameHeight}, which is too
+                    far from square to be a real frame — the grid below is probably wrong. Nudge it
+                    and watch the preview.
+                  </p>
                 )}
 
                 {/* The grid is deduced from the image size, not published by
