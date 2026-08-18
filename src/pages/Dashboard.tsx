@@ -416,8 +416,6 @@ function getCasualGreeting(
       : `${media.title} is a good pick, ${name}`;
   }
   if (media.active && media.kind === 'music') return `good tunes, ${name}`;
-  if (media.active && media.kind === 'video') return `enjoying the watch, ${name}?`;
-  if (media.active && media.kind === 'call') return `mid-call, ${name}? don't let me interrupt`;
 
   if (joinMeCount > 0) {
     return joinMeCount === 1
@@ -520,22 +518,9 @@ function DashboardGreeting() {
       if (recent) msgs.push({ text: `You just left ${worldLabel}`, sub: `Spent ${Math.round((last.leftAt! - last.joinedAt) / 60000)}m there` });
     }
 
-    // What's making noise, described accurately. A Discord call says call, a
-    // video says video, and only a music player gets called music.
-    if (media.active) {
-      if (media.kind === 'music') {
-        msgs.push({
-          text: media.title ? `Playing: ${media.title}` : 'Music is playing',
-          sub: media.app ? `via ${media.app}` : undefined,
-        });
-      } else if (media.kind === 'video') {
-        msgs.push({
-          text: media.title ? `Watching: ${media.title}` : 'A video is open',
-          sub: media.app ? `via ${media.app}` : undefined,
-        });
-      } else if (media.kind === 'call') {
-        msgs.push({ text: `In a call on ${media.app ?? 'voice chat'}`, sub: 'Sound here is voice, not music' });
-      }
+    // Only mentioned when a music player is genuinely playing a track.
+    if (media.active && media.kind === 'music' && media.title) {
+      msgs.push({ text: `Playing: ${media.title}`, sub: media.app ? `via ${media.app}` : undefined });
     }
 
     if (weather) {

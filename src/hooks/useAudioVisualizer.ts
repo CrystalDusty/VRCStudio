@@ -6,11 +6,15 @@ export interface MediaInfo {
   source: 'spotify' | 'youtube' | null;
   title: string | null;
   /**
-   * What the sound actually is. Anything that isn't 'music' must never be
-   * described as listening to music — a Discord call and VRChat itself both
-   * make noise, and neither is a playlist.
+   * Only ever 'music' or 'unknown'.
+   *
+   * Nothing here listens to audio — it reads window titles. A music player's
+   * title becomes the track when it plays, which is real evidence. No window
+   * title anywhere says whether a voice call is connected or a paused video
+   * is actually running, so those are simply not knowable this way and are
+   * never claimed.
    */
-  kind: 'music' | 'video' | 'call' | 'game' | 'unknown';
+  kind: 'music' | 'unknown';
   app: string | null;
 }
 

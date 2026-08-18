@@ -905,11 +905,14 @@ ipcMain.handle('audio:getDesktopSources', async () => {
 // detection needs the OS media-session API (SMTC on Windows), which is a
 // native module, not a window-title scan.
 
-type MediaKind = 'music' | 'video' | 'call' | 'game' | 'unknown';
+type MediaKind = 'music' | 'unknown';
 
-/** Apps whose window title genuinely means "music is playing". */
+/**
+ * Music players whose window title becomes the track while playing. That
+ * title change IS the evidence — it's the only thing a window-title scan can
+ * honestly prove about audio.
+ */
 const MUSIC_APPS: Array<{ re: RegExp; name: string }> = [
-  { re: /^Spotify$/i,                     name: 'Spotify' },   // idle — title is bare
   { re: /\bSpotify\b/i,                   name: 'Spotify' },
   { re: /\bYouTube Music\b/i,             name: 'YouTube Music' },
   { re: /\bApple Music\b|\biTunes\b/i,   name: 'Apple Music' },
@@ -921,14 +924,19 @@ const MUSIC_APPS: Array<{ re: RegExp; name: string }> = [
   { re: /\bwinamp\b/i,                    name: 'Winamp' },
 ];
 
-/** Things that make sound but are emphatically not music. */
-const NOT_MUSIC = [
-  { re: /\bDiscord\b/i,   kind: 'call'  as MediaKind, name: 'Discord' },
-  { re: /\bVRChat\b/i,    kind: 'game'  as MediaKind, name: 'VRChat' },
-  { re: /\bTeamSpeak\b/i, kind: 'call'  as MediaKind, name: 'TeamSpeak' },
-  { re: /\bZoom\b/i,      kind: 'call'  as MediaKind, name: 'Zoom' },
-  { re: /\bSteam\b/i,     kind: 'game'  as MediaKind, name: 'Steam' },
-];
+/**
+ * Apps that make noise but whose titles prove nothing about it. These are an
+ * EXCLUSION list, never a detection list.
+ *
+ * The previous version treated them as positive signals — a Discord window
+ * existing meant "in a call", a VRChat window meant "game audio". Discord is
+ * open permanently for most people, so the app claimed you were mid-call
+ * forever, and voices in VRChat looked like they were being detected as one.
+ * They weren't: nothing here listens to audio at all. A window being open is
+ * not evidence that it is making a sound, and no window title anywhere says
+ * whether a voice call is connected.
+ */
+const NEVER_MUSIC = /\b(Discord|VRChat|TeamSpeak|Zoom|Steam|OBS|Teams|Slack)\b/i;
 
 ipcMain.handle('audio:detectMedia', async () => {
   const idle = { active: false, source: null, title: null, kind: 'unknown' as MediaKind, app: null };
@@ -939,22 +947,23 @@ ipcMain.handle('audio:detectMedia', async () => {
     });
     const titles = sources.map(s => s.name).filter(Boolean);
 
-    // ── Music ──
     for (const app of MUSIC_APPS) {
-      const hit = titles.find(t => app.re.test(t));
+      const hit = titles.find(t => app.re.test(t) && !NEVER_MUSIC.test(t));
       if (!hit) continue;
 
-      // Spotify's window title IS the track while playing ("Artist - Title")
-      // and is bare ("Spotify", "Spotify Premium") when paused or stopped.
-      const bareIdle = /^Spotify(\s+(Free|Premium))?$/i.test(hit.trim())
-        || /^YouTube Music$/i.test(hit.trim())
-        || new RegExp(`^${app.name}$`, 'i').test(hit.trim());
-      if (bareIdle) continue;   // player open but not playing — not "listening"
+      // A player's title is bare when it's open but idle ("Spotify",
+      // "Spotify Premium", "YouTube Music") and becomes the track when it
+      // plays. Only the second case counts.
+      const trimmed = hit.trim();
+      const bareIdle = /^Spotify(\s+(Free|Premium))?$/i.test(trimmed)
+        || new RegExp(`^${app.name}$`, 'i').test(trimmed);
+      if (bareIdle) continue;
 
-      const title = hit
+      const title = trimmed
         .replace(/\s*[—-]\s*(Spotify|YouTube Music|Apple Music|TIDAL|Deezer).*$/i, '')
         .trim();
-      if (!title || title.length < 2) continue;
+      // A track title needs a separator; a bare word is almost always chrome.
+      if (!title || title.length < 3 || !/[-–—|]/.test(title)) continue;
 
       return {
         active: true,
@@ -965,28 +974,10 @@ ipcMain.handle('audio:detectMedia', async () => {
       };
     }
 
-    // ── Video (a YouTube tab that isn't YouTube Music) ──
-    // Being open is not the same as playing, and a window title can't tell us
-    // which — so this is reported as a video, never as "listening to music".
-    const yt = titles.find(t => /\bYouTube\b/i.test(t) && !/\bYouTube Music\b/i.test(t));
-    if (yt) {
-      return {
-        active: true,
-        source: 'youtube' as const,
-        title: yt.replace(/\s*[-—]\s*(YouTube).*$/i, '').trim(),
-        kind: 'video' as MediaKind,
-        app: 'YouTube',
-      };
-    }
-
-    // ── Voice / game audio ──
-    for (const other of NOT_MUSIC) {
-      const hit = titles.find(t => other.re.test(t));
-      if (hit) {
-        return { active: true, source: null, title: null, kind: other.kind, app: other.name };
-      }
-    }
-
+    // Everything else is unknown, deliberately. A browser tab on YouTube may
+    // be paused; a Discord window says nothing about whether you're in a
+    // call. Reporting either as "active audio" is a guess, and guessing here
+    // is what made the dashboard talk nonsense.
     return idle;
   } catch {
     return idle;
