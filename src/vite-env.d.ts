@@ -46,6 +46,13 @@ interface ElectronAPI {
     data: any;
     raw: string;
   }>;
+  httpGetBinary: (url: string, headers?: Record<string, string>) => Promise<{
+    ok: boolean;
+    status: number;
+    contentType?: string;
+    base64?: string;
+    error?: string;
+  }>;
 
   // Persistent app data
   saveAppData: (key: string, data: string) => Promise<{ success: boolean }>;

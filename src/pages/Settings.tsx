@@ -60,11 +60,22 @@ function DiscordDiagnostics() {
   const user = useAuthStore(s => s.user);
   const current = useInstanceHistoryStore(s => s.currentInstance);
   const [tick, setTick] = useState(0);
+  const [rpcConnected, setRpcConnected] = useState<boolean | null>(null);
 
   useEffect(() => {
     const id = setInterval(() => setTick(t => t + 1), 5000);
     return () => clearInterval(id);
   }, []);
+
+  // Whether the local Discord client actually accepted our connection — the
+  // one fact that tells you if presence is working.
+  useEffect(() => {
+    let cancelled = false;
+    window.electronAPI?.discordIsConnected?.()
+      .then(v => { if (!cancelled) setRpcConnected(!!v); })
+      .catch(() => { if (!cancelled) setRpcConnected(false); });
+    return () => { cancelled = true; };
+  }, [tick]);
 
   const location = user?.location ?? '—';
   const worldId = (user as any)?.worldId ?? '—';
@@ -76,6 +87,14 @@ function DiscordDiagnostics() {
     <div className="rounded-lg border border-surface-700 bg-surface-900/60 p-3 space-y-2 text-xs">
       <p className="text-surface-300 font-semibold">Live status</p>
       <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-surface-400">
+        <span className="text-surface-500">Discord link</span>
+        <span className={rpcConnected ? 'text-green-400' : rpcConnected === null ? 'text-surface-500' : 'text-amber-400'}>
+          {rpcConnected === null
+            ? 'checking…'
+            : rpcConnected
+              ? 'connected to your Discord client'
+              : 'not connected — is Discord running on this machine?'}
+        </span>
         <span className="text-surface-500">user.location</span>
         <span className="font-mono text-surface-200 break-all">{location || '—'}</span>
         <span className="text-surface-500">user.worldId</span>
@@ -626,14 +645,26 @@ export default function SettingsPage() {
                 <div className="mb-4 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-xs text-amber-300">Not available in browser mode — requires the Electron desktop app.</div>
               )}
               <div className="mb-4 bg-surface-800/50 rounded-lg p-3 space-y-1.5 text-xs text-surface-400">
-                <p className="text-surface-200 font-semibold text-xs">Setup required</p>
+                <p className="text-surface-200 font-semibold text-xs">No bot needed</p>
+                <p>
+                  Rich Presence talks to the Discord app already running on this PC over a local
+                  socket — the same way VRCX and games do it. There's no bot, no token, and nothing
+                  to invite to a server. (The <span className="text-surface-300">Discord Bot</span> section
+                  is a separate, optional feature for slash commands — it is not required for this.)
+                </p>
+                <p className="text-surface-200 font-semibold text-xs pt-1">One-time setup</p>
+                <p>
+                  Discord needs an <span className="text-surface-300">Application</span> to hang the
+                  presence off — it supplies the name shown on your profile and nothing else. Creating
+                  one takes about thirty seconds and it stays private to you:
+                </p>
                 <ol className="list-decimal list-inside space-y-1">
-                  <li>Go to <span className="text-accent-400">discord.com/developers/applications</span> and create a New Application</li>
-                  <li>Name it whatever you want (e.g. "VRChat" or "VRC Studio")</li>
-                  <li>Copy the <span className="font-semibold text-surface-200">Application ID</span> from the General Information page</li>
-                  <li>Paste it in the Client ID field below and click Apply</li>
+                  <li>Go to <span className="text-accent-400">discord.com/developers/applications</span> and click New Application</li>
+                  <li>Name it whatever you want your profile to say (e.g. "VRChat")</li>
+                  <li>Copy the <span className="font-semibold text-surface-200">Application ID</span> from General Information</li>
+                  <li>Paste it below and click Apply — don't create a bot, don't generate a token</li>
                 </ol>
-                <p className="text-surface-500 mt-1">The world thumbnail will be used automatically as your presence image — no assets upload needed.</p>
+                <p className="text-surface-500 mt-1">The world thumbnail is used automatically as your presence image — no assets to upload.</p>
               </div>
               <DiscordDiagnostics />
               <Toggle label="Enable Discord Rich Presence" description="Show your current VRChat world and playtime on Discord" checked={discordEnabled} onChange={v => { setDiscordEnabled(v); saveDiscord(v, discordClientId, discordShowWorld, discordShowAvatar); }} />

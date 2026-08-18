@@ -15,6 +15,7 @@ import { useEffect } from 'react';
 import { useVideoPlayerStore } from '../stores/videoPlayerStore';
 import { useInstanceAvatarsStore, sliceToCurrentInstance } from '../stores/instanceAvatarsStore';
 import { useInstanceHistoryStore } from '../stores/instanceHistoryStore';
+import { useGalleryStore } from '../stores/galleryStore';
 
 // How much of the log to replay on startup. VRChat is chatty — a busy
 // instance can burn a couple of thousand lines in minutes, and anything
@@ -40,6 +41,11 @@ export function useLogIngestion() {
         worldName: current.worldName,
         instanceId: current.instanceId,
       });
+      useGalleryStore.getState().setContext({
+        worldId: current.worldId,
+        worldName: current.worldName,
+        instanceId: current.instanceId,
+      });
     }
   }, [current?.id, setVideoCtx]);
 
@@ -57,6 +63,7 @@ export function useLogIngestion() {
       // closure values without re-subscribing.
       useVideoPlayerStore.getState().ingestLines(lines);
       useInstanceAvatarsStore.getState().ingestLines(lines);
+      useGalleryStore.getState().ingestLines(lines);
     };
 
     // The main process pushes this when it finds a log file after VRChat
@@ -92,6 +99,9 @@ export function useLogIngestion() {
           // instance the user is actually in right now.
           useVideoPlayerStore.getState().ingestLines(backlog.lines);
           useInstanceAvatarsStore.getState().ingestLines(sliceToCurrentInstance(backlog.lines));
+          // The gallery keeps everything it has ever seen, so it wants the
+          // whole replay window rather than just the current instance.
+          useGalleryStore.getState().ingestLines(backlog.lines);
           useInstanceAvatarsStore.setState({ logPath: backlog.path });
         } else if (backlog && !backlog.success) {
           useInstanceAvatarsStore.setState({ logError: backlog.error });

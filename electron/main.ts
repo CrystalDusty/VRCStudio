@@ -5,6 +5,7 @@ import {
 import path from 'path';
 import fs from 'fs';
 import https from 'https';
+import http from 'http';
 import { spawn } from 'child_process';
 import * as discordBot from './discord-bot';
 
@@ -1003,6 +1004,80 @@ ipcMain.handle('http:get', async (_e, url: string, headers?: Record<string, stri
     req.setTimeout(15000, () => {
       req.destroy(new Error('Request timeout'));
     });
+    req.end();
+  });
+
+  return doRequest(url);
+});
+
+// Binary fetch — used by the Gallery to pull image bytes into the renderer.
+//
+// Two reasons this can't be a plain <img> + canvas in the renderer:
+//   1. VRChat's file CDN sends no CORS headers, so drawing one onto a canvas
+//      taints it and toBlob() throws — no export, no border cropping.
+//   2. Some file endpoints need the session cookie, which lives here.
+// Returning base64 lets the renderer build a same-origin blob URL instead.
+ipcMain.handle('http:getBinary', async (_e, url: string, headers?: Record<string, string>) => {
+  const MAX_BYTES = 32 * 1024 * 1024;
+
+  const doRequest = (targetUrl: string, hops = 0): Promise<any> => new Promise((resolve) => {
+    let parsed: URL;
+    try { parsed = new URL(targetUrl); } catch {
+      return resolve({ ok: false, status: 0, error: 'Invalid URL' });
+    }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return resolve({ ok: false, status: 0, error: 'Unsupported protocol' });
+    }
+
+    const finalHeaders: Record<string, string> = {
+      'User-Agent': 'VRCX',
+      'Accept': 'image/*,*/*',
+      ...headers,
+    };
+
+    const mod = parsed.protocol === 'http:' ? http : https;
+    const req = mod.request(
+      {
+        hostname: parsed.hostname,
+        port: parsed.port ? Number(parsed.port) : (parsed.protocol === 'http:' ? 80 : 443),
+        path: parsed.pathname + parsed.search,
+        method: 'GET',
+        headers: finalHeaders,
+      },
+      (res) => {
+        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && hops < 4) {
+          const next = new URL(res.headers.location, parsed).toString();
+          res.resume();
+          return resolve(doRequest(next, hops + 1));
+        }
+
+        const chunks: Buffer[] = [];
+        let size = 0;
+        let aborted = false;
+        res.on('data', (chunk: Buffer) => {
+          size += chunk.length;
+          if (size > MAX_BYTES) {
+            aborted = true;
+            req.destroy();
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on('end', () => {
+          if (aborted) return resolve({ ok: false, status: res.statusCode, error: 'File too large' });
+          const ok = res.statusCode! >= 200 && res.statusCode! < 300;
+          resolve({
+            ok,
+            status: res.statusCode,
+            contentType: String(res.headers['content-type'] ?? ''),
+            base64: ok ? Buffer.concat(chunks).toString('base64') : undefined,
+            error: ok ? undefined : `HTTP ${res.statusCode}`,
+          });
+        });
+      },
+    );
+    req.on('error', err => resolve({ ok: false, status: 0, error: err.message }));
+    req.setTimeout(20000, () => req.destroy(new Error('Request timeout')));
     req.end();
   });
 

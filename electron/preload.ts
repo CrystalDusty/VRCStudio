@@ -60,6 +60,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Generic outbound GET (routes through main process, sends User-Agent: VRCX)
   httpGet: (url: string, headers?: Record<string, string>) =>
     ipcRenderer.invoke('http:get', url, headers),
+  httpGetBinary: (url: string, headers?: Record<string, string>) =>
+    ipcRenderer.invoke('http:getBinary', url, headers),
 
   // OSC (VRChat)
   oscStart: (opts?: { sendHost?: string; sendPort?: number; recvPort?: number }) =>
