@@ -652,16 +652,28 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                   <div className="mt-2 space-y-1.5">
                     <div className="flex items-center gap-2 flex-wrap text-[10px] text-surface-500">
                       <span>Grid</span>
+                      {/* Each axis moves on its own. Deriving rows from columns
+                          made a padded grid — 16 frames in a fixed 8×8 — simply
+                          impossible to ask for, which left no way out when the
+                          deduction was wrong. The other axis is only nudged up
+                          when the grid would otherwise be too small to hold
+                          every frame. */}
                       <NumberBox
                         value={layout.columns}
-                        min={1} max={sheetFrames}
-                        onChange={v => setGridOverride({ columns: v, rows: Math.ceil(sheetFrames / v) })}
+                        min={1} max={MAX_SPRITE_FRAMES}
+                        onChange={v => setGridOverride({
+                          columns: v,
+                          rows: Math.max(layout.rows, Math.ceil(sheetFrames / v)),
+                        })}
                       />
                       <span>×</span>
                       <NumberBox
                         value={layout.rows}
-                        min={1} max={sheetFrames}
-                        onChange={v => setGridOverride({ columns: Math.ceil(sheetFrames / v), rows: v })}
+                        min={1} max={MAX_SPRITE_FRAMES}
+                        onChange={v => setGridOverride({
+                          columns: Math.max(layout.columns, Math.ceil(sheetFrames / v)),
+                          rows: v,
+                        })}
                       />
                       <span className="text-surface-600">
                         {layout.frameWidth}×{layout.frameHeight} per frame
