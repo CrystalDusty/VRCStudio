@@ -39,6 +39,53 @@ export interface AnimationSpec {
 export const MIN_SPRITE_FRAMES = 2;
 export const MAX_SPRITE_FRAMES = 64;
 
+/** The sheet VRChat expects, in pixels. Square, always. */
+export const VRC_SHEET_SIZE = 1024;
+
+/**
+ * VRChat's own sprite sheet layout.
+ *
+ * This is a published format, not a deduction: a 1024×1024 sheet of square
+ * frames in a uniform grid, ordered left to right then top to bottom, where
+ * the grid side is the next power of two that can hold the frames —
+ *
+ *   up to  1 frame  → 1×1, cells 1024px
+ *   up to  4 frames → 2×2, cells  512px
+ *   up to 16 frames → 4×4, cells  256px
+ *   up to 64 frames → 8×8, cells  128px
+ *
+ * Unused cells are left blank, so 24 frames sit in an 8×8 grid with 40 empty.
+ * That last part is what all the guesswork was about: every attempt to infer
+ * the grid from the frame count assumed a snug fit and cut the frames apart.
+ */
+export function vrchatGridSide(count: number): number {
+  let side = 1;
+  while (side * side < count) side *= 2;
+  return Math.min(8, side);
+}
+
+/**
+ * The layout for a sheet that follows VRChat's format, or null if it can't.
+ *
+ * Anything VRChat animates must conform, because VRChat cuts it up by this
+ * rule itself — so when the shape matches, this is the answer and there's
+ * nothing to measure. Sheets that aren't square fall through to the
+ * measurement in chooseSpriteLayout, which covers third-party and older files.
+ */
+export function vrchatSpriteLayout(width: number, height: number, count: number): SpriteLayout | null {
+  if (width <= 0 || height <= 0 || count < 1 || count > MAX_SPRITE_FRAMES) return null;
+  const ratio = width / height;
+  if (ratio < 0.99 || ratio > 1.01) return null;      // VRChat sheets are square
+  const side = vrchatGridSide(count);
+  if (side * side < count) return null;
+  return {
+    columns: side, rows: side, count,
+    sheetWidth: width, sheetHeight: height,
+    frameWidth: Math.round(width / side),
+    frameHeight: Math.round(height / side),
+  };
+}
+
 function layoutFor(width: number, height: number, count: number, columns: number, rows: number): SpriteLayout {
   return {
     columns, rows, count,
@@ -131,6 +178,14 @@ export interface ExtractedFrames {
   /** Per-frame duration in ms, same length as `frames`. */
   delays: number[];
   source: 'spritesheet' | 'decoded';
+  /**
+   * Distinct frames before a ping-pong loop was expanded out.
+   *
+   * Playback wants the expanded run; re-encoding a sheet wants the originals,
+   * because VRChat applies ping-pong itself and writing the bounce into the
+   * sheet would store every middle frame twice.
+   */
+  loopedFrom?: number;
 }
 
 function context(width: number, height: number): CanvasRenderingContext2D {
@@ -295,6 +350,13 @@ export function chooseSpriteLayout(
   count: number,
 ): SpriteLayout {
   if (count <= 1) return guessSpriteLayout(width, height, count);
+
+  // A square sheet is VRChat's own format, and that format is documented — so
+  // there is nothing to work out. Everything below exists for sheets that
+  // aren't that shape.
+  const official = vrchatSpriteLayout(width, height, count);
+  if (official) return official;
+
   const ranked = rankSpriteLayouts(width, height, count);
   if (ranked.length === 0) return guessSpriteLayout(width, height, count);
 
@@ -359,6 +421,7 @@ export function framesFromSpriteSheet(
     width: w,
     height: h,
     source: 'spritesheet',
+    loopedFrom: layout.count,
   };
 }
 
@@ -574,4 +637,118 @@ export async function toVideo(
     track.stop();
   }
   return done;
+}
+
+// ── Making a VRChat sprite sheet ────────────────────────────────────────────
+
+export interface SpriteSheetResult {
+  blob: Blob;
+  columns: number;
+  rows: number;
+  /** Frames actually written — never more than VRChat accepts. */
+  frameCount: number;
+  /** Rate to enter when uploading, already inside VRChat's 1–64. */
+  fps: number;
+  cellSize: number;
+  sheetSize: number;
+  /** Frames dropped to fit the 64 limit, evenly spaced across the animation. */
+  droppedFrames: number;
+  /** Name carrying the frame count and rate, the convention emoji tools use. */
+  filename: string;
+}
+
+/** Evenly spaced pick of `keep` items, always including the first. */
+function sampleEvenly<T>(items: T[], keep: number): number[] {
+  if (items.length <= keep) return items.map((_, i) => i);
+  const step = items.length / keep;
+  const picked: number[] = [];
+  for (let i = 0; i < keep; i++) picked.push(Math.min(items.length - 1, Math.round(i * step)));
+  return [...new Set(picked)];
+}
+
+/**
+ * Build a sheet VRChat will accept as an animated emoji.
+ *
+ * The inverse of the decoding above, and the reason it matters: an animation
+ * found in the wild — someone's GIF print, an emoji you liked — becomes
+ * something you can upload as your own emoji, which downloading a GIF does not.
+ *
+ * Follows the published format exactly: a square 1024px sheet, square cells in
+ * a power-of-two grid, frames left to right then top to bottom, spare cells
+ * left transparent. Frames keep their aspect ratio inside their cell rather
+ * than being stretched to fill it.
+ *
+ * Longer animations are thinned to VRChat's 64-frame limit by taking evenly
+ * spaced frames, and the rate is adjusted so the result still runs for as long
+ * as the original.
+ */
+export async function toVRChatSpriteSheet(
+  extracted: ExtractedFrames,
+  opts: { name?: string; fps?: number; sheetSize?: number } = {},
+): Promise<SpriteSheetResult> {
+  if (extracted.frames.length === 0) throw new Error('Nothing to lay out');
+
+  // A ping-pong animation is stored as its distinct frames — VRChat adds the
+  // bounce back on playback, so writing it into the sheet would duplicate every
+  // middle frame and burn half the 64-frame budget.
+  const distinct = extracted.loopedFrom ?? extracted.frames.length;
+  const sourceFrames = extracted.frames.slice(0, distinct);
+  const sourceDelays = extracted.delays.slice(0, distinct);
+
+  const totalMs = sourceDelays.reduce((a, b) => a + b, 0) || sourceFrames.length * 100;
+  const indices = sampleEvenly(sourceFrames, MAX_SPRITE_FRAMES);
+  const frames = indices.map(i => sourceFrames[i]);
+  const droppedFrames = sourceFrames.length - frames.length;
+
+  // Keep the original duration: fewer frames over the same time is a lower rate.
+  const requested = opts.fps ?? (frames.length / (totalMs / 1000));
+  const fps = Math.max(1, Math.min(MAX_SPRITE_FRAMES, Math.round(requested) || 1));
+
+  const sheetSize = opts.sheetSize ?? VRC_SHEET_SIZE;
+  const side = vrchatGridSide(frames.length);
+  const cellSize = Math.floor(sheetSize / side);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = sheetSize;
+  canvas.height = sheetSize;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Could not get a 2D canvas');
+  ctx.imageSmoothingQuality = 'high';
+
+  // Frames arrive as ImageData, which can't be scaled by putImageData — it
+  // ignores transforms entirely. They go via a staging canvas so drawImage can.
+  const stage = context(extracted.width, extracted.height);
+
+  frames.forEach((frame, i) => {
+    stage.clearRect(0, 0, extracted.width, extracted.height);
+    stage.putImageData(frame, 0, 0);
+
+    const scale = Math.min(cellSize / extracted.width, cellSize / extracted.height);
+    const w = Math.max(1, Math.round(extracted.width * scale));
+    const h = Math.max(1, Math.round(extracted.height * scale));
+    const x = (i % side) * cellSize + Math.round((cellSize - w) / 2);
+    const y = Math.floor(i / side) * cellSize + Math.round((cellSize - h) / 2);
+    ctx.drawImage(stage.canvas, 0, 0, extracted.width, extracted.height, x, y, w, h);
+  });
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(b => (b ? resolve(b) : reject(new Error('Could not encode the sheet'))), 'image/png');
+  });
+
+  const safeName = (opts.name ?? 'emoji').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, '_').slice(0, 48)
+    || 'emoji';
+
+  return {
+    blob,
+    columns: side,
+    rows: side,
+    frameCount: frames.length,
+    fps,
+    cellSize,
+    sheetSize,
+    droppedFrames,
+    // VRChat's upload form asks for both numbers; emoji tools put them in the
+    // filename so they survive being sent to someone else.
+    filename: `${safeName}_${frames.length}frames_${fps}fps.png`,
+  };
 }

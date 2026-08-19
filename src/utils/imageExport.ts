@@ -42,13 +42,16 @@ export interface ExportSettings {
    *              that plays anywhere an image is accepted.
    *   video    — rebuild the frames and record WebM or MP4. No alpha, so
    *              transparency is flattened onto the chosen background.
+   *   sheet    — rebuild the frames into a sprite sheet VRChat accepts as an
+   *              animated emoji, so an animation found in the wild can be
+   *              uploaded as your own.
    *   still    — one frame through the canvas, with every crop/scale/format
    *              control applying as usual.
    *
    * Separate from `format` so choosing PNG for prints doesn't quietly flatten
    * every emoji as well.
    */
-  animatedMode: 'original' | 'gif' | 'video' | 'still';
+  animatedMode: 'original' | 'gif' | 'video' | 'sheet' | 'still';
   /** Which video container to record, when animatedMode is 'video'. */
   videoExtension: 'webm' | 'mp4';
 }

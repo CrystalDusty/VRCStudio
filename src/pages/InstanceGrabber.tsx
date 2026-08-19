@@ -224,11 +224,16 @@ export default function InstanceGrabberPage() {
             a frame count like <span className="text-emerald-300">16f</span> for an emoji.
           </p>
           <p>
-            Animated emoji aren't animated files: VRChat stores them as a single PNG holding a
-            grid of frames, plus a frame count and rate on the file record. Downloading that
-            gives you the contact sheet, so opening one rebuilds the frames and offers them back
-            as an animated GIF or a video — with the sprite sheet and a single still frame still
-            available if that's what you wanted.
+            Animated emoji aren't animated files: VRChat stores them as a single 1024px PNG
+            holding a grid of frames — 2×2 at 512px for four frames, 4×4 at 256px for sixteen,
+            8×8 at 128px for up to sixty-four, spare cells left blank — plus a frame count and
+            rate on the file record. Downloading that gives you the contact sheet, so opening one
+            rebuilds the frames and offers them back as an animated GIF or a video.
+          </p>
+          <p>
+            It goes the other way too: anything that moves can be written back out as a sprite
+            sheet in that same format, sized and laid out ready to upload as your own animated
+            emoji, with the frame count and rate in the filename.
           </p>
         </div>
       )}

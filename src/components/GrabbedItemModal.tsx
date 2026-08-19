@@ -17,8 +17,8 @@ import {
 import { useGrabberStore, type GrabbedItem } from '../stores/grabberStore';
 import {
   chooseSpriteLayout, cellAspect, framesFromSpriteSheet, framesFromAnimatedFile,
-  supportedVideoFormats, toGif, toVideo,
-  MIN_SPRITE_FRAMES, MAX_SPRITE_FRAMES,
+  supportedVideoFormats, toGif, toVideo, toVRChatSpriteSheet, vrchatGridSide,
+  MIN_SPRITE_FRAMES, MAX_SPRITE_FRAMES, VRC_SHEET_SIZE,
   type ExtractedFrames, type LoopStyle,
 } from '../utils/animation';
 
@@ -179,6 +179,26 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
 
   const canRebuild = !!extracted && extracted.frames.length > 1;
 
+  // What a VRChat sheet export would produce, worked out up front so the panel
+  // can say it before anyone commits to the download.
+  const sheetPlan = useMemo(() => {
+    if (!extracted) return null;
+    // Ping-pong is stored as its distinct frames; VRChat re-adds the bounce.
+    const distinct = extracted.loopedFrom ?? extracted.frames.length;
+    const kept = Math.min(distinct, MAX_SPRITE_FRAMES);
+    const side = vrchatGridSide(kept);
+    const totalMs = extracted.delays.slice(0, distinct).reduce((a, b) => a + b, 0) || kept * 100;
+    return {
+      sheetSize: VRC_SHEET_SIZE,
+      columns: side,
+      rows: side,
+      cellSize: Math.floor(VRC_SHEET_SIZE / side),
+      frames: kept,
+      dropped: distinct - kept,
+      fps: Math.max(1, Math.min(MAX_SPRITE_FRAMES, Math.round(kept / (totalMs / 1000)) || 1)),
+    };
+  }, [extracted]);
+
   /**
    * What the download will actually do.
    *
@@ -188,9 +208,12 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
    * "original" is honest about what VRChat stores, which for an emoji is a
    * sprite sheet rather than an animation.
    */
+  const needsFrames = settings.animatedMode === 'gif'
+    || settings.animatedMode === 'video'
+    || settings.animatedMode === 'sheet';
   const mode: ExportSettings['animatedMode'] = !movesAtAll
     ? 'still'
-    : (settings.animatedMode === 'gif' || settings.animatedMode === 'video') && !canRebuild
+    : needsFrames && !canRebuild
       ? 'original'
       : settings.animatedMode === 'video' && !videoFormat
         ? 'gif'
@@ -201,8 +224,8 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
     [settings, mode],
   );
   const keepsOriginal = effective.format === 'original';
-  // GIF and video bypass the canvas pipeline entirely.
-  const rebuilding = mode === 'gif' || mode === 'video';
+  // GIF, video and sprite sheets bypass the canvas pipeline entirely.
+  const rebuilding = mode === 'gif' || mode === 'video' || mode === 'sheet';
 
   const update = (patch: Partial<ExportSettings>) => {
     setSettings(prev => {
@@ -341,6 +364,22 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
         await new Promise(r => setTimeout(r, 0));
         blob = toGif(extracted, { scale: settings.scale });
         ext = 'gif';
+      } else if (mode === 'sheet' && extracted) {
+        setProgress('Laying out the sheet…');
+        await new Promise(r => setTimeout(r, 0));
+        const sheet = await toVRChatSpriteSheet(extracted, {
+          name: item.name ?? item.kind,
+          fps: sheetPlan?.fps,
+        });
+        // The frame count and rate have to be typed into VRChat's upload form,
+        // so they ride along in the filename rather than only on screen.
+        downloadBlob(sheet.blob, sheet.filename);
+        localStorage.setItem('vrcstudio_grabber_filename', filenameTemplate);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2500);
+        setProgress(null);
+        setBusy(false);
+        return;
       } else if (mode === 'video' && extracted && videoFormat) {
         // Recording runs in real time, so say how long it will take rather
         // than looking frozen.
@@ -380,7 +419,7 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
     }
     setProgress(null);
     setBusy(false);
-  }, [loaded, box, effective, keepsOriginal, mode, extracted, videoFormat, fps, settings.scale, filenameTemplate, item]);
+  }, [loaded, box, effective, keepsOriginal, mode, extracted, sheetPlan, videoFormat, fps, settings.scale, filenameTemplate, item]);
 
   const handleCopyImage = useCallback(async () => {
     if (!loaded || !box) return;
@@ -476,7 +515,9 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                 </span>
                 <span>
                   Export{' '}
-                  {rebuilding && extracted
+                  {mode === 'sheet' && sheetPlan
+                    ? `${sheetPlan.sheetSize}×${sheetPlan.sheetSize} · VRChat emoji sheet · ${sheetPlan.columns}×${sheetPlan.rows} grid of ${sheetPlan.cellSize}px frames · ${sheetPlan.frames} frames at ${sheetPlan.fps}fps`
+                    : rebuilding && extracted
                     ? `${Math.round(extracted.width * settings.scale)}×${Math.round(extracted.height * settings.scale)} · ${
                         mode === 'gif' ? 'GIF' : videoFormat?.label ?? 'video'
                       } · ${extracted.frames.length} frames at ${fps}fps`
@@ -593,8 +634,15 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                   >
                     Video{videoFormat ? ` (${videoFormat.label})` : ''}
                   </Chip>
+                  <Chip
+                    active={mode === 'sheet'}
+                    disabled={!canRebuild}
+                    onClick={() => update({ animatedMode: 'sheet' })}
+                  >
+                    VRChat emoji sheet
+                  </Chip>
                   <Chip active={mode === 'original'} onClick={() => update({ animatedMode: 'original' })}>
-                    {isSheet ? 'Sprite sheet' : 'Original file'}
+                    {isSheet ? 'Original sheet' : 'Original file'}
                   </Chip>
                   <Chip active={mode === 'still'} onClick={() => update({ animatedMode: 'still' })}>
                     Still frame
@@ -620,6 +668,10 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                     ? 'Rebuilt frame by frame and encoded here. Plays anywhere an image is accepted, and keeps transparency — though GIF transparency is on-or-off, so soft edges harden.'
                     : mode === 'video'
                       ? 'Recorded frame by frame in real time, so this takes about as long as the clip runs. Video has no transparency, so clear pixels land on the background colour below.'
+                      : mode === 'sheet'
+                        ? sheetPlan
+                          ? `A ${sheetPlan.sheetSize}×${sheetPlan.sheetSize} PNG in VRChat's own format — ${sheetPlan.columns}×${sheetPlan.rows} grid, ${sheetPlan.cellSize}px frames, ready to upload as an animated emoji.${sheetPlan.dropped > 0 ? ` ${sheetPlan.dropped} frames are dropped to fit VRChat's limit of ${MAX_SPRITE_FRAMES}, evenly spaced so the timing holds.` : ''}`
+                          : "VRChat's own sprite-sheet format, ready to upload as an animated emoji."
                       : mode === 'original'
                         ? isSheet
                           ? `Saves the PNG VRChat actually stores: all ${sheetFrames} frames laid out in a ${layout?.columns ?? '?'}×${layout?.rows ?? '?'} grid, not an animation.`
@@ -803,11 +855,17 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                 className="w-full bg-surface-900 text-xs px-2 py-1.5 rounded-lg border border-surface-700 focus:outline-none focus:border-accent-500 font-mono"
               />
               <p className="text-[10px] text-surface-600 mt-1">
-                {'{name} {kind} {id} {date}'} · saves as{' '}
-                <span className="text-surface-400">
-                  {buildFilename(filenameTemplate, { name: item.name, kind: item.kind, id: item.id },
-                    exportExtension(effective, item.mediaExtension))}
-                </span>
+                {mode === 'sheet'
+                  ? <>Sheets name themselves <span className="text-surface-400">
+                      {(item.name ?? item.kind).replace(/\s+/g, '_')}_{sheetPlan?.frames ?? 0}frames_{sheetPlan?.fps ?? 0}fps.png
+                    </span> — VRChat's upload form asks for both numbers, so they travel with the file.</>
+                  : <>{'{name} {kind} {id} {date}'} · saves as{' '}</>}
+                {mode !== 'sheet' && (
+                  <span className="text-surface-400">
+                    {buildFilename(filenameTemplate, { name: item.name, kind: item.kind, id: item.id },
+                      exportExtension(effective, item.mediaExtension))}
+                  </span>
+                )}
               </p>
             </Field>
 
