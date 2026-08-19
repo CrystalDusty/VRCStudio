@@ -912,3 +912,39 @@ html.premium-hacker .audio-visualizer-canvas {
   opacity: 0.45;
   mix-blend-mode: screen;
 }
+
+
+/* ── Liked items in the Instance Grabber ──────────────────────────────────
+   The glow is built from --accent-*, the same variables the theme picker
+   drives, so a liked thing lights up in whatever colour is currently set
+   rather than a hard-coded pink. Subtle on purpose: it marks a thing you
+   kept, it isn't a notification. */
+.like-glow {
+  color: rgb(var(--accent-300));
+  background: rgb(var(--accent-500) / 0.16);
+  border-color: rgb(var(--accent-400) / 0.45);
+  box-shadow:
+    0 0 5px 0 rgb(var(--accent-400) / 0.30),
+    0 0 11px 1px rgb(var(--accent-500) / 0.13);
+}
+
+/* A single soft pulse when it's first clicked, then it settles. */
+.like-pop {
+  animation: like-pop 420ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes like-pop {
+  0%   { transform: scale(1); }
+  38%  { transform: scale(1.32); }
+  100% { transform: scale(1); }
+}
+
+/* The card behind a liked item gets the faintest edge, so it reads as kept
+   when you're scanning the grid rather than looking at any one tile. */
+.like-card {
+  border-color: rgb(var(--accent-500) / 0.34) !important;
+  box-shadow: inset 0 0 16px -8px rgb(var(--accent-400) / 0.42);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .like-pop { animation: none; }
+}

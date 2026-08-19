@@ -49,6 +49,12 @@ export interface GrabbedItem {
   /** Set once we've asked the API about it (successfully or not). */
   resolved?: boolean;
   hidden?: boolean;
+  /**
+   * Kept on purpose. Liked items survive Clear, and survive being trimmed when
+   * the history hits its cap — the whole point is that the one you cared about
+   * is still there next week.
+   */
+  liked?: boolean;
   /** VRChat's own item type for inventory items — droneskin, warpeffect, … */
   itemType?: string;
 
@@ -141,6 +147,7 @@ interface State {
   addItems: (items: GrabbedItem[]) => void;
   markResolved: (id: string, patch: Partial<GrabbedItem>) => void;
   setHidden: (id: string, hidden: boolean) => void;
+  toggleLiked: (id: string) => void;
   remove: (id: string) => void;
   clear: () => void;
 }
@@ -240,24 +247,35 @@ function loadPersisted(): Record<string, GrabbedItem> {
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * Keep at most `limit` items: every liked one, then the most recently seen.
+ *
+ * Liked items are exempt from trimming, not merely prioritised by it — liking
+ * something has to mean it's still there later, otherwise it's just a slower
+ * way of losing it.
+ */
+function trimToLimit(items: Record<string, GrabbedItem>, limit: number): Record<string, GrabbedItem> {
+  const keys = Object.keys(items);
+  if (keys.length <= limit) return items;
+  const liked = keys.filter(k => items[k].liked);
+  const rest = keys
+    .filter(k => !items[k].liked)
+    .sort((a, b) => items[b].lastSeenAt - items[a].lastSeenAt)
+    .slice(0, Math.max(0, limit - liked.length));
+  return Object.fromEntries([...liked, ...rest].map(k => [k, items[k]]));
+}
+
 function savePersisted(items: Record<string, GrabbedItem>) {
   if (saveTimer) clearTimeout(saveTimer);
   // Ingest can fire many times a second while a busy instance loads; batch.
   saveTimer = setTimeout(() => {
     try {
-      let toStore = items;
-      const keys = Object.keys(items);
-      if (keys.length > MAX_ITEMS) {
-        // Keep the most recently seen.
-        const sorted = keys.sort((a, b) => items[b].lastSeenAt - items[a].lastSeenAt).slice(0, MAX_ITEMS);
-        toStore = Object.fromEntries(sorted.map(k => [k, items[k]]));
-      }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ items: toStore }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ items: trimToLimit(items, MAX_ITEMS) }));
     } catch {
-      // Quota exceeded — drop the oldest half and try once more.
+      // Quota exceeded — halve it and try once more. Same rule: liked items
+      // are what's left standing, not the first casualties of a full disk.
       try {
-        const keys = Object.keys(items).sort((a, b) => items[b].lastSeenAt - items[a].lastSeenAt);
-        const half = Object.fromEntries(keys.slice(0, Math.floor(keys.length / 2)).map(k => [k, items[k]]));
+        const half = trimToLimit(items, Math.floor(Object.keys(items).length / 2));
         localStorage.setItem(STORAGE_KEY, JSON.stringify({ items: half }));
       } catch {}
     }
@@ -628,6 +646,14 @@ export const useGrabberStore = create<State>((set, get) => ({
     savePersisted(items);
   },
 
+  toggleLiked: (id) => {
+    const items = { ...get().items };
+    if (!items[id]) return;
+    items[id] = { ...items[id], liked: !items[id].liked };
+    set({ items });
+    savePersisted(items);
+  },
+
   setHidden: (id, hidden) => {
     const items = { ...get().items };
     if (!items[id]) return;
@@ -644,7 +670,11 @@ export const useGrabberStore = create<State>((set, get) => ({
   },
 
   clear: () => {
-    set({ items: {}, discoveredCount: 0 });
-    savePersisted({});
+    // Liked items are the exception to Clear — that's what liking them is for.
+    const kept = Object.fromEntries(
+      Object.entries(get().items).filter(([, item]) => item.liked),
+    );
+    set({ items: kept, discoveredCount: 0 });
+    savePersisted(kept);
   },
 }));

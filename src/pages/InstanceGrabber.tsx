@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Grab, Search, Sticker, Smile, Printer, Image as ImageIcon, Compass, Users,
-  Trash2, EyeOff, Eye, Info, LayoutGrid, RefreshCw, Check, AlertCircle, Package,
+  Trash2, EyeOff, Eye, Info, LayoutGrid, RefreshCw, Check, AlertCircle, Package, Heart,
 } from 'lucide-react';
 import { useGrabberStore, type GrabbedItem, type GrabKind } from '../stores/grabberStore';
 import { useInstanceAvatarsStore } from '../stores/instanceAvatarsStore';
@@ -63,12 +63,14 @@ export default function InstanceGrabberPage() {
   const syncError = useGrabberStore(s => s.syncError);
   const syncSummary = useGrabberStore(s => s.syncSummary);
   const inspectMedia = useGrabberStore(s => s.inspectMedia);
+  const toggleLiked = useGrabberStore(s => s.toggleLiked);
   const tailingActive = useVideoPlayerStore(s => s.tailingActive);
 
   const [tab, setTab] = useState<TabKey>('people');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<SortMode>('recent');
   const [showHidden, setShowHidden] = useState(false);
+  const [likedOnly, setLikedOnly] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
@@ -82,12 +84,14 @@ export default function InstanceGrabberPage() {
   }, [all]);
 
   const hiddenCount = useMemo(() => all.filter(i => i.hidden).length, [all]);
+  const likedCount = useMemo(() => all.filter(i => i.liked).length, [all]);
   const portals = useMemo(() => all.filter(i => i.kind === 'portal' && !i.hidden), [all]);
 
   // The grid only ever shows media kinds — People and Portals have their own
   // panels, and a portal has no thumbnail to show.
   const gridItems = useMemo(() => {
     let list = all.filter(i => MEDIA_KINDS.includes(i.kind) && (showHidden ? true : !i.hidden));
+    if (likedOnly) list = list.filter(i => i.liked);
     if (tab !== 'all' && tab !== 'people' && tab !== 'portal') {
       list = list.filter(i => i.kind === tab);
     }
@@ -105,6 +109,7 @@ export default function InstanceGrabberPage() {
         // they actually came in.
         ((i.animated || i.spriteAnimated) && ('animated'.includes(q) || 'gif'.includes(q))) ||
         i.animationStyle?.toLowerCase().includes(q) ||
+        (i.liked && 'liked'.includes(q)) ||
         i.kind.includes(q),
       );
     }
@@ -114,7 +119,7 @@ export default function InstanceGrabberPage() {
       case 'seen':   return [...list].sort((a, b) => b.seenCount - a.seenCount);
       default:       return [...list].sort((a, b) => b.lastSeenAt - a.lastSeenAt);
     }
-  }, [all, tab, search, sort, showHidden]);
+  }, [all, tab, search, sort, showHidden, likedOnly]);
 
   // Read the header bytes of whatever is on screen, so animations get badged
   // without anyone having to click them. inspectMedia skips ids it already has
@@ -307,6 +312,18 @@ export default function InstanceGrabberPage() {
               ))}
             </div>
 
+            {likedCount > 0 && (
+              <button
+                onClick={() => setLikedOnly(v => !v)}
+                className={`text-xs px-2 py-1 rounded flex items-center gap-1.5 transition-colors ${
+                  likedOnly ? 'like-glow' : 'text-surface-500 hover:text-surface-300'
+                }`}
+                title="Show only the ones you've kept"
+              >
+                <Heart size={12} fill={likedOnly ? 'currentColor' : 'none'} /> {likedCount} liked
+              </button>
+            )}
+
             {hiddenCount > 0 && (
               <button
                 onClick={() => setShowHidden(v => !v)}
@@ -322,8 +339,13 @@ export default function InstanceGrabberPage() {
               confirmClear ? (
                 <span className="flex items-center gap-1.5 text-xs">
                   <button onClick={() => { clear(); setConfirmClear(false); }} className="text-rose-400 hover:text-rose-300">
-                    Forget all {all.length}?
+                    Forget {all.length - likedCount}?
                   </button>
+                  {likedCount > 0 && (
+                    <span className="text-surface-500">
+                      keeping {likedCount} liked
+                    </span>
+                  )}
                   <button onClick={() => setConfirmClear(false)} className="text-surface-500 hover:text-surface-300">
                     Cancel
                   </button>
@@ -367,7 +389,12 @@ export default function InstanceGrabberPage() {
             <>
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-7 gap-2">
                 {gridItems.map(item => (
-                  <Thumbnail key={item.id} item={item} onOpen={() => setSelectedId(item.id)} />
+                  <Thumbnail
+                    key={item.id}
+                    item={item}
+                    onOpen={() => setSelectedId(item.id)}
+                    onToggleLike={() => toggleLiked(item.id)}
+                  />
                 ))}
               </div>
               <p className="text-[10px] text-surface-600 text-center">
@@ -420,16 +447,34 @@ function TabButton({ active, onClick, icon: Icon, label, count }: {
   );
 }
 
-function Thumbnail({ item, onOpen }: { item: GrabbedItem; onOpen: () => void }) {
+function Thumbnail({ item, onOpen, onToggleLike }: {
+  item: GrabbedItem;
+  onOpen: () => void;
+  onToggleLike: () => void;
+}) {
   const [failed, setFailed] = useState(false);
+  const [popping, setPopping] = useState(false);
   const Icon = TAB_META[item.kind as Exclude<TabKey, 'all' | 'people'>]?.icon ?? ImageIcon;
 
+  const like = (e: React.MouseEvent) => {
+    // The tile itself opens the modal; liking must not.
+    e.stopPropagation();
+    if (!item.liked) {
+      setPopping(true);
+      setTimeout(() => setPopping(false), 450);
+    }
+    onToggleLike();
+  };
+
   return (
-    <button
+    <div
       onClick={onOpen}
-      className={`group relative aspect-square rounded-lg overflow-hidden bg-surface-850 border transition-colors ${
+      role="button"
+      tabIndex={0}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
+      className={`group relative aspect-square rounded-lg overflow-hidden bg-surface-850 border transition-colors cursor-pointer ${
         item.hidden ? 'border-surface-800 opacity-45' : 'border-surface-800 hover:border-accent-500/50'
-      }`}
+      } ${item.liked ? 'like-card' : ''}`}
       title={item.name ?? `${item.kind} · seen ${item.seenCount}×`}
     >
       {item.url && !failed ? (
@@ -473,6 +518,22 @@ function Thumbnail({ item, onOpen }: { item: GrabbedItem; onOpen: () => void }) 
           {item.name ?? item.worldName}
         </span>
       )}
-    </button>
+
+      {/* Liked items keep their heart lit; the rest only show one on hover, so
+          the grid stays quiet until you go looking. */}
+      <button
+        type="button"
+        onClick={like}
+        aria-pressed={!!item.liked}
+        title={item.liked ? 'Liked — kept when you clear' : 'Like to keep this when you clear'}
+        className={`absolute bottom-1 right-1 p-1 rounded-full border transition-all ${
+          item.liked
+            ? 'like-glow opacity-100'
+            : 'border-transparent bg-black/55 text-surface-400 opacity-0 group-hover:opacity-100 hover:text-accent-300'
+        } ${popping ? 'like-pop' : ''}`}
+      >
+        <Heart size={11} fill={item.liked ? 'currentColor' : 'none'} strokeWidth={2.2} />
+      </button>
+    </div>
   );
 }

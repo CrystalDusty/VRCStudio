@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   X, Download, Copy, Check, ExternalLink, Loader2, AlertCircle, Crop,
-  EyeOff, Trash2, Image as ImageIcon, Film,
+  EyeOff, Trash2, Image as ImageIcon, Film, Heart,
 } from 'lucide-react';
 import {
   loadImage, sourceBox, renderExport, canvasToBlob, downloadBlob, buildFilename,
@@ -81,6 +81,7 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
   // reached this one yet, and everything below hangs off the answer.
   const inspectMedia = useGrabberStore(s => s.inspectMedia);
   const loadAnimationDetails = useGrabberStore(s => s.loadAnimationDetails);
+  const toggleLiked = useGrabberStore(s => s.toggleLiked);
   useEffect(() => {
     if (item.url && !item.inspectedAt) inspectMedia([item.id]);
   }, [item.id, item.url, item.inspectedAt, inspectMedia]);
@@ -954,6 +955,19 @@ export default function GrabbedItemModal({ item, onClose, onHide, onDelete, onNa
                   <ExternalLink size={12} /> Open original
                 </button>
               )}
+              <button
+                onClick={() => toggleLiked(item.id)}
+                aria-pressed={!!item.liked}
+                className={`text-xs px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 border transition-all ${
+                  item.liked ? 'like-glow' : 'border-surface-700 text-surface-400 hover:text-accent-300'
+                }`}
+                title={item.liked
+                  ? 'Liked — this one survives Clear'
+                  : 'Like it, and Clear will leave it alone'}
+              >
+                <Heart size={12} fill={item.liked ? 'currentColor' : 'none'} />
+                {item.liked ? 'Liked' : 'Like'}
+              </button>
               <button
                 onClick={() => { onHide(item.id); onClose(); }}
                 className="btn-secondary text-xs inline-flex items-center gap-1.5"
