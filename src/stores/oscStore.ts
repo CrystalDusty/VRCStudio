@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { handleOscForGame } from './chatboxGameStore';
 
 export interface OSCMessage {
   ts: number;
@@ -115,12 +116,16 @@ export function composeChatboxStatus(s: OSCChatboxStatus, rotationIndex = 0): st
 
 interface OSCState {
   connected: boolean;
+  /** Why it isn't connected, in words a person can act on. */
+  lastError: string | null;
+  status: OSCStatus | null;
   config: OSCConfig;
   chatboxStatus: OSCChatboxStatus;
   parameters: Record<string, any>;
   log: OSCMessage[];
 
-  start: () => Promise<void>;
+  start: () => Promise<{ ok: boolean; error?: string }>;
+  refreshStatus: () => Promise<void>;
   stop: () => Promise<void>;
   send: (address: string, args?: any[]) => Promise<void>;
   setConfig: (patch: Partial<OSCConfig>) => void;
@@ -133,36 +138,78 @@ interface OSCState {
 
 let listenersAttached = false;
 
+/**
+ * Attach the IPC listeners once, whether or not anyone has pressed Start.
+ *
+ * They used to be attached inside start(), so a status or message that arrived
+ * before the first manual start — from auto-start, or from a session already
+ * running — went nowhere.
+ */
+function attachListeners() {
+  if (listenersAttached || !window.electronAPI) return;
+  listenersAttached = true;
+
+  window.electronAPI.onOscMessage((msg) => {
+    const store = useOSCStore.getState();
+    store.ingest({ ts: Date.now(), address: msg.address, args: msg.args });
+    if (msg.address.startsWith('/avatar/parameters/')) {
+      const value = Array.isArray(msg.args) && msg.args.length > 0 ? msg.args[0] : null;
+      useOSCStore.setState(state => ({ parameters: { ...state.parameters, [msg.address]: value } }));
+      // Gestures double as the game controller.
+      handleOscForGame(msg.address, value);
+    }
+  });
+
+  window.electronAPI.onOscStatus((s) => {
+    useOSCStore.setState({
+      connected: !!s.connected,
+      lastError: s.lastError ?? null,
+      status: s,
+    });
+  });
+}
+
 export const useOSCStore = create<OSCState>((set, get) => ({
   connected: false,
+  lastError: null,
+  status: null,
   config: loadConfig(),
   chatboxStatus: loadChatboxStatus(),
   parameters: {},
   log: [],
 
   start: async () => {
-    if (!window.electronAPI?.oscStart) return;
-    if (!listenersAttached) {
-      listenersAttached = true;
-      window.electronAPI.onOscMessage((msg) => {
-        const ts = Date.now();
-        get().ingest({ ts, address: msg.address, args: msg.args });
-        if (msg.address.startsWith('/avatar/parameters/')) {
-          const value = Array.isArray(msg.args) && msg.args.length > 0 ? msg.args[0] : null;
-          set(state => ({ parameters: { ...state.parameters, [msg.address]: value } }));
-        }
-      });
-      window.electronAPI.onOscStatus((s) => {
-        set({ connected: !!s.connected });
-      });
+    if (!window.electronAPI?.oscStart) {
+      const error = 'OSC needs the desktop app — a browser can\'t open a UDP socket.';
+      set({ lastError: error });
+      return { ok: false, error };
     }
+    attachListeners();
+
     const cfg = get().config;
     const res = await window.electronAPI.oscStart({
       sendHost: cfg.sendHost,
       sendPort: cfg.sendPort,
       recvPort: cfg.recvPort,
     });
-    if (res?.ok) set({ connected: true });
+
+    // The old version set `connected: true` on res.ok alone, and res.ok used to
+    // mean "the socket object was constructed". A port already held by another
+    // OSC app produced a cheerful green light and total silence. Now the main
+    // process waits for the bind and hands back the real reason it failed.
+    set({
+      connected: !!res?.ok,
+      lastError: res?.ok ? null : (res?.error ?? 'Could not start OSC'),
+      status: res?.status ?? get().status,
+    });
+    return { ok: !!res?.ok, error: res?.error };
+  },
+
+  refreshStatus: async () => {
+    const status = await window.electronAPI?.oscStatus?.();
+    if (!status) return;
+    attachListeners();
+    set({ status, connected: status.connected, lastError: status.lastError });
   },
 
   stop: async () => {

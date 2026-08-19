@@ -2,8 +2,11 @@ import { useState, useEffect, useRef } from 'react';
 import {
   MessageSquare, Send, Power, AlertCircle, Trash2, Clock, Sparkles,
   Repeat, Plus, X, ChevronDown, ChevronRight, Check, Copy, Wand2,
-  History, Pencil, Settings as SettingsIcon,
+  History, Pencil, Settings as SettingsIcon, Gamepad2, Sliders, Plug,
 } from 'lucide-react';
+import GamesPanel from '../components/osc/GamesPanel';
+import ParametersPanel from '../components/osc/ParametersPanel';
+import ConnectionPanel from '../components/osc/ConnectionPanel';
 import { useOSCStore, composeChatboxStatus } from '../stores/oscStore';
 
 type Send = (address: string, args?: any[]) => Promise<void>;
@@ -22,21 +25,32 @@ function sendToChatbox(send: Send, text: string, silent = true) {
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function OSCPage() {
-  const { connected, config, start, stop, send, setConfig } = useOSCStore();
+  const { connected, config, lastError, start, stop, send, refreshStatus } = useOSCStore();
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<TabId>('chatbox');
 
-  // Auto-start if configured
+  // Reconcile with the main process on mount: OSC may already be running from
+  // auto-start or an earlier visit, and the page used to show "Disconnected"
+  // regardless until someone pressed the button.
   useEffect(() => {
+    refreshStatus();
     if (config.autoStart && !connected) {
-      start().catch(e => setError(e instanceof Error ? e.message : String(e)));
+      start().then(r => { if (!r.ok && r.error) setError(r.error); });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggle = async () => {
     setError(null);
     try {
-      if (connected) await stop();
-      else await start();
+      if (connected) {
+        await stop();
+      } else {
+        // start() reports failures by returning them, not by throwing — a bind
+        // that loses a race with another OSC app is an outcome, not a crash.
+        const res = await start();
+        if (!res.ok) setError(res.error ?? 'Could not start OSC');
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -47,10 +61,10 @@ export default function OSCPage() {
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
-            <MessageSquare size={22} className="text-accent-400" /> OSC Chatbox
+            <MessageSquare size={22} className="text-accent-400" /> OSC
           </h1>
           <p className="text-xs text-surface-500 mt-1">
-            Send messages straight to your in-world VRChat chat bubble &middot; via OSC to <span className="text-surface-400">{config.sendHost}:{config.sendPort}</span>
+            Chatbox, live avatar parameters and playable games &middot; sending to <span className="text-surface-400">{config.sendHost}:{config.sendPort}</span>
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -70,10 +84,15 @@ export default function OSCPage() {
         </div>
       </div>
 
-      {error && (
+      {(error || lastError) && (
         <div className="glass-panel-solid border border-rose-500/30 bg-rose-500/10 p-3 rounded-lg flex items-start gap-2">
           <AlertCircle size={16} className="text-rose-500 flex-shrink-0 mt-0.5" />
-          <p className="text-xs text-rose-400 flex-1">{error}</p>
+          <div className="flex-1">
+            <p className="text-xs text-rose-400">{error || lastError}</p>
+            <button onClick={() => setTab('connection')} className="text-[11px] text-rose-300 hover:underline mt-1">
+              Open connection diagnostics
+            </button>
+          </div>
         </div>
       )}
 
@@ -94,14 +113,42 @@ export default function OSCPage() {
         </div>
       )}
 
-      <ComposeCard connected={connected} send={send} />
-      <QuickPhrases connected={connected} send={send} />
-      <LiveStatusCard connected={connected} />
-      <DecoratorCard connected={connected} send={send} />
-      <ConnectionCard config={config} setConfig={setConfig} connected={connected} restart={async () => { await stop(); await start(); }} />
+      <div className="glass-panel-solid p-1.5 flex items-center gap-1 flex-wrap">
+        {TABS.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`text-xs px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors ${
+              tab === t.id ? 'bg-accent-500/15 text-accent-300' : 'text-surface-400 hover:text-surface-200'
+            }`}
+          >
+            <t.icon size={13} /> {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'chatbox' && (
+        <>
+          <ComposeCard connected={connected} send={send} />
+          <QuickPhrases connected={connected} send={send} />
+          <LiveStatusCard connected={connected} />
+          <DecoratorCard connected={connected} send={send} />
+        </>
+      )}
+      {tab === 'games' && <GamesPanel connected={connected} />}
+      {tab === 'parameters' && <ParametersPanel connected={connected} />}
+      {tab === 'connection' && <ConnectionPanel />}
     </div>
   );
 }
+
+const TABS = [
+  { id: 'chatbox' as const, label: 'Chatbox', icon: MessageSquare },
+  { id: 'games' as const, label: 'Games', icon: Gamepad2 },
+  { id: 'parameters' as const, label: 'Parameters', icon: Sliders },
+  { id: 'connection' as const, label: 'Connection', icon: Plug },
+];
+type TabId = (typeof TABS)[number]['id'];
 
 // ─── Shared ──────────────────────────────────────────────────────────────────
 
@@ -580,55 +627,3 @@ function DecoratorCard({ connected, send }: { connected: boolean; send: Send }) 
 
 // ─── Connection ──────────────────────────────────────────────────────────────
 
-function ConnectionCard({ config, setConfig, connected, restart }: {
-  config: ReturnType<typeof useOSCStore.getState>['config'];
-  setConfig: (patch: any) => void;
-  connected: boolean;
-  restart: () => Promise<void>;
-}) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <div className="glass-panel-solid overflow-hidden">
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between px-4 py-3 hover:bg-surface-800/40 transition-colors"
-      >
-        <div className="flex items-center gap-2">
-          <SettingsIcon size={15} className="text-surface-400" />
-          <span className="text-sm font-semibold">Connection</span>
-        </div>
-        {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-      </button>
-
-      {open && (
-        <div className="px-4 pb-4 space-y-3">
-          <label className="block">
-            <div className="text-xs font-semibold text-surface-400 mb-1">Send to host</div>
-            <input value={config.sendHost} onChange={e => setConfig({ sendHost: e.target.value })} className="osc-input" />
-            <p className="text-[10px] text-surface-600 mt-1">Default 127.0.0.1 — leave it unless VRChat runs on another machine.</p>
-          </label>
-          <label className="block">
-            <div className="text-xs font-semibold text-surface-400 mb-1">Send port</div>
-            <input
-              type="number"
-              value={config.sendPort}
-              onChange={e => setConfig({ sendPort: parseInt(e.target.value, 10) || 9000 })}
-              className="osc-input"
-            />
-            <p className="text-[10px] text-surface-600 mt-1">VRChat listens on 9000 by default.</p>
-          </label>
-          <label className="flex items-center gap-2 text-sm cursor-pointer">
-            <input type="checkbox" checked={config.autoStart} onChange={e => setConfig({ autoStart: e.target.checked })} className="accent-accent-500" />
-            Auto-start OSC when the app launches
-          </label>
-          <div className="flex justify-end">
-            <button onClick={restart} className="btn-secondary text-sm">
-              {connected ? 'Restart with new settings' : 'Apply settings'}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}

@@ -45,80 +45,173 @@ if (!gotLock) {
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
 
 // ─── OSC (VRChat) ──────────────────────────────────────────────────────────
-// VRChat OSC convention: app sends to 127.0.0.1:9000, listens on 127.0.0.1:9001
+// VRChat OSC convention: VRChat listens on 9000 and sends to 127.0.0.1:9001,
+// so we send to 9000 and bind 9001.
 type OSCArg = { type: string; value: any } | string | number | boolean;
+
 let oscPort: any = null;
 let oscEnabled = false;
 let oscSendHost = '127.0.0.1';
 let oscSendPort = 9000;
 let oscRecvPort = 9001;
+let oscLastError: string | null = null;
+let oscBoundAt: number | null = null;
+let oscLastMessageAt: number | null = null;
+let oscPacketsIn = 0;
+let oscPacketsOut = 0;
 const oscParamCache: Record<string, any> = {};
 
+function oscStatus() {
+  return {
+    connected: oscEnabled,
+    sendHost: oscSendHost,
+    sendPort: oscSendPort,
+    recvPort: oscRecvPort,
+    lastError: oscLastError,
+    boundAt: oscBoundAt,
+    lastMessageAt: oscLastMessageAt,
+    packetsIn: oscPacketsIn,
+    packetsOut: oscPacketsOut,
+  };
+}
+
+function pushOscStatus() {
+  mainWindow?.webContents.send('osc:status', oscStatus());
+}
+
+/** Turn a socket error into something a person can act on. */
+function explainOscError(err: any): string {
+  const code = err?.code ?? '';
+  const msg = err?.message || String(err);
+  if (code === 'EADDRINUSE') {
+    return `Port ${oscRecvPort} is already taken — another OSC app (VRCX, VRCFaceTracking, a heart-rate bridge) is listening on it. Close it, or set a different receive port below.`;
+  }
+  if (code === 'EACCES' || code === 'EPERM') {
+    return `Windows blocked the bind on port ${oscRecvPort}. Allow VRC Studio through the firewall, or pick a port above 1024.`;
+  }
+  if (code === 'EADDRNOTAVAIL') {
+    return `Can't bind ${oscRecvPort} on this machine — check the receive address.`;
+  }
+  return msg;
+}
+
+/**
+ * Open the OSC socket and report what actually happened.
+ *
+ * The previous version returned success as soon as the UDPPort object was
+ * constructed. Binding is asynchronous, so a port already held by another OSC
+ * app produced a cheerful "connected" followed by silence — no error surfaced
+ * anywhere, which is exactly what "it doesn't even start" looks like. Now the
+ * call waits for the socket to either bind or fail, and the failure comes back
+ * with a reason.
+ */
 async function startOSC(opts: { sendHost?: string; sendPort?: number; recvPort?: number } = {}) {
   if (opts.sendHost) oscSendHost = opts.sendHost;
   if (opts.sendPort) oscSendPort = opts.sendPort;
   if (opts.recvPort) oscRecvPort = opts.recvPort;
 
-  if (oscPort) {
-    try { oscPort.close(); } catch {}
-    oscPort = null;
-  }
+  stopOSC({ silent: true });
+  oscLastError = null;
 
   try {
-    const osc: any = await import('osc');
-    oscPort = new osc.UDPPort({
-      localAddress: '0.0.0.0',
+    // `osc` is CommonJS. Depending on how this file is bundled, the dynamic
+    // import hands back either the module itself or a namespace with the module
+    // under `default` — and getting that wrong throws "UDPPort is not a
+    // constructor" from inside a try/catch, which is indistinguishable from
+    // "OSC just doesn't work". Accept both shapes.
+    const imported: any = await import('osc');
+    const osc: any = typeof imported?.UDPPort === 'function' ? imported : (imported?.default ?? imported);
+    if (typeof osc?.UDPPort !== 'function') {
+      throw new Error('The OSC library failed to load — reinstall dependencies (npm install).');
+    }
+    const port = new osc.UDPPort({
+      // Loopback only: VRChat is on this machine, and binding every interface
+      // is what makes Windows raise a firewall prompt people then deny.
+      localAddress: '127.0.0.1',
       localPort: oscRecvPort,
       remoteAddress: oscSendHost,
       remotePort: oscSendPort,
       metadata: true,
     });
 
-    oscPort.on('ready', () => {
-      oscEnabled = true;
-      console.log(`[OSC] Listening on :${oscRecvPort}, sending to ${oscSendHost}:${oscSendPort}`);
-      mainWindow?.webContents.send('osc:status', { connected: true, sendHost: oscSendHost, sendPort: oscSendPort, recvPort: oscRecvPort });
-    });
-
-    oscPort.on('message', (msg: { address: string; args: any[] }) => {
-      // Cache parameter values for /avatar/parameters/* paths
+    port.on('message', (msg: { address: string; args: any[] }) => {
+      oscPacketsIn++;
+      oscLastMessageAt = Date.now();
+      const args = (msg.args || []).map((a: any) => (a?.value ?? a));
       if (msg.address?.startsWith('/avatar/parameters/')) {
-        const value = Array.isArray(msg.args) && msg.args.length > 0
-          ? (msg.args[0]?.value ?? msg.args[0])
-          : null;
-        oscParamCache[msg.address] = value;
+        oscParamCache[msg.address] = args.length > 0 ? args[0] : null;
       }
-      mainWindow?.webContents.send('osc:message', {
-        address: msg.address,
-        args: (msg.args || []).map((a: any) => a?.value ?? a),
+      mainWindow?.webContents.send('osc:message', { address: msg.address, args });
+    });
+
+    const outcome = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
+      let settled = false;
+      const done = (result: { ok: boolean; error?: string }) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      };
+
+      port.once('ready', () => {
+        oscPort = port;
+        oscEnabled = true;
+        oscBoundAt = Date.now();
+        oscPacketsIn = 0;
+        oscPacketsOut = 0;
+        console.log(`[OSC] bound :${oscRecvPort}, sending to ${oscSendHost}:${oscSendPort}`);
+        done({ ok: true });
       });
+
+      port.on('error', (err: any) => {
+        const reason = explainOscError(err);
+        console.warn('[OSC] error:', reason);
+        oscLastError = reason;
+        // An error before binding is a failure to start; one afterwards is a
+        // live socket problem, and the socket is no longer trustworthy either
+        // way — tear it down rather than leaving a half-open port behind.
+        oscEnabled = false;
+        try { port.close(); } catch {}
+        if (oscPort === port) oscPort = null;
+        pushOscStatus();
+        done({ ok: false, error: reason });
+      });
+
+      // A bind that neither succeeds nor errors is still a failure to start.
+      const timer = setTimeout(() => {
+        oscLastError = `Timed out binding port ${oscRecvPort}`;
+        try { port.close(); } catch {}
+        done({ ok: false, error: oscLastError });
+      }, 4000);
+
+      port.open();
     });
 
-    oscPort.on('error', (err: any) => {
-      console.warn('[OSC] error:', err?.message || err);
-      mainWindow?.webContents.send('osc:status', { connected: false, error: err?.message || String(err) });
-    });
-
-    oscPort.open();
-    return { ok: true };
+    pushOscStatus();
+    return { ...outcome, status: oscStatus() };
   } catch (err: any) {
-    console.warn('[OSC] failed to start:', err?.message || err);
+    oscLastError = err?.message || String(err);
     oscEnabled = false;
-    return { ok: false, error: err?.message || String(err) };
+    console.warn('[OSC] failed to start:', oscLastError);
+    pushOscStatus();
+    return { ok: false, error: oscLastError, status: oscStatus() };
   }
 }
 
-function stopOSC() {
+function stopOSC(opts: { silent?: boolean } = {}) {
   if (oscPort) {
     try { oscPort.close(); } catch {}
     oscPort = null;
   }
   oscEnabled = false;
-  mainWindow?.webContents.send('osc:status', { connected: false });
+  oscBoundAt = null;
+  if (!opts.silent) pushOscStatus();
 }
 
 function sendOSC(address: string, args: OSCArg[] = []) {
-  if (!oscPort || !oscEnabled) return { ok: false, error: 'OSC not started' };
+  if (!oscPort || !oscEnabled) {
+    return { ok: false, error: oscLastError ?? 'OSC is not running' };
+  }
   try {
     const formatted = args.map(a => {
       if (typeof a === 'object' && a !== null && 'type' in a) return a;
@@ -128,10 +221,29 @@ function sendOSC(address: string, args: OSCArg[] = []) {
       return { type: 'f', value: a };
     });
     oscPort.send({ address, args: formatted });
+    oscPacketsOut++;
     return { ok: true };
   } catch (err: any) {
-    return { ok: false, error: err?.message || String(err) };
+    const reason = err?.message || String(err);
+    oscLastError = reason;
+    return { ok: false, error: reason };
   }
+}
+
+/** Is anything already listening on this UDP port? Used by the diagnostics. */
+async function probeUdpPort(port: number): Promise<{ free: boolean; error?: string }> {
+  const dgram = await import('dgram');
+  return new Promise(resolve => {
+    const socket = dgram.createSocket({ type: 'udp4', reuseAddr: false });
+    socket.once('error', (err: any) => {
+      try { socket.close(); } catch {}
+      resolve({ free: false, error: err?.code || err?.message || String(err) });
+    });
+    socket.bind(port, '127.0.0.1', () => {
+      socket.close();
+      resolve({ free: true });
+    });
+  });
 }
 
 // ─── Window ──────────────────────────────────────────────────────────────────
@@ -1004,12 +1116,8 @@ ipcMain.handle('osc:start', (_e, opts: { sendHost?: string; sendPort?: number; r
   return startOSC(opts);
 });
 ipcMain.handle('osc:stop', () => { stopOSC(); return { ok: true }; });
-ipcMain.handle('osc:status', () => ({
-  connected: oscEnabled,
-  sendHost: oscSendHost,
-  sendPort: oscSendPort,
-  recvPort: oscRecvPort,
-}));
+ipcMain.handle('osc:status', () => oscStatus());
+ipcMain.handle('osc:probePort', (_e, port: number) => probeUdpPort(port));
 ipcMain.handle('osc:send', (_e, address: string, args: OSCArg[] = []) => sendOSC(address, args));
 ipcMain.handle('osc:getCachedParams', () => ({ ...oscParamCache }));
 ipcMain.handle('osc:clearCache', () => { for (const k of Object.keys(oscParamCache)) delete oscParamCache[k]; return { ok: true }; });

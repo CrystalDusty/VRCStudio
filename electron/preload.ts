@@ -71,6 +71,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('osc:start', opts || {}),
   oscStop: () => ipcRenderer.invoke('osc:stop'),
   oscStatus: () => ipcRenderer.invoke('osc:status'),
+  oscProbePort: (port: number) => ipcRenderer.invoke('osc:probePort', port),
   oscSend: (address: string, args?: any[]) => ipcRenderer.invoke('osc:send', address, args || []),
   oscGetCachedParams: () => ipcRenderer.invoke('osc:getCachedParams'),
   oscClearCache: () => ipcRenderer.invoke('osc:clearCache'),

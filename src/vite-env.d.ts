@@ -115,14 +115,16 @@ interface ElectronAPI {
 
   // OSC
   oscStart: (opts?: { sendHost?: string; sendPort?: number; recvPort?: number }) =>
-    Promise<{ ok: boolean; error?: string }>;
+    Promise<{ ok: boolean; error?: string; status?: OSCStatus }>;
   oscStop: () => Promise<{ ok: boolean }>;
-  oscStatus: () => Promise<{ connected: boolean; sendHost: string; sendPort: number; recvPort: number }>;
+  oscStatus: () => Promise<OSCStatus>;
+  /** Is this UDP port free? Answers "something else already has it". */
+  oscProbePort: (port: number) => Promise<{ free: boolean; error?: string }>;
   oscSend: (address: string, args?: any[]) => Promise<{ ok: boolean; error?: string }>;
   oscGetCachedParams: () => Promise<Record<string, any>>;
   oscClearCache: () => Promise<{ ok: boolean }>;
   onOscMessage: (cb: (msg: { address: string; args: any[] }) => void) => () => void;
-  onOscStatus: (cb: (status: any) => void) => () => void;
+  onOscStatus: (cb: (status: OSCStatus) => void) => () => void;
 
   // Tray quick-status
   onTraySetStatus: (cb: (status: string) => void) => () => void;
@@ -184,6 +186,19 @@ interface ElectronAPI {
   botSyncState: (snapshot: any) => Promise<{ ok: boolean }>;
   botActionResult: (payload: { id: string; ok: boolean; error?: string; data?: any }) => Promise<{ ok: boolean }>;
   onBotExecuteAction: (cb: (payload: { id: string; action: string; payload: any }) => void) => () => void;
+}
+
+/** Everything the OSC panel needs to explain itself without the console. */
+interface OSCStatus {
+  connected: boolean;
+  sendHost: string;
+  sendPort: number;
+  recvPort: number;
+  lastError: string | null;
+  boundAt: number | null;
+  lastMessageAt: number | null;
+  packetsIn: number;
+  packetsOut: number;
 }
 
 interface Window {
