@@ -1,7 +1,7 @@
 // Minesweeper, 8x8 with 10 mines, driven by a cursor because a chatbox has no
 // pointer. Eight rows plus a status line is exactly VRChat's nine.
 
-import { fit, randomInt, type ChatboxGame, type GameStatus } from './core';
+import { randomInt, type ChatboxGame, type GameStatus } from './core';
 
 const SIZE = 8;
 const MINES = 10;
@@ -145,16 +145,18 @@ export const minesweeper: ChatboxGame<MineState> = {
   },
 
   render(state) {
-    const DIGITS = ['·', '1', '2', '3', '4', '5', '6', '7', '8'];
+    // ASCII digits and punctuation only — every non-ASCII flourish is a bet on
+    // the chatbox font having that glyph, and a lost bet shows as a blob.
+    const DIGITS = ['.', '1', '2', '3', '4', '5', '6', '7', '8'];
     const lines: string[] = [];
     for (let y = 0; y < SIZE; y++) {
       let line = '';
       for (let x = 0; x < SIZE; x++) {
         const here = x === state.cx && y === state.cy;
         let ch: string;
-        if (state.flags[y][x] && !state.revealed[y][x]) ch = '⚑';
-        else if (!state.revealed[y][x]) ch = '▓';
-        else if (state.mines[y][x]) ch = '✳';
+        if (state.flags[y][x] && !state.revealed[y][x]) ch = 'F';
+        else if (!state.revealed[y][x]) ch = '#';
+        else if (state.mines[y][x]) ch = '*';
         else ch = DIGITS[countAround(state.mines, x, y)];
         // The cursor has to be visible without a pointer, so it sits after the
         // cell it points at. Every cell is two characters so the columns stay
@@ -166,7 +168,7 @@ export const minesweeper: ChatboxGame<MineState> = {
       lines.push(line.replace(/ +$/, ''));
     }
     const flagged = state.flags.flat().filter(Boolean).length;
-    lines.push(state.won ? 'CLEARED' : state.over ? 'BOOM' : `mines ${MINES - flagged}`);
+    lines.push(state.won ? 'cleared!' : state.over ? 'boom' : `mines ${MINES - flagged}`);
     return lines;
   },
 

@@ -43,7 +43,7 @@ export interface ChatboxGame<S> {
   tick(state: S): S;
   /** Handle a button. Must be a no-op when over, except for `start`. */
   press(state: S, button: Button): S;
-  render(state: S): string[];
+  render(state: S, glyphs?: GlyphSet): string[];
   status(state: S): GameStatus;
 }
 
@@ -86,12 +86,53 @@ export function shuffled<T>(items: T[], seed: number): { seed: number; items: T[
 // inside the nine-line limit. Braille packs tighter but is far harder to read
 // at chatbox size.
 
-const HALF_BLOCK = [
-  ' ',        // neither
-  '▀',   // upper only  ▀
-  '▄',   // lower only  ▄
-  '█',   // both        █
+/**
+ * The four glyphs a half-block board is drawn from: empty, top half, bottom
+ * half, both.
+ *
+ * The empty one is the whole reason this is configurable. VRChat's chatbox
+ * font is proportional, so a space is much narrower than a block — a row of
+ * "  ██  " and a row of "██████" come out different lengths and the columns
+ * stop lining up. Worse, it changes as the board changes, which is why it
+ * looked fine one moment and skewed the next. Filling empty cells with a glyph
+ * from the same Block Elements range gives every cell the same advance width.
+ */
+export interface GlyphSet {
+  id: string;
+  name: string;
+  note: string;
+  empty: string;
+  upper: string;
+  lower: string;
+  full: string;
+}
+
+export const GLYPH_SETS: GlyphSet[] = [
+  {
+    id: 'shade', name: 'Shaded', note: 'Empty cells drawn with ░, same width as the blocks.',
+    empty: '\u2591', upper: '\u2580', lower: '\u2584', full: '\u2588',
+  },
+  {
+    id: 'mid', name: 'Mid shade', note: 'Heavier background if ░ is too faint to see.',
+    empty: '\u2592', upper: '\u2580', lower: '\u2584', full: '\u2588',
+  },
+  {
+    // Solid halves, not the thin two-dot rows a naive pick gives: dots 1,2,4,5
+    // for the top, 3,6,7,8 for the bottom, all eight for a full cell.
+    id: 'braille', name: 'Braille', note: 'One width by definition. Smaller, and denser.',
+    empty: '\u2800', upper: '\u281B', lower: '\u28E4', full: '\u28FF',
+  },
+  {
+    id: 'space', name: 'Spaces', note: "The old look. Only lines up if your font is monospaced.",
+    empty: ' ', upper: '\u2580', lower: '\u2584', full: '\u2588',
+  },
 ];
+
+export const DEFAULT_GLYPHS = GLYPH_SETS[0];
+
+export function glyphSetById(id: string): GlyphSet {
+  return GLYPH_SETS.find(g => g.id === id) ?? DEFAULT_GLYPHS;
+}
 
 /**
  * Draw a pixel grid as half-block text.
@@ -99,18 +140,38 @@ const HALF_BLOCK = [
  * `grid[y][x]` is truthy where a pixel is lit. An odd height is padded with an
  * empty row, so callers don't have to think about it.
  */
-export function drawPixels(grid: ArrayLike<ArrayLike<unknown>>, width: number, height: number): string[] {
+export function drawPixels(
+  grid: ArrayLike<ArrayLike<unknown>>,
+  width: number,
+  height: number,
+  glyphs: GlyphSet = DEFAULT_GLYPHS,
+): string[] {
+  const table = [glyphs.empty, glyphs.upper, glyphs.lower, glyphs.full];
   const lines: string[] = [];
   for (let y = 0; y < height; y += 2) {
     let line = '';
     for (let x = 0; x < width; x++) {
       const top = grid[y]?.[x] ? 1 : 0;
       const bottom = grid[y + 1]?.[x] ? 2 : 0;
-      line += HALF_BLOCK[top | bottom];
+      line += table[top | bottom];
     }
     lines.push(line);
   }
   return lines;
+}
+
+/**
+ * A line showing every glyph the games might use, for checking what a font
+ * actually has. Anything that comes out as a box or a circle is missing — which
+ * is how a neat little ▸ ended up on screen as a random-looking blob.
+ */
+export function fontTestMessage(): string {
+  return [
+    'VRC Studio font check',
+    `blocks ${'\u2588\u2580\u2584'}  shade ${'\u2591\u2592\u2593'}`,
+    `braille ${'\u2800\u281B\u28E4\u28FF'}`,
+    'any box or circle = missing',
+  ].join('\n');
 }
 
 /** Pad or trim a line to an exact width, so a board never looks ragged. */

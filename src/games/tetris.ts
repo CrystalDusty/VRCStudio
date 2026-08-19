@@ -8,8 +8,8 @@
 // delay so a piece can be slid after it lands, and a hold slot.
 
 import {
-  drawPixels, fit, randomInt, shuffled,
-  type Button, type ChatboxGame, type GameStatus,
+  drawPixels, fit, shuffled, DEFAULT_GLYPHS,
+  type ChatboxGame, type GameStatus, type GlyphSet,
 } from './core';
 
 export const WIDTH = 10;
@@ -244,20 +244,21 @@ export const tetris: ChatboxGame<TetrisState> = {
     }
   },
 
-  render(state) {
+  render(state, glyphs: GlyphSet = DEFAULT_GLYPHS) {
     const grid = state.board.map(row => [...row]);
     if (!state.over) {
       for (const [cx, cy] of cells(state.piece, state.rotation, state.x, state.y)) {
         if (cy >= 0 && cy < HEIGHT && cx >= 0 && cx < WIDTH) grid[cy][cx] = 1;
       }
     }
-    const lines = drawPixels(grid, WIDTH, HEIGHT);
-    // "104 L0 L" read as nonsense — the trailing letter is the next piece and
-    // the L0 is the line count. An arrow makes the preview unmistakable.
+    const lines = drawPixels(grid, WIDTH, HEIGHT, glyphs);
+    // Plain ASCII only. A tidy ▸ here rendered as a hollow circle in VRChat —
+    // its chatbox font simply doesn't have that character — so the score line
+    // read as a random blob followed by a stray letter.
     const hud = state.over
-      ? `GAME OVER ${state.score}`
-      : `${state.score} ${state.lines}L ▸${state.next}`;
-    lines.push(fit(hud, WIDTH));
+      ? `game over ${state.score}`
+      : `${state.score} ${state.lines}L next ${state.next}`;
+    lines.push(hud);
     return lines;
   },
 

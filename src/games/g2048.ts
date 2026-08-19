@@ -1,6 +1,6 @@
 // 2048. Numbers rather than pixels, because the whole point is reading them.
 
-import { fit, randomInt, type ChatboxGame, type GameStatus } from './core';
+import { randomInt, type ChatboxGame, type GameStatus } from './core';
 
 const SIZE = 4;
 
@@ -132,9 +132,12 @@ export const g2048: ChatboxGame<G2048State> = {
   },
 
   render(state) {
-    const cell = (v: number) => (v === 0 ? '   ·' : String(v).padStart(4));
-    const lines = state.grid.map(row => row.map(cell).join(''));
-    lines.push(fit(state.over ? `GAME OVER ${state.score}` : `${state.score}`, 16));
+    // Columns are separated rather than relying on padding alone: VRChat's
+    // chatbox font is proportional, so spaces are narrower than digits and a
+    // grid held together by spaces drifts out of line.
+    const cell = (v: number) => (v === 0 ? '   .' : String(v).padStart(4));
+    const lines = state.grid.map(row => row.map(cell).join('|'));
+    lines.push(state.over ? `game over ${state.score}` : `${state.score}`);
     return lines;
   },
 

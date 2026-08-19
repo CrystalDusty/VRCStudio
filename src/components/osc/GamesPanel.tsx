@@ -6,7 +6,7 @@ import {
   useChatboxGameStore, handleKeyForGame,
   LEFT_GESTURE_BUTTONS, RIGHT_GESTURE_BUTTONS, GESTURE_NAMES,
 } from '../../stores/chatboxGameStore';
-import { GAMES, gameById, composeFrame, CHATBOX_MAX_CHARS, type Button } from '../../games';
+import { GAMES, gameById, composeFrame, glyphSetById, GLYPH_SETS, CHATBOX_MAX_CHARS, type Button } from '../../games';
 
 const BUTTON_LABEL: Record<Button, string> = {
   left: '←', right: '→', up: '↑', down: '↓',
@@ -16,11 +16,13 @@ const BUTTON_LABEL: Record<Button, string> = {
 export default function GamesPanel({ connected }: { connected: boolean }) {
   const {
     gameId, state, running, frameMs, useGestures, useKeyboard, previewOnly,
-    framesSent, gestures, selectGame, start, stop, press, setFrameMs, setOption,
+    framesSent, gestures, glyphId, selectGame, start, stop, press, setFrameMs,
+    setOption, setGlyphId, sendFontTest,
   } = useChatboxGameStore();
 
   const game = gameById(gameId);
-  const lines = game.render(state);
+  const glyphs = glyphSetById(glyphId);
+  const lines = game.render(state, glyphs);
   const frame = composeFrame(lines);
   const status = game.status(state);
   const boardRef = useRef<HTMLDivElement>(null);
@@ -142,6 +144,39 @@ export default function GamesPanel({ connected }: { connected: boolean }) {
             icon={Monitor} label="Preview only — don't send to VRChat"
             checked={previewOnly} onChange={v => setOption({ previewOnly: v })}
           />
+        </div>
+
+        {/* The chatbox font is proportional, so a space is narrower than a
+            block and a board held together by spaces drifts out of line as it
+            changes. Filling empty cells from the same block range fixes it —
+            but only if the font has that glyph, hence the test. */}
+        <div className="space-y-1.5 pt-2 border-t border-surface-800">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-surface-500">
+              Board characters
+            </span>
+            <button onClick={sendFontTest} className="btn-ghost text-[11px]">
+              Send font test to chatbox
+            </button>
+          </div>
+          <div className="flex gap-1.5 flex-wrap">
+            {GLYPH_SETS.map(g => (
+              <button
+                key={g.id}
+                onClick={() => setGlyphId(g.id)}
+                title={g.note}
+                className={`text-[11px] px-2 py-1 rounded-lg border transition-colors font-mono ${
+                  g.id === glyphId ? 'border-accent-500 bg-accent-500/10 text-accent-300' : 'border-surface-700 text-surface-400'
+                }`}
+              >
+                {g.empty}{g.full}{g.upper} {g.name}
+              </button>
+            ))}
+          </div>
+          <p className="text-[10px] text-surface-600">
+            {glyphs.note} If the board looks skewed in VRChat, or the test line shows boxes and
+            circles, try another set — a missing character is what those blobs are.
+          </p>
         </div>
 
         <label className="block">

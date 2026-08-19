@@ -10,7 +10,10 @@
 
 import { create } from 'zustand';
 import { useOSCStore } from './oscStore';
-import { GAMES, gameById, composeFrame, type Button, type ChatboxGame } from '../games';
+import {
+  GAMES, gameById, composeFrame, glyphSetById, fontTestMessage, DEFAULT_GLYPHS,
+  type Button, type ChatboxGame,
+} from '../games';
 
 /** VRChat's gesture values. 0 is a relaxed hand and means "no button". */
 export const GESTURE_NAMES = [
@@ -69,12 +72,17 @@ interface GameState {
   framesSent: number;
   /** What the hands are doing right now, for the on-screen controller. */
   gestures: { left: number; right: number };
+  /** Which glyphs the board is drawn from — see GLYPH_SETS for why. */
+  glyphId: string;
 
   selectGame: (id: string) => void;
   start: () => void;
   stop: () => void;
   press: (button: Button) => void;
   setFrameMs: (ms: number) => void;
+  setGlyphId: (id: string) => void;
+  /** Put every candidate glyph in the chatbox so missing ones are visible. */
+  sendFontTest: () => void;
   setOption: (patch: Partial<Pick<GameState, 'useGestures' | 'useKeyboard' | 'previewOnly'>>) => void;
 }
 
@@ -98,6 +106,7 @@ export const useChatboxGameStore = create<GameState>((set, get) => ({
   lastFrame: '',
   framesSent: 0,
   gestures: { left: 0, right: 0 },
+  glyphId: localStorage.getItem('vrcstudio_game_glyphs') ?? DEFAULT_GLYPHS.id,
 
   selectGame: (id) => {
     const game = currentGame(id);
@@ -138,6 +147,22 @@ export const useChatboxGameStore = create<GameState>((set, get) => ({
     if (get().running) { stopLoops(); startLoops(); }
   },
 
+  setGlyphId: (id) => {
+    try { localStorage.setItem('vrcstudio_game_glyphs', id); } catch { /* private mode */ }
+    set({ glyphId: id, lastFrame: '' });
+    sendFrame(true);
+  },
+
+  sendFontTest: () => {
+    const osc = useOSCStore.getState();
+    if (!osc.connected) return;
+    osc.send('/chatbox/input', [
+      { type: 's', value: fontTestMessage() },
+      { type: 'T', value: true },
+      { type: 'F', value: false },
+    ]).catch(() => {});
+  },
+
   setOption: (patch) => set(patch),
 }));
 
@@ -176,7 +201,7 @@ function sendFrame(force = false) {
   const s = useChatboxGameStore.getState();
   if (!s.running) return;
   const game = currentGame(s.gameId);
-  const frame = composeFrame(game.render(s.state));
+  const frame = composeFrame(game.render(s.state, glyphSetById(s.glyphId)));
 
   // An identical frame is worth nothing and still costs a message — turn-based
   // games would otherwise send the same board twice a second forever.

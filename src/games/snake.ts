@@ -5,7 +5,10 @@
 // newlines plus a score line came to 146, two past VRChat's 144, which would
 // have silently eaten the bottom row.
 
-import { drawPixels, fit, randomInt, type Button, type ChatboxGame, type GameStatus } from './core';
+import {
+  drawPixels, randomInt, DEFAULT_GLYPHS,
+  type ChatboxGame, type GameStatus, type GlyphSet,
+} from './core';
 
 export const WIDTH = 18;
 export const HEIGHT = 12;
@@ -117,15 +120,14 @@ export const snake: ChatboxGame<SnakeState> = {
     return { ...state, pending: dir };
   },
 
-  render(state) {
+  render(state, glyphs: GlyphSet = DEFAULT_GLYPHS) {
     const grid = Array.from({ length: HEIGHT }, () => new Array(WIDTH).fill(0));
     if (state.food.x >= 0) grid[state.food.y][state.food.x] = 1;
     for (const s of state.snake) grid[s.y][s.x] = 1;
-    const lines = drawPixels(grid, WIDTH, HEIGHT);
-    lines.push(fit(
-      state.over ? `GAME OVER  ${state.score}` : `${state.score}  len ${state.snake.length}${state.wrap ? '' : '  walls'}`,
-      WIDTH,
-    ));
+    const lines = drawPixels(grid, WIDTH, HEIGHT, glyphs);
+    lines.push(state.over
+      ? `game over  ${state.score}`
+      : `${state.score}  len ${state.snake.length}${state.wrap ? '' : '  walls'}`);
     return lines;
   },
 
