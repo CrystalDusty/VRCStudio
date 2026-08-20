@@ -1,19 +1,22 @@
 // Tetris, sized for a chatbox.
 //
-// 10x16 rather than 10x20: half-blocks give two rows per line, so 16 rows is
-// eight lines and leaves one of VRChat's nine for the score.
+// 10x9 rather than 10x20. One board row per line of text is forced by the
+// chatbox putting a gap between lines: packing two rows into a character cut
+// every piece that crossed a line boundary in half. Nine lines is VRChat's
+// ceiling, so nine rows is the well — a short one, but one you can read.
+// The score rides on the end of the top row, where it costs no height.
 //
 // Proper rules, not an approximation — 7-bag randomiser so you can't get
 // starved of an I-piece, wall kicks so rotating against a wall works, lock
 // delay so a piece can be slid after it lands, and a hold slot.
 
 import {
-  drawPixels, fit, shuffled, DEFAULT_GLYPHS,
-  type ChatboxGame, type GameStatus, type GlyphSet,
+  drawBoard, shuffled, DEFAULT_STYLE,
+  type ChatboxGame, type GameStatus, type BoardStyle,
 } from './core';
 
 export const WIDTH = 10;
-export const HEIGHT = 16;
+export const HEIGHT = 9;
 
 /** Each piece as its four rotations, listed as (x, y) offsets. */
 const PIECES: Record<string, number[][][]> = {
@@ -244,22 +247,20 @@ export const tetris: ChatboxGame<TetrisState> = {
     }
   },
 
-  render(state, glyphs: GlyphSet = DEFAULT_GLYPHS) {
+  render(state, style: BoardStyle = DEFAULT_STYLE) {
     const grid = state.board.map(row => [...row]);
     if (!state.over) {
       for (const [cx, cy] of cells(state.piece, state.rotation, state.x, state.y)) {
         if (cy >= 0 && cy < HEIGHT && cx >= 0 && cx < WIDTH) grid[cy][cx] = 1;
       }
     }
-    const lines = drawPixels(grid, WIDTH, HEIGHT, glyphs);
     // Plain ASCII only. A tidy ▸ here rendered as a hollow circle in VRChat —
     // its chatbox font simply doesn't have that character — so the score line
     // read as a random blob followed by a stray letter.
     const hud = state.over
       ? `game over ${state.score}`
       : `${state.score} ${state.lines}L next ${state.next}`;
-    lines.push(hud);
-    return lines;
+    return drawBoard(grid, WIDTH, HEIGHT, style, hud);
   },
 
   status(state): GameStatus {

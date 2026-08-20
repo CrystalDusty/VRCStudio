@@ -43,7 +43,7 @@ export interface ChatboxGame<S> {
   tick(state: S): S;
   /** Handle a button. Must be a no-op when over, except for `start`. */
   press(state: S, button: Button): S;
-  render(state: S, glyphs?: GlyphSet): string[];
+  render(state: S, style?: BoardStyle): string[];
   status(state: S): GameStatus;
 }
 
@@ -87,91 +87,106 @@ export function shuffled<T>(items: T[], seed: number): { seed: number; items: T[
 // at chatbox size.
 
 /**
- * The four glyphs a half-block board is drawn from: empty, top half, bottom
- * half, both.
+ * How a board of cells is turned into text.
  *
- * The empty one is the whole reason this is configurable. VRChat's chatbox
- * font is proportional, so a space is much narrower than a block — a row of
- * "  ██  " and a row of "██████" come out different lengths and the columns
- * stop lining up. Worse, it changes as the board changes, which is why it
- * looked fine one moment and skewed the next. Filling empty cells with a glyph
- * from the same Block Elements range gives every cell the same advance width.
+ * Three things about VRChat's chatbox force this design, and I got the first
+ * two right before understanding the third:
+ *
+ *   1. The font is proportional, so a space is much narrower than a block. A
+ *      board that mixes them changes width as it changes contents, and the
+ *      columns drift.
+ *   2. Shade characters fix the width but read as bright diagonal hatching,
+ *      which has little contrast against a solid block.
+ *   3. **Lines have leading.** Characters like ▀ and ▄ are designed to tile
+ *      edge to edge vertically, and in the chatbox they cannot — there is a gap
+ *      between every line. Packing two board rows into one character therefore
+ *      cuts every piece that spans a line boundary in half, which is what made
+ *      the shapes unrecognisable.
+ *
+ * So: exactly one board row per line of text. The gaps then fall between rows
+ * instead of through them, which reads as a grid rather than as damage. It
+ * costs board height — nine lines is the hard ceiling — and that is the real
+ * price of drawing a game in a text box.
+ *
+ * Braille is the default because it settles (1) and (2) by construction: every
+ * glyph in the range is one width, and U+2800 is a true blank, so the
+ * background is dark and the blocks are bright.
  */
-export interface GlyphSet {
+export interface BoardStyle {
   id: string;
   name: string;
   note: string;
+  filled: string;
   empty: string;
-  upper: string;
-  lower: string;
-  full: string;
 }
 
-export const GLYPH_SETS: GlyphSet[] = [
+export const BOARD_STYLES: BoardStyle[] = [
   {
-    id: 'shade', name: 'Shaded', note: 'Empty cells drawn with ░, same width as the blocks.',
-    empty: '\u2591', upper: '\u2580', lower: '\u2584', full: '\u2588',
+    id: 'braille', name: 'Braille', filled: '\u28FF', empty: '\u2800',
+    note: 'Solid blocks on a dark background, every character the same width by definition.',
   },
   {
-    id: 'mid', name: 'Mid shade', note: 'Heavier background if ░ is too faint to see.',
-    empty: '\u2592', upper: '\u2580', lower: '\u2584', full: '\u2588',
+    id: 'blocks', name: 'Blocks', filled: '\u2588', empty: '\u2591',
+    note: 'Full blocks on light shading. Same width, but the shading can read as noise.',
   },
   {
-    // Solid halves, not the thin two-dot rows a naive pick gives: dots 1,2,4,5
-    // for the top, 3,6,7,8 for the bottom, all eight for a full cell.
-    id: 'braille', name: 'Braille', note: 'One width by definition. Smaller, and denser.',
-    empty: '\u2800', upper: '\u281B', lower: '\u28E4', full: '\u28FF',
+    id: 'mid', name: 'Mid shade', filled: '\u2588', empty: '\u2592',
+    note: 'Heavier background if the light shading is too faint to see.',
   },
   {
-    id: 'space', name: 'Spaces', note: "The old look. Only lines up if your font is monospaced.",
-    empty: ' ', upper: '\u2580', lower: '\u2584', full: '\u2588',
+    id: 'space', name: 'Spaces', filled: '\u2588', empty: ' ',
+    note: 'The most contrast, but only lines up where the font is monospaced.',
+  },
+  {
+    id: 'ascii', name: 'ASCII', filled: '#', empty: '.',
+    note: 'Last resort: certain to render anywhere, not certain to line up.',
   },
 ];
 
-export const DEFAULT_GLYPHS = GLYPH_SETS[0];
+export const DEFAULT_STYLE = BOARD_STYLES[0];
 
-export function glyphSetById(id: string): GlyphSet {
-  return GLYPH_SETS.find(g => g.id === id) ?? DEFAULT_GLYPHS;
+export function boardStyleById(id: string): BoardStyle {
+  return BOARD_STYLES.find(s => s.id === id) ?? DEFAULT_STYLE;
 }
 
 /**
- * Draw a pixel grid as half-block text.
+ * Draw a grid of cells, one row per line.
  *
- * `grid[y][x]` is truthy where a pixel is lit. An odd height is padded with an
- * empty row, so callers don't have to think about it.
+ * `cells[y][x]` is truthy where a cell is filled. `suffix` is appended to the
+ * first line, past the board — text to the right of a row can't shift the
+ * columns, so that's a free place to put the score without spending a line.
  */
-export function drawPixels(
-  grid: ArrayLike<ArrayLike<unknown>>,
+export function drawBoard(
+  cells: ArrayLike<ArrayLike<unknown>>,
   width: number,
   height: number,
-  glyphs: GlyphSet = DEFAULT_GLYPHS,
+  style: BoardStyle = DEFAULT_STYLE,
+  suffix = '',
 ): string[] {
-  const table = [glyphs.empty, glyphs.upper, glyphs.lower, glyphs.full];
   const lines: string[] = [];
-  for (let y = 0; y < height; y += 2) {
+  for (let y = 0; y < height; y++) {
     let line = '';
-    for (let x = 0; x < width; x++) {
-      const top = grid[y]?.[x] ? 1 : 0;
-      const bottom = grid[y + 1]?.[x] ? 2 : 0;
-      line += table[top | bottom];
-    }
-    lines.push(line);
+    for (let x = 0; x < width; x++) line += cells[y]?.[x] ? style.filled : style.empty;
+    lines.push(y === 0 && suffix ? `${line} ${suffix}` : line);
   }
   return lines;
 }
 
 /**
- * A line showing every glyph the games might use, for checking what a font
- * actually has. Anything that comes out as a box or a circle is missing — which
- * is how a neat little ▸ ended up on screen as a random-looking blob.
+ * A message for checking a style against the real chatbox font.
+ *
+ * It draws a rectangle. Straight sides and square corners mean this style lines
+ * up in your font; an edge that wanders means its blank is a different width
+ * from its block. Boxes or circles mean the characters aren't in the font.
  */
-export function fontTestMessage(): string {
-  return [
-    'VRC Studio font check',
-    `blocks ${'\u2588\u2580\u2584'}  shade ${'\u2591\u2592\u2593'}`,
-    `braille ${'\u2800\u281B\u28E4\u28FF'}`,
-    'any box or circle = missing',
-  ].join('\n');
+export function alignmentTestMessage(style: BoardStyle = DEFAULT_STYLE): string {
+  const W = 12, H = 6;
+  const cells: boolean[][] = [];
+  for (let y = 0; y < H; y++) {
+    cells.push(Array.from({ length: W }, (_, x) =>
+      y === 0 || y === H - 1 || x === 0 || x === W - 1));
+  }
+  return [`${style.name}: sides straight?`, ...drawBoard(cells, W, H, style)].join('\n');
 }
 
 /** Pad or trim a line to an exact width, so a board never looks ragged. */

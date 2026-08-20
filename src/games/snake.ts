@@ -1,17 +1,18 @@
-// Snake on an 18x12 field.
+// Snake on a 12x9 field.
 //
-// Half-blocks make that eighteen characters across and six lines down. Twenty
-// wide was the obvious choice and it overflowed: 120 board characters plus
-// newlines plus a score line came to 146, two past VRChat's 144, which would
-// have silently eaten the bottom row.
+// One row per line of text, because the chatbox puts a gap between lines and
+// anything that packs two rows into a character gets sliced through the middle.
+// Nine lines is VRChat's ceiling. Fourteen columns fit until the score line
+// grew — "0 len 3 walls" pushed a frame to 148 — so twelve, which leaves room
+// for a four-figure score and the walls flag. The score rides on the top row.
 
 import {
-  drawPixels, randomInt, DEFAULT_GLYPHS,
-  type ChatboxGame, type GameStatus, type GlyphSet,
+  drawBoard, randomInt, DEFAULT_STYLE,
+  type ChatboxGame, type GameStatus, type BoardStyle,
 } from './core';
 
-export const WIDTH = 18;
-export const HEIGHT = 12;
+export const WIDTH = 12;
+export const HEIGHT = 9;
 
 type Point = { x: number; y: number };
 
@@ -45,7 +46,7 @@ function placeFood(snake: Point[], seed: number): { food: Point; seed: number } 
 
 function fresh(seed: number): SnakeState {
   const snake: Point[] = [
-    { x: 5, y: 6 }, { x: 4, y: 6 }, { x: 3, y: 6 },
+    { x: 5, y: 4 }, { x: 4, y: 4 }, { x: 3, y: 4 },
   ];
   const placed = placeFood(snake, seed);
   return {
@@ -120,15 +121,14 @@ export const snake: ChatboxGame<SnakeState> = {
     return { ...state, pending: dir };
   },
 
-  render(state, glyphs: GlyphSet = DEFAULT_GLYPHS) {
+  render(state, style: BoardStyle = DEFAULT_STYLE) {
     const grid = Array.from({ length: HEIGHT }, () => new Array(WIDTH).fill(0));
     if (state.food.x >= 0) grid[state.food.y][state.food.x] = 1;
     for (const s of state.snake) grid[s.y][s.x] = 1;
-    const lines = drawPixels(grid, WIDTH, HEIGHT, glyphs);
-    lines.push(state.over
-      ? `game over  ${state.score}`
-      : `${state.score}  len ${state.snake.length}${state.wrap ? '' : '  walls'}`);
-    return lines;
+    const hud = state.over
+      ? `game over ${state.score}`
+      : `${state.score} len ${state.snake.length}${state.wrap ? '' : ' walls'}`;
+    return drawBoard(grid, WIDTH, HEIGHT, style, hud);
   },
 
   status(state): GameStatus {
