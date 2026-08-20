@@ -1307,9 +1307,43 @@ ipcMain.handle('image:probePublic', async (_e, url: string) => probePresenceImag
 // npm install, and relaunches.
 
 const UPDATE_REPO = 'DoNotPetMe/VRCStudio';
-const UPDATE_BRANCH = 'claude/vrchat-companion-app-e7eJL';
+const DEFAULT_UPDATE_BRANCH = 'claude/vrchat-companion-app-e7eJL';
 const INSTALL_ROOT = path.resolve(__dirname, '..');
 const VERSION_FILE = path.join(INSTALL_ROOT, '.vrcstudio-version.json');
+const UPDATE_BRANCH_FILE = path.join(INSTALL_ROOT, '.vrcstudio-branch');
+
+/**
+ * Which branch updates come from.
+ *
+ * This was a constant, and that quietly broke testing: the app updated from
+ * one branch while the work being tested lived on another, so fix after fix
+ * was reported as "still broken" by a build that had never received any of
+ * them — and the update banner, pointing at the other branch, would have
+ * overwritten them if pressed. It's a setting now, and the UI says which
+ * branch it's tracking.
+ */
+function readUpdateBranch(): string {
+  try {
+    const stored = fs.readFileSync(UPDATE_BRANCH_FILE, 'utf-8').trim();
+    if (stored) return stored;
+  } catch { /* never set — use the default */ }
+  return DEFAULT_UPDATE_BRANCH;
+}
+
+function writeUpdateBranch(branch: string): { ok: boolean; branch: string; error?: string } {
+  const clean = branch.trim().replace(/^refs\/heads\//, '');
+  // A branch name is going into a URL and a file path; keep it to what git
+  // actually allows rather than trusting the field.
+  if (!clean || clean.length > 200 || !/^[\w./-]+$/.test(clean) || clean.includes('..')) {
+    return { ok: false, branch: readUpdateBranch(), error: 'That is not a valid branch name.' };
+  }
+  try {
+    fs.writeFileSync(UPDATE_BRANCH_FILE, clean, 'utf-8');
+    return { ok: true, branch: clean };
+  } catch (err: any) {
+    return { ok: false, branch: readUpdateBranch(), error: err?.message || String(err) };
+  }
+}
 
 // Resolve the locally-installed commit SHA. Three sources tried in order:
 //   1. .vrcstudio-version.json (written after a successful update)
@@ -1324,7 +1358,7 @@ function readCurrentCommit(): { sha: string | null; source: string } {
   } catch {}
 
   try {
-    const branchRefPath = path.join(INSTALL_ROOT, '.git', 'refs', 'heads', ...UPDATE_BRANCH.split('/'));
+    const branchRefPath = path.join(INSTALL_ROOT, '.git', 'refs', 'heads', ...readUpdateBranch().split('/'));
     if (fs.existsSync(branchRefPath)) {
       const sha = fs.readFileSync(branchRefPath, 'utf-8').trim();
       if (sha) return { sha, source: 'git-branch-ref' };
@@ -1377,12 +1411,14 @@ function githubGet<T = any>(apiPath: string): Promise<{ ok: boolean; status: num
 }
 
 ipcMain.handle('update:getCurrentCommit', () => readCurrentCommit());
+ipcMain.handle('update:getBranch', () => ({ branch: readUpdateBranch(), repo: UPDATE_REPO, default: DEFAULT_UPDATE_BRANCH }));
+ipcMain.handle('update:setBranch', (_e, branch: string) => writeUpdateBranch(branch));
 
 ipcMain.handle('update:check', async () => {
   const local = readCurrentCommit();
 
   // Latest commit on the branch
-  const branch = await githubGet<any>(`/repos/${UPDATE_REPO}/branches/${encodeURIComponent(UPDATE_BRANCH)}`);
+  const branch = await githubGet<any>(`/repos/${UPDATE_REPO}/branches/${encodeURIComponent(readUpdateBranch())}`);
   if (!branch.ok) {
     return { ok: false, error: `Couldn't reach GitHub (${branch.status})` };
   }
@@ -1500,7 +1536,7 @@ ipcMain.handle('update:downloadAndApply', async (_e) => {
   }
 
   try {
-    const zipUrl = `https://github.com/${UPDATE_REPO}/archive/refs/heads/${UPDATE_BRANCH}.zip`;
+    const zipUrl = `https://github.com/${UPDATE_REPO}/archive/refs/heads/${readUpdateBranch()}.zip`;
     const zipPath = path.join(app.getPath('temp'), `vrcstudio-update-${Date.now()}.zip`);
 
     if (mainWindow) mainWindow.webContents.send('update:progress', { stage: 'downloading', received: 0, total: 0 });
@@ -1518,7 +1554,7 @@ ipcMain.handle('update:downloadAndApply', async (_e) => {
     // Spawn the helper detached so it survives our quit. Args: zip path,
     // install dir, our PID, the branch ref for the post-update version
     // marker.
-    const branchInfo = await githubGet<any>(`/repos/${UPDATE_REPO}/branches/${encodeURIComponent(UPDATE_BRANCH)}`);
+    const branchInfo = await githubGet<any>(`/repos/${UPDATE_REPO}/branches/${encodeURIComponent(readUpdateBranch())}`);
     const latestSha = (branchInfo.data as any)?.commit?.sha ?? '';
 
     const child = spawn('cmd.exe', ['/c', 'start', '', helperPath, zipPath, INSTALL_ROOT, String(process.pid), latestSha], {

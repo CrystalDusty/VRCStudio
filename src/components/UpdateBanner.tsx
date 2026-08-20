@@ -3,10 +3,16 @@
 // Dismissable; reappears next time the user opens the app (or on a fresh
 // check that finds an even newer commit).
 
-import { Download, X, RefreshCw, AlertTriangle, Check } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Download, X, RefreshCw, AlertTriangle, Check, GitBranch } from 'lucide-react';
 import { useUpdateStore } from '../stores/updateStore';
 
 export default function UpdateBanner() {
+  const [branch, setBranch] = useState<string | null>(null);
+  useEffect(() => {
+    window.electronAPI?.updateGetBranch?.().then(b => setBranch(b?.branch ?? null)).catch(() => {});
+  }, []);
+
   const stage = useUpdateStore(s => s.stage);
   const info = useUpdateStore(s => s.info);
   const error = useUpdateStore(s => s.error);
@@ -58,8 +64,16 @@ export default function UpdateBanner() {
       <span className="flex items-center gap-2">
         <Download size={13} className="text-accent-300" />
         <span className="font-medium">{versionLabel}</span>
+        {/* Which branch this is from. Without it, an update from a different
+            line of work looks identical to the one you were waiting for — and
+            installing it silently replaces everything you were testing. */}
+        {branch && (
+          <span className="text-surface-500 font-mono hidden sm:inline">
+            <GitBranch size={11} className="inline mr-1 -mt-0.5" />{branch}
+          </span>
+        )}
         {info.commits[0] && (
-          <span className="text-surface-400 truncate hidden sm:inline">
+          <span className="text-surface-400 truncate hidden md:inline">
             — {info.commits[0].message}
           </span>
         )}

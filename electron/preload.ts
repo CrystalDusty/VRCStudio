@@ -111,6 +111,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Auto-updater (source-tree updates from GitHub)
   updateGetCurrentCommit: () => ipcRenderer.invoke('update:getCurrentCommit'),
+  updateGetBranch: () => ipcRenderer.invoke('update:getBranch'),
+  updateSetBranch: (branch: string) => ipcRenderer.invoke('update:setBranch', branch),
   updateCheck: () => ipcRenderer.invoke('update:check'),
   updateDownloadAndApply: () => ipcRenderer.invoke('update:downloadAndApply'),
   updateGetLastApplied: () => ipcRenderer.invoke('update:getLastApplied'),

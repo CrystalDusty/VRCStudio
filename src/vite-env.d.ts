@@ -149,6 +149,9 @@ interface ElectronAPI {
 
   // Auto-updater (source-tree updates from GitHub)
   updateGetCurrentCommit: () => Promise<{ sha: string | null; source: string }>;
+  /** Which branch updates are pulled from — see the note in main.ts. */
+  updateGetBranch: () => Promise<{ branch: string; repo: string; default: string }>;
+  updateSetBranch: (branch: string) => Promise<{ ok: boolean; branch: string; error?: string }>;
   updateCheck: () => Promise<{
     ok: boolean;
     error?: string;

@@ -1582,6 +1582,80 @@ function DiscordBotSection() {
 }
 
 // ─── Updates ────────────────────────────────────────────────────────────────
+/**
+ * Which branch updates come from.
+ *
+ * This was hard-coded, which made testing a branch impossible to reason about:
+ * the app checked one branch while the work under test sat on another, so every
+ * fix landed somewhere the running build would never see — and pressing
+ * Install would have replaced the build being tested with the other branch
+ * entirely. Making it visible and changeable is the fix.
+ */
+function UpdateBranchField() {
+  const [branch, setBranch] = useState('');
+  const [saved, setSaved] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [defaultBranch, setDefaultBranch] = useState('');
+  const check = useUpdateStore(s => s.check);
+
+  useEffect(() => {
+    window.electronAPI?.updateGetBranch?.().then(b => {
+      if (!b) return;
+      setBranch(b.branch);
+      setSaved(b.branch);
+      setDefaultBranch(b.default);
+    }).catch(() => {});
+  }, []);
+
+  const apply = async () => {
+    setError(null);
+    const res = await window.electronAPI?.updateSetBranch?.(branch);
+    if (!res) return;
+    if (!res.ok) { setError(res.error ?? 'Could not save that branch.'); return; }
+    setSaved(res.branch);
+    setBranch(res.branch);
+    // Re-check straight away, or the panel keeps showing the other branch's
+    // commits and the change looks like it did nothing.
+    check();
+  };
+
+  if (!window.electronAPI?.updateGetBranch) return null;
+
+  return (
+    <div className="rounded-lg border border-surface-700 bg-surface-800/40 p-3 mb-3 space-y-2">
+      <div className="text-[10px] uppercase tracking-wider text-surface-500">Update branch</div>
+      <div className="flex gap-2 flex-wrap">
+        <input
+          value={branch}
+          onChange={e => setBranch(e.target.value)}
+          spellCheck={false}
+          placeholder={defaultBranch}
+          className="input-field flex-1 min-w-[220px] font-mono text-xs"
+        />
+        <button
+          onClick={apply}
+          disabled={!branch.trim() || branch.trim() === saved}
+          className="btn-secondary text-xs disabled:opacity-40"
+        >
+          Use this branch
+        </button>
+        {saved !== defaultBranch && defaultBranch && (
+          <button onClick={() => setBranch(defaultBranch)} className="btn-ghost text-xs">
+            Reset
+          </button>
+        )}
+      </div>
+      {error && <p className="text-[11px] text-rose-400">{error}</p>}
+      <p className="text-[11px] text-surface-500">
+        Updates, and the banner at the top of the window, both follow this branch. If you're
+        testing work on a different one, point this at it — otherwise Install will replace your
+        build with whatever is on{' '}
+        <code className="text-surface-400">{saved || defaultBranch}</code>.
+      </p>
+    </div>
+  );
+}
+
 function UpdatesSection() {
   const stage = useUpdateStore(s => s.stage);
   const info = useUpdateStore(s => s.info);
@@ -1598,9 +1672,11 @@ function UpdatesSection() {
   return (
     <Section title="Updates" icon={Download}>
       <p className="text-xs text-surface-500 mb-3">
-        VRC Studio fetches updates directly from the source branch on GitHub. Clicking <b>Install</b> downloads the latest snapshot,
+        VRC Studio fetches updates directly from a branch on GitHub. Clicking <b>Install</b> downloads the latest snapshot,
         runs <code>npm install</code> for any new dependencies, and restarts the app.
       </p>
+
+      <UpdateBranchField />
 
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div className="rounded-lg border border-surface-700 bg-surface-800/40 p-3">
