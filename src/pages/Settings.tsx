@@ -1591,6 +1591,23 @@ function DiscordBotSection() {
  * Install would have replaced the build being tested with the other branch
  * entirely. Making it visible and changeable is the fix.
  */
+/** Names the repo and branch updates actually come from, read at runtime. */
+function UpdateSourceLine() {
+  const [source, setSource] = useState<{ repo: string; branch: string } | null>(null);
+  useEffect(() => {
+    window.electronAPI?.updateGetBranch?.()
+      .then(b => b && setSource({ repo: b.repo, branch: b.branch }))
+      .catch(() => {});
+  }, []);
+  if (!source) return null;
+  return (
+    <p className="text-[10px] text-surface-600 mt-3">
+      Source: <span className="font-mono">{source.repo}</span> · branch{' '}
+      <span className="font-mono">{source.branch}</span>
+    </p>
+  );
+}
+
 function UpdateBranchField() {
   const [branch, setBranch] = useState('');
   const [saved, setSaved] = useState<string | null>(null);
@@ -1784,9 +1801,7 @@ function UpdatesSection() {
         </div>
       )}
 
-      <p className="text-[10px] text-surface-600 mt-3">
-        Source: <span className="font-mono">DoNotPetMe/VRCStudio</span> · branch <span className="font-mono">claude/vrchat-companion-app-e7eJL</span>
-      </p>
+      <UpdateSourceLine />
     </Section>
   );
 }

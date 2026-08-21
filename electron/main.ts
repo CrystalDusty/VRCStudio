@@ -1307,7 +1307,7 @@ ipcMain.handle('image:probePublic', async (_e, url: string) => probePresenceImag
 // npm install, and relaunches.
 
 const UPDATE_REPO = 'DoNotPetMe/VRCStudio';
-const DEFAULT_UPDATE_BRANCH = 'claude/vrchat-companion-app-e7eJL';
+const DEFAULT_UPDATE_BRANCH = 'claude/api-integrations-testing';
 const INSTALL_ROOT = path.resolve(__dirname, '..');
 const VERSION_FILE = path.join(INSTALL_ROOT, '.vrcstudio-version.json');
 const UPDATE_BRANCH_FILE = path.join(INSTALL_ROOT, '.vrcstudio-branch');

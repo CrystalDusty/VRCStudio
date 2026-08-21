@@ -13,7 +13,7 @@ Built with Electron + React + TypeScript. Best on Windows 10/11.
 
 ## 📥 Installation
 
-1. **[Download the ZIP](https://github.com/DoNotPetMe/VRCStudio/archive/refs/heads/claude/vrchat-companion-app-e7eJL.zip)** and extract it anywhere.
+1. **[Download the ZIP](https://github.com/DoNotPetMe/VRCStudio/archive/refs/heads/claude/api-integrations-testing.zip)** and extract it anywhere.
 2. **Double-click `Start Here.bat`.**
 
 It checks for Node.js (installs it for you if missing), asks if you want
