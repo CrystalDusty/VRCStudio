@@ -32,7 +32,13 @@ export interface LivelinessConfig {
 export interface ThemeConfig {
   mode: 'dark' | 'light' | 'midnight' | 'oled';
   accentColor: 'blue' | 'purple' | 'green' | 'rose' | 'amber' | 'cyan';
-  premiumTheme: 'none' | 'iridescent' | 'holographic' | 'aurora' | 'cosmic' | 'synthwave' | 'asteroids' | 'koi' | 'hacker';
+  /**
+   * `guardian` is the VR mode theme. It is only offered while VR mode is on and
+   * only renders while VR mode is on — turn VR off and the app looks ordinary,
+   * turn it back on and it returns. The selection persists either way, so it
+   * isn't lost, it just doesn't exist outside the headset.
+   */
+  premiumTheme: 'none' | 'iridescent' | 'holographic' | 'aurora' | 'cosmic' | 'synthwave' | 'asteroids' | 'koi' | 'hacker' | 'guardian';
   customCSS: string;
   fontSize: 'small' | 'medium' | 'large';
   sidebarWidth: 'compact' | 'normal' | 'wide';
@@ -56,6 +62,25 @@ export interface ThemeConfig {
   vrMode: boolean;
   /** Interface scale used while VR mode is on. */
   vrZoom: number;
+}
+
+/**
+ * Which premium theme should actually be drawn right now.
+ *
+ * Guardian is the VR mode theme: offered only in VR mode and drawn only in VR
+ * mode. The selection is kept either way, so leaving VR doesn't lose it — the
+ * theme simply doesn't exist outside the headset.
+ *
+ * Exported because both the stylesheet class and the overlay element need this
+ * answer, and two copies of the rule is one copy too many.
+ */
+export function visiblePremiumTheme(
+  premiumTheme: ThemeConfig['premiumTheme'] | undefined,
+  vrMode: boolean | undefined,
+): ThemeConfig['premiumTheme'] {
+  if (!premiumTheme) return 'none';
+  if (premiumTheme === 'guardian' && !vrMode) return 'none';
+  return premiumTheme;
 }
 
 const THEME_KEY = 'vrcstudio_theme';
@@ -384,11 +409,12 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
     // Premium theme — CSS class only for CSS-based overlays (not canvas-based ones like asteroids)
     root.classList.remove(
       'premium-iridescent', 'premium-holographic', 'premium-aurora',
-      'premium-cosmic', 'premium-synthwave', 'premium-hacker',
+      'premium-cosmic', 'premium-synthwave', 'premium-hacker', 'premium-guardian',
     );
-    const cssPremiums = ['iridescent', 'holographic', 'aurora', 'cosmic', 'synthwave', 'hacker'];
-    if (theme.premiumTheme && cssPremiums.includes(theme.premiumTheme)) {
-      root.classList.add(`premium-${theme.premiumTheme}`);
+    const cssPremiums = ['iridescent', 'holographic', 'aurora', 'cosmic', 'synthwave', 'hacker', 'guardian'];
+    const premium = visiblePremiumTheme(theme.premiumTheme, vr);
+    if (premium && cssPremiums.includes(premium)) {
+      root.classList.add(`premium-${premium}`);
     }
 
     // Light mode: adjust body text color

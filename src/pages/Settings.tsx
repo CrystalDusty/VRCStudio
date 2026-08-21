@@ -783,9 +783,30 @@ export default function SettingsPage() {
                     { key: 'asteroids',    label: 'Asteroids',    preview: 'bg-gradient-to-br from-[#050812] via-[#0d1836] to-[#050812] border border-accent-800/40' },
                     { key: 'koi',          label: 'Koi Pond',     preview: 'bg-gradient-to-br from-[#05202a] via-[#0b3a44] to-[#04161d] relative overflow-hidden' },
                     { key: 'hacker',       label: 'Hacker',       preview: 'bg-black border border-green-500/60 shadow-[inset_0_0_12px_rgba(0,255,100,0.3)] text-green-400 font-mono text-[8px] flex items-center justify-center' },
+                    // Only while VR mode is on. Every other theme animates, and
+                    // VR mode cuts animation — this one is built to work standing
+                    // still, so it's the one that belongs there.
+                    ...(theme.vrMode
+                      ? [{ key: 'guardian' as const, label: 'Guardian', preview: 'bg-[#05090e] relative overflow-hidden border border-cyan-300/30' }]
+                      : []),
                   ] as const).map(({ key, label, preview }) => (
                     <button key={key} onClick={() => setPremiumTheme(key)} className={`p-2 rounded-lg border transition-all ${theme.premiumTheme === key ? 'border-accent-500 bg-accent-500/10' : 'border-surface-700 hover:border-surface-600'}`}>
                       <div className={`w-full h-12 rounded mb-1.5 ${preview}`}>
+                        {key === 'guardian' && (
+                          <>
+                            <span
+                              className="absolute inset-0"
+                              style={{
+                                backgroundImage:
+                                  'repeating-linear-gradient(0deg, rgba(64,224,232,.55) 0 1px, transparent 1px 9px),' +
+                                  'repeating-linear-gradient(90deg, rgba(64,224,232,.55) 0 1px, transparent 1px 9px)',
+                                maskImage: 'radial-gradient(ellipse 70% 65% at 50% 50%, transparent 30%, #000 100%)',
+                                WebkitMaskImage: 'radial-gradient(ellipse 70% 65% at 50% 50%, transparent 30%, #000 100%)',
+                              }}
+                            />
+                            <span className="absolute inset-0 shadow-[inset_0_0_14px_rgba(64,224,232,.35)]" />
+                          </>
+                        )}
                         {key === 'hacker' && (
                           <span className="text-green-400 font-mono text-[9px] tracking-tight">{'>_ vrc.run()'}</span>
                         )}
@@ -814,6 +835,20 @@ export default function SettingsPage() {
                       <div className="text-xs font-medium">{label}</div>
                     </button>
                   ))}
+                  {theme.premiumTheme === 'guardian' && theme.vrMode && (
+                    <div className="col-span-2 sm:col-span-5 mt-1 text-xs text-surface-400 bg-surface-800/50 rounded-lg p-2.5">
+                      The chaperone boundary, borrowed. It doesn't move — everything else here
+                      animates, and drifting decoration pinned to your head is tiring in a way it
+                      never is on a monitor. The mesh stays at the edges and the middle stays
+                      clear, so nothing competes with what you're reading.
+                    </div>
+                  )}
+                  {theme.premiumTheme === 'guardian' && !theme.vrMode && (
+                    <div className="col-span-2 sm:col-span-5 mt-1 text-xs text-cyan-300/90 bg-cyan-500/10 border border-cyan-500/25 rounded-lg p-2.5">
+                      Guardian is still selected, but it only exists in VR mode — that's why
+                      nothing looks picked above. Turn VR mode on from the Dashboard and it comes back.
+                    </div>
+                  )}
                   {theme.premiumTheme === 'koi' && (
                     <div className="col-span-2 sm:col-span-5 mt-1 text-xs text-surface-400 bg-surface-800/50 rounded-lg p-2.5">
                       The koi react to you: they scatter from your cursor, your pointer leaves a

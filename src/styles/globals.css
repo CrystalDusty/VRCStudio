@@ -1026,3 +1026,74 @@ html.vr-mode ::-webkit-scrollbar-thumb {
   background: rgb(var(--surface-600));
   border-radius: 7px;
 }
+
+/* ── Guardian — the VR mode theme ─────────────────────────────────────────
+   Hidden unless VR mode is on, and built for it rather than adapted to it.
+
+   Every other premium theme animates, and VR mode cuts animation to nothing
+   for good reason: drifting decoration pinned to your head is tiring in a way
+   it never is on a monitor. So this one does its work standing still, through
+   depth instead of movement.
+
+   It's the chaperone boundary — the luminous mesh that fades in when you reach
+   the edge of your play space. That shape also happens to be the right one for
+   a UI: the decoration lives at the edges and the middle stays clear, so
+   nothing competes with the text you're actually reading. */
+
+.premium-overlay-guardian {
+  /* A cool teal against near-black — the colour every headset draws its
+     boundary in, so it reads as "you're near the edge" before you think. */
+  background:
+    /* the mesh */
+    repeating-linear-gradient(0deg,  rgba(64, 224, 232, 0.42) 0 1px, transparent 1px 46px),
+    repeating-linear-gradient(90deg, rgba(64, 224, 232, 0.42) 0 1px, transparent 1px 46px),
+    /* a wash of depth behind it */
+    radial-gradient(ellipse 120% 90% at 50% 115%, rgba(24, 128, 150, 0.30) 0%, transparent 62%),
+    radial-gradient(ellipse 100% 80% at 50% -20%, rgba(38, 70, 130, 0.26) 0%, transparent 58%);
+
+  /* Fade the whole thing out towards the middle. Without this the grid runs
+     under body text and turns it into a crossword. */
+  -webkit-mask-image: radial-gradient(ellipse 74% 68% at 50% 50%, transparent 40%, #000 100%);
+  mask-image: radial-gradient(ellipse 74% 68% at 50% 50%, transparent 40%, #000 100%);
+  /* Read at arm's length through an overlay, subtle detail simply disappears —
+     this is pitched brighter than it would be on a monitor. */
+  opacity: 0.8;
+}
+
+/* The rim itself: brighter right at the boundary, the way a chaperone does. */
+.premium-overlay-guardian::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  box-shadow:
+    inset 0 0 110px rgba(64, 224, 232, 0.26),
+    inset 0 0 26px rgba(120, 245, 255, 0.24);
+}
+
+/* Corner posts. Four small brackets, the only "drawn" element — they give the
+   frame a deliberate edge instead of a gradient that merely stops. */
+.premium-overlay-guardian::before {
+  content: '';
+  position: absolute;
+  inset: 14px;
+  border: 1px solid rgba(150, 250, 255, 0.55);
+  border-radius: 2px;
+  box-shadow: 0 0 10px rgba(64, 224, 232, 0.35);
+  -webkit-mask-image:
+    linear-gradient(0deg,   #000 0 64px, transparent 64px calc(100% - 64px), #000 calc(100% - 64px) 100%),
+    linear-gradient(90deg,  #000 0 64px, transparent 64px calc(100% - 64px), #000 calc(100% - 64px) 100%);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(0deg,   #000 0 64px, transparent 64px calc(100% - 64px), #000 calc(100% - 64px) 100%),
+    linear-gradient(90deg,  #000 0 64px, transparent 64px calc(100% - 64px), #000 calc(100% - 64px) 100%);
+  mask-composite: intersect;
+}
+
+/* Light mode would put a glowing teal cage on white, which is neither the
+   reference nor readable. Pull it right back instead of switching it off, so
+   choosing the theme still does something. */
+html.light .premium-overlay-guardian,
+html[data-theme="light"] .premium-overlay-guardian {
+  opacity: 0.26;
+  mix-blend-mode: multiply;
+}
