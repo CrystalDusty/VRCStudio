@@ -4,6 +4,9 @@ interface ElectronAPI {
   minimize: () => Promise<void>;
   maximize: () => Promise<void>;
   close: () => Promise<void>;
+  /** Chromium's own zoom — reflows layout and scales absolute pixel sizes. */
+  setZoom: (factor: number) => Promise<{ ok: boolean; factor: number }>;
+  getZoom: () => Promise<number>;
   quit: () => Promise<void>;
   isMaximized: () => Promise<boolean>;
   setMinimizeToTray: (value: boolean) => Promise<void>;

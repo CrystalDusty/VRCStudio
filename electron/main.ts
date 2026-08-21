@@ -537,6 +537,21 @@ ipcMain.handle('window:maximize', () => {
   mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow?.maximize();
 });
 ipcMain.handle('window:close', () => mainWindow?.close());
+
+/**
+ * Scale the whole interface.
+ *
+ * This is Chromium's own zoom, not a CSS transform, so it reflows the layout
+ * and scales absolute pixel sizes too. That matters here: the app has a few
+ * hundred hard-coded 10 and 11 pixel labels, and a rem-based scale would leave
+ * every one of them unreadable at VR distance.
+ */
+ipcMain.handle('window:setZoom', (_e, factor: number) => {
+  const clamped = Math.max(0.6, Math.min(2.5, Number(factor) || 1));
+  mainWindow?.webContents.setZoomFactor(clamped);
+  return { ok: true, factor: clamped };
+});
+ipcMain.handle('window:getZoom', () => mainWindow?.webContents.getZoomFactor() ?? 1);
 ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized() ?? false);
 ipcMain.handle('window:quit', () => {
   isQuitting = true;

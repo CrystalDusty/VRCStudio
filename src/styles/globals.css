@@ -948,3 +948,81 @@ html.premium-hacker .audio-visualizer-canvas {
 @media (prefers-reduced-motion: reduce) {
   .like-pop { animation: none; }
 }
+
+/* ── VR mode ───────────────────────────────────────────────────────────────
+   The app is read in VR through a desktop overlay: low angular resolution,
+   viewed from a distance, and pointed at with a laser instead of a mouse.
+   Scale is handled by Chromium's zoom in the main process — it reflows and
+   scales absolute pixel sizes, which a rem-based scale would not. Everything
+   here is the part scale can't fix. */
+
+/* 1. Hover is unreliable with a laser: the pointer jitters, and on some
+      overlays it doesn't hover at all until you pull the trigger. Anything
+      that only appears on hover is, in VR, a control that doesn't exist. */
+html.vr-mode [class*="group-hover:opacity-100"],
+html.vr-mode [class*="hover:opacity-100"] {
+  opacity: 1 !important;
+}
+
+/* 2. Hit targets. A laser at arm's length lands within a couple of degrees,
+      which is a lot of pixels — small buttons are a coin toss. */
+html.vr-mode button,
+html.vr-mode [role="button"],
+html.vr-mode a,
+html.vr-mode select,
+html.vr-mode summary {
+  min-height: 2.25rem;
+}
+html.vr-mode button:not(.vr-keep-size),
+html.vr-mode [role="button"]:not(.vr-keep-size) {
+  padding-block: 0.35rem;
+}
+html.vr-mode input[type="checkbox"],
+html.vr-mode input[type="radio"] {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+html.vr-mode input[type="range"] {
+  height: 1.75rem;
+}
+
+/* 3. Contrast. Frosted panels over a moving world read as mud in a headset,
+      and thin hairline borders disappear entirely. */
+html.vr-mode .glass-panel,
+html.vr-mode .glass-panel-solid {
+  backdrop-filter: none !important;
+  background-color: rgb(var(--surface-900) / 0.96) !important;
+  border-color: rgb(var(--surface-600) / 0.9) !important;
+}
+html.vr-mode .border-surface-800 { border-color: rgb(var(--surface-600) / 0.75) !important; }
+html.vr-mode .text-surface-600 { color: rgb(var(--surface-400)) !important; }
+html.vr-mode .text-surface-500 { color: rgb(var(--surface-300)) !important; }
+
+/* 4. Motion. Drifting backgrounds and parallax are fine on a monitor and
+      genuinely unpleasant when they're fixed to your head. */
+html.vr-mode *,
+html.vr-mode *::before,
+html.vr-mode *::after {
+  animation-duration: 0.001s !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.08s !important;
+}
+html.vr-mode .live-cursor-glow,
+html.vr-mode .vr-hide {
+  display: none !important;
+}
+
+/* 5. Focus. With a laser you often can't tell what you're about to press. */
+html.vr-mode button:focus-visible,
+html.vr-mode a:focus-visible,
+html.vr-mode input:focus-visible {
+  outline: 2px solid rgb(var(--accent-400));
+  outline-offset: 2px;
+}
+
+/* 6. Scrollbars you can actually grab. */
+html.vr-mode ::-webkit-scrollbar { width: 14px; height: 14px; }
+html.vr-mode ::-webkit-scrollbar-thumb {
+  background: rgb(var(--surface-600));
+  border-radius: 7px;
+}

@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   minimize: () => ipcRenderer.invoke('window:minimize'),
   maximize: () => ipcRenderer.invoke('window:maximize'),
   close: () => ipcRenderer.invoke('window:close'),
+  setZoom: (factor: number) => ipcRenderer.invoke('window:setZoom', factor),
+  getZoom: () => ipcRenderer.invoke('window:getZoom'),
   quit: () => ipcRenderer.invoke('window:quit'),
   isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
 

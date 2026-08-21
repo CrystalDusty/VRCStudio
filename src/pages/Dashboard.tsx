@@ -37,6 +37,7 @@ import { getBestAvatarUrl } from '../utils/avatar';
 import { useMediaDetection, type MediaInfo } from '../hooks/useAudioVisualizer';
 import WorldAnalyticsPanel from '../components/WorldAnalyticsPanel';
 import VideoPlayerWidget from '../components/VideoPlayerWidget';
+import VRModeButton from '../components/VRModeButton';
 
 const eventIcons: Record<FeedEvent['type'], typeof Activity> = {
   friend_online: UserPlus,
@@ -155,8 +156,9 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between gap-4">
         <DashboardGreeting />
+        <VRModeButton />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">

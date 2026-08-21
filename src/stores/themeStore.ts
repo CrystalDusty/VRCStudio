@@ -42,6 +42,20 @@ export interface ThemeConfig {
   glassEffect: 'none' | 'light' | 'medium';
   visualizer: VisualizerConfig;
   liveliness: LivelinessConfig;
+
+  /**
+   * VR mode.
+   *
+   * The app is used in VR through a desktop overlay, which means it's read at
+   * low angular resolution from a distance and pointed at with a laser rather
+   * than a mouse. Three things follow, and VR mode does all three: scale
+   * everything up, make every affordance permanently visible instead of
+   * hover-revealed, and drop the decorative layers that cost frames in a
+   * headset for no benefit at that distance.
+   */
+  vrMode: boolean;
+  /** Interface scale used while VR mode is on. */
+  vrZoom: number;
 }
 
 const THEME_KEY = 'vrcstudio_theme';
@@ -75,6 +89,8 @@ const defaultTheme: ThemeConfig = {
   borderStyle: 'default',
   animationSpeed: 'normal',
   glassEffect: 'medium',
+  vrMode: false,
+  vrZoom: 1.4,
   visualizer: defaultVisualizer,
   liveliness: defaultLiveliness,
 };
@@ -194,6 +210,8 @@ interface ThemeState {
   setBorderStyle: (style: ThemeConfig['borderStyle']) => void;
   setLiveliness: (patch: Partial<LivelinessConfig>) => void;
   setAnimationSpeed: (speed: ThemeConfig['animationSpeed']) => void;
+  setVrMode: (on: boolean) => void;
+  setVrZoom: (zoom: number) => void;
   setGlassEffect: (effect: ThemeConfig['glassEffect']) => void;
   setPremiumTheme: (theme: ThemeConfig['premiumTheme']) => void;
   setVisualizer: (patch: Partial<VisualizerConfig>) => void;
@@ -260,6 +278,21 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
     get().applyTheme();
   },
 
+  setVrMode: (vrMode) => {
+    const theme = { ...get().theme, vrMode };
+    saveTheme(theme);
+    set({ theme });
+    get().applyTheme();
+  },
+
+  setVrZoom: (zoom) => {
+    const vrZoom = Math.max(1, Math.min(2.2, Math.round(zoom * 20) / 20));
+    const theme = { ...get().theme, vrZoom };
+    saveTheme(theme);
+    set({ theme });
+    get().applyTheme();
+  },
+
   setAnimationSpeed: (animationSpeed) => {
     const theme = { ...get().theme, animationSpeed };
     saveTheme(theme);
@@ -319,6 +352,16 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
     for (const s of allBorderStyles) root.classList.remove(`border-theme-${s}`);
     const bs: BorderStyle = (theme.borderStyle ?? 'default');
     if (bs !== 'default') root.classList.add(`border-theme-${bs}`);
+
+    // VR mode. The zoom is Chromium's own, applied in the main process,
+    // because it reflows the layout and scales absolute pixel sizes — the app
+    // has a few hundred hard-coded 10 and 11 pixel labels that a rem-based
+    // scale would leave unreadable at VR distance. The class carries
+    // everything else: contrast, hit targets, always-visible controls.
+    const vr = !!theme.vrMode;
+    root.classList.toggle('vr-mode', vr);
+    const zoom = vr ? (theme.vrZoom ?? 1.4) : 1;
+    window.electronAPI?.setZoom?.(zoom).catch(() => { /* browser dev mode */ });
 
     // Liveliness toggles — each maps to a single class on <html>
     const live = theme.liveliness ?? defaultLiveliness;
