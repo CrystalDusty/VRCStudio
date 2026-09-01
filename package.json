@@ -1,7 +1,7 @@
 {
   "name": "vrc-studio",
   "version": "1.0.0",
-  "description": "VRC Studio — A professional VRChat companion application",
+  "description": "VRC Studio \u2014 A professional VRChat companion application",
   "type": "module",
   "main": "dist-electron/main.cjs",
   "author": "VRC Studio Team",
@@ -13,7 +13,8 @@
     "build": "vite build && electron-builder",
     "build:web": "ELECTRON=false vite build",
     "preview": "vite preview",
-    "electron:dev": "vite build && electron ."
+    "electron:dev": "vite build && electron .",
+    "test": "node tests/run.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -54,8 +55,14 @@
       "public/tray-icon.png"
     ],
     "extraResources": [
-      { "from": "public/icon.png", "to": "icon.png" },
-      { "from": "public/tray-icon.png", "to": "tray-icon.png" }
+      {
+        "from": "public/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "public/tray-icon.png",
+        "to": "tray-icon.png"
+      }
     ],
     "npmRebuild": false,
     "asar": true,
@@ -63,7 +70,9 @@
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "public/icon.png",

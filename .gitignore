@@ -18,3 +18,4 @@ release/
 # Environment files
 *.env
 *.env.*
+tests/build/
