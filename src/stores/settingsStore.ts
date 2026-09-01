@@ -62,6 +62,14 @@ const defaultSettings: AppSettings = {
     greetingEnabled: true,
     showWeather: true,
   },
+  avatarLog: {
+    // Off by default on purpose: this is the only part of the app that keeps
+    // a record of what other people were wearing after they've left, so it
+    // should be something the user turns on, not something they discover.
+    enabled: false,
+    keepPerPlayer: 5,
+    includeSelf: true,
+  },
 };
 
 function loadSettings(): AppSettings {
@@ -77,6 +85,7 @@ function loadSettings(): AppSettings {
       privacy: { ...defaultSettings.privacy, ...saved.privacy },
       performance: { ...defaultSettings.performance, ...saved.performance },
       profile: { ...defaultSettings.profile, ...saved.profile },
+      avatarLog: { ...defaultSettings.avatarLog, ...saved.avatarLog },
     };
   } catch {
     return defaultSettings;
@@ -98,6 +107,7 @@ interface SettingsState {
   updatePrivacy: (updates: Partial<AppSettings['privacy']>) => void;
   updatePerformance: (updates: Partial<AppSettings['performance']>) => void;
   updateProfile: (updates: Partial<AppSettings['profile']>) => void;
+  updateAvatarLog: (updates: Partial<AppSettings['avatarLog']>) => void;
   resetSettings: () => void;
 }
 
@@ -146,6 +156,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ settings });
   },
 
+  updateAvatarLog: (updates) => {
+    const settings = { ...get().settings, avatarLog: { ...get().settings.avatarLog, ...updates } };
+    saveSettings(settings);
+    set({ settings });
+  },
+
   resetSettings: () => {
     saveSettings(defaultSettings);
     set({ settings: defaultSettings });
@@ -163,6 +179,7 @@ export async function restoreSettingsFromDisk() {
     privacy:       { ...defaultSettings.privacy,       ...(persisted.privacy ?? {}) },
     performance:   { ...defaultSettings.performance,   ...(persisted.performance ?? {}) },
     profile:       { ...defaultSettings.profile,       ...(persisted.profile ?? {}) },
+    avatarLog:     { ...defaultSettings.avatarLog,     ...(persisted.avatarLog ?? {}) },
   };
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(merged));
   useSettingsStore.setState({ settings: merged });

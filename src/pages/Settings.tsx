@@ -4,12 +4,14 @@ import {
   Palette, Download, Upload, UserCircle, Globe2, Zap, Shield,
   Trash2, Smile, X, Volume2, Moon, Sun, ArrowUpDown, Lock,
   Cpu, Database, Keyboard, Info, ExternalLink, Gamepad2,
-  CheckCircle, XCircle,
+  CheckCircle, XCircle, History,
 } from 'lucide-react';
 import { VRCDB_PROVIDERS, getProviderId, setProviderId } from '../api/vrcdb';
 import { useAsteroidsGameStore } from '../stores/asteroidsGameStore';
 import type { ProviderId } from '../api/vrcdb';
 import { useSettingsStore } from '../stores/settingsStore';
+import { useAvatarHistoryStore } from '../stores/avatarHistoryStore';
+import { KEEP_MIN, KEEP_MAX } from '../utils/avatarHistory';
 import { useAuthStore } from '../stores/authStore';
 import { useInstanceHistoryStore } from '../stores/instanceHistoryStore';
 import { useFriendStore } from '../stores/friendStore';
@@ -25,7 +27,8 @@ import { getAvailableLanguages, setLanguage, getLanguage } from '../utils/i18n';
 type SettingsSection =
   | 'account' | 'accounts' | 'notifications' | 'polling'
   | 'display' | 'appearance' | 'discord' | 'discord-bot' | 'vrcdb' | 'general' | 'data'
-  | 'profile' | 'privacy' | 'performance' | 'shortcuts' | 'about' | 'updates';
+  | 'profile' | 'privacy' | 'performance' | 'shortcuts' | 'about' | 'updates'
+  | 'avatar-log';
 
 // `keywords` are concept words used only by the settings search box, so a
 // section can be found by terms that don't appear in its visible label.
@@ -38,6 +41,7 @@ const sections: Array<{ key: SettingsSection; label: string; icon: typeof Settin
   { key: 'display',       label: 'Display',               icon: Monitor,       group: 'App',          keywords: 'window layout screen' },
   { key: 'appearance',    label: 'Appearance',            icon: Palette,       group: 'App',          keywords: 'theme colour color border font dark light oled midnight accent visualizer liveliness particles hacker premium' },
   { key: 'privacy',       label: 'Privacy',               icon: Lock,          group: 'App',          keywords: 'security hide blur sensitive' },
+  { key: 'avatar-log',    label: 'Avatar Log',            icon: History,       group: 'App',          keywords: 'avatar log history track record players changed worn past' },
   { key: 'discord',       label: 'Discord Rich Presence', icon: Zap,           group: 'Integrations', keywords: 'discord rpc status presence activity' },
   { key: 'discord-bot',   label: 'Discord Bot',           icon: Zap,           group: 'Integrations', keywords: 'discord bot slash commands token' },
   { key: 'vrcdb',         label: 'Avatar Database',       icon: Database,      group: 'Integrations', keywords: 'avatar database avtrdb search provider' },
@@ -1173,6 +1177,8 @@ export default function SettingsPage() {
             </Section>
           )}
 
+          {active === 'avatar-log' && <AvatarLogSection />}
+
           {active === 'vrcdb' && (
             <Section title="Avatar Database" icon={Database}>
               <p className="text-xs text-surface-500">The VRCDB search (Avatars page → VRCDB tab and Quick Switcher) uses community-run public avatar indexes. These are independent third-party services — switch if one is unavailable.</p>
@@ -1348,6 +1354,78 @@ export default function SettingsPage() {
   );
 }
 
+
+/**
+ * The avatar log's settings. The same controls exist on the Live Avatars
+ * page's Log tab — this is here so the feature is findable from Settings and
+ * from the settings search box, which is where people look for "history".
+ */
+function AvatarLogSection() {
+  const cfg = useSettingsStore(s => s.settings.avatarLog);
+  const updateAvatarLog = useSettingsStore(s => s.updateAvatarLog);
+  const entries = useAvatarHistoryStore(s => s.entries);
+  const clearAll = useAvatarHistoryStore(s => s.clearAll);
+  const applyLimit = useAvatarHistoryStore(s => s.applyLimit);
+  const [confirm, setConfirm] = useState(false);
+
+  return (
+    <>
+      <Section title="Avatar Log" icon={History}>
+        <p className="text-xs text-surface-500">
+          Records the avatars players change into while you're in an instance with
+          them, so you can look one up after they've gone. Kept on this machine
+          only — nothing is uploaded anywhere.
+        </p>
+        <Toggle
+          label="Log avatar changes"
+          description="Off by default. Nothing is recorded while this is off."
+          checked={cfg.enabled}
+          onChange={v => updateAvatarLog({ enabled: v })}
+        />
+        <Toggle
+          label="Include my own avatars"
+          description="Log the avatars you change into as well as everyone else's"
+          checked={cfg.includeSelf}
+          onChange={v => updateAvatarLog({ includeSelf: v })}
+          disabled={!cfg.enabled}
+        />
+        <div className={cfg.enabled ? '' : 'opacity-40 pointer-events-none'}>
+          <SliderRow
+            label="Avatars kept per player"
+            value={cfg.keepPerPlayer}
+            min={KEEP_MIN}
+            max={KEEP_MAX}
+            step={1}
+            unit=""
+            onChange={v => { updateAvatarLog({ keepPerPlayer: v }); applyLimit(v); }}
+          />
+        </div>
+      </Section>
+
+      <Section title="Stored Log" icon={Database}>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-sm">
+            <div className="font-medium">{entries.length.toLocaleString()} avatar{entries.length === 1 ? '' : 's'} logged</div>
+            <div className="text-xs text-surface-500">
+              Across {new Set(entries.map(e => e.playerName)).size} player
+              {new Set(entries.map(e => e.playerName)).size === 1 ? '' : 's'}
+            </div>
+          </div>
+          <button
+            onClick={() => (confirm ? (clearAll(), setConfirm(false)) : setConfirm(true))}
+            onBlur={() => setConfirm(false)}
+            disabled={entries.length === 0}
+            className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed ${
+              confirm ? 'bg-rose-600/80 text-white hover:bg-rose-600' : 'bg-rose-500/10 text-rose-300 hover:bg-rose-500/20'
+            }`}
+          >
+            <Trash2 size={12} /> {confirm ? 'Click again to confirm' : 'Delete all logs'}
+          </button>
+        </div>
+      </Section>
+    </>
+  );
+}
 
 function Section({ title, icon: Icon, children }: { title: string; icon: typeof SettingsIcon; children: React.ReactNode }) {
   return (

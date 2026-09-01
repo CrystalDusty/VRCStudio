@@ -16,6 +16,7 @@ import { useVideoPlayerStore } from '../stores/videoPlayerStore';
 import { useInstanceAvatarsStore, sliceToCurrentInstance } from '../stores/instanceAvatarsStore';
 import { useInstanceHistoryStore } from '../stores/instanceHistoryStore';
 import { useGrabberStore } from '../stores/grabberStore';
+import { startAvatarLogTracking, stopAvatarLogTracking } from '../stores/avatarHistoryStore';
 
 // How much of the log to replay on startup. VRChat is chatty — a busy
 // instance can burn a couple of thousand lines in minutes, and anything
@@ -23,6 +24,15 @@ import { useGrabberStore } from '../stores/grabberStore';
 const BACKLOG_LINES = 12_000;
 
 export function useLogIngestion() {
+  // The avatar log mirrors instanceAvatarsStore rather than the raw line
+  // stream, so it hangs off the same lifetime as the ingestion hook. It
+  // checks the setting on every event, so starting it here costs nothing
+  // while the feature is off.
+  useEffect(() => {
+    startAvatarLogTracking();
+    return () => stopAvatarLogTracking();
+  }, []);
+
   const current = useInstanceHistoryStore(s => s.currentInstance);
   const setVideoCtx = useVideoPlayerStore(s => s.setContext);
   const setTailingStatus = useVideoPlayerStore(s => s.setTailingStatus);

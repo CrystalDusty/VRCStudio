@@ -13,6 +13,7 @@ import {
 import type { VRCUser, VRCWorld, VRCAvatar } from '../types/vrchat';
 import { getBestAvatarUrl } from '../utils/avatar';
 import { useAvatarSwitcherStore } from '../stores/avatarSwitcherStore';
+import { AvatarRankBadge } from '../components/AvatarPerformance';
 
 type SearchCategory = 'users' | 'worlds' | 'avatars';
 type AvatarSubTab = 'vrc' | 'own' | 'favorites' | 'database';
@@ -202,8 +203,11 @@ export default function SearchPage() {
         const pinned = isPinned(avatar.id);
         return (
           <div key={avatar.id} className="relative group glass-panel-solid overflow-hidden card-hover">
-            <div className="aspect-square overflow-hidden">
+            <div className="aspect-square overflow-hidden relative">
               <img src={avatar.thumbnailImageUrl || avatar.imageUrl} alt="" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" loading="lazy" />
+              <div className="absolute top-2 left-2 drop-shadow">
+                <AvatarRankBadge avatar={avatar} />
+              </div>
             </div>
             <div className="p-3">
               <h3 className="text-sm font-semibold truncate">{avatar.name}</h3>

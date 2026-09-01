@@ -68,6 +68,8 @@ bundle('src/games/index.ts', 'games.mjs');
 bundle('src/stores/grabberStore.ts', 'grabber.mjs');
 bundle('src/stores/chatboxGameStore.ts', 'gamestore.mjs');
 bundle('src/stores/themeStore.ts', 'themestore.mjs');
+bundle('src/utils/avatarPerformance.ts', 'avatarperf.mjs');
+bundle('src/utils/avatarHistory.ts', 'avatarlog.mjs');
 
 // ── Electron main ──
 bundle('electron/media.ts', 'media.mjs', ['--external:http', '--external:https']);

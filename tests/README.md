@@ -28,6 +28,8 @@ Every assertion here is a fault that actually shipped once.
 | `gestures` | The VR gesture controller firing on hold, or two hands claiming one button. |
 | `branch` | The updater accepting a branch name that isn't safe in a URL or a path. |
 | `guardian` | The VR-only theme leaking outside VR mode, or the other nine changing behaviour inside it. |
+| `avatarperf` | Naming the wrong statistic as the reason an avatar is expensive, and drift in VRChat's published PC limits. |
+| `avatarlog` | The avatar log doubling on a Refresh, losing stats that arrive after the switch, or one busy player evicting everyone else. |
 
 ## Not included
 

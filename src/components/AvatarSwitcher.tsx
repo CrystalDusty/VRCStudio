@@ -7,6 +7,7 @@ import { useAvatarSwitcherStore } from '../stores/avatarSwitcherStore';
 import { useAuthStore } from '../stores/authStore';
 import type { VRCAvatar } from '../types/vrchat';
 import AvatarPreviewModal from './AvatarPreviewModal';
+import { AvatarRankBadge } from './AvatarPerformance';
 
 interface Props {
   open: boolean;
@@ -519,7 +520,10 @@ function AvatarRow({
         )}
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-xs font-medium truncate">{avatar.name}</div>
+        <div className="text-xs font-medium truncate flex items-center gap-1.5">
+          <span className="truncate">{avatar.name}</span>
+          <AvatarRankBadge avatar={avatar} />
+        </div>
         {showRecent ? (
           <div className="text-[10px] text-surface-600 flex items-center gap-1 mt-0.5"><Clock size={9} /> worn recently</div>
         ) : (

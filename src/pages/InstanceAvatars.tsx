@@ -1,39 +1,34 @@
 // Live avatar panel for the current instance.
-// Sourced entirely from VRChat's log file via instanceAvatarsStore — no
-// persistent storage. Closes the app, list goes away.
 //
-// Two responsibilities:
-//   1. Show every player currently in the instance with the avatar they're
-//      wearing, performance rank, and raw stats when available.
-//   2. Where avtrdb has the avatar indexed, expose a "Wear" button so the
-//      user can swap into it themselves.
+// Two tabs:
+//   Live — sourced entirely from VRChat's log file via instanceAvatarsStore,
+//          with no persistent storage. Close the app and the list is gone.
+//          Shows every player in the instance, the avatar they're wearing and
+//          how expensive it is, and a "Wear" button wherever the avatar is
+//          public enough for VRChat to serve it.
+//   Log  — the opposite: an opt-in record of the avatars people have changed
+//          into, kept on disk (see stores/avatarHistoryStore) so it survives
+//          them leaving and the app restarting.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  UserCheck, Copy, Check, ExternalLink, Shirt, Search, Triangle,
-  Layers, Sparkles, Cpu, Volume2, AlertCircle, Loader2, RefreshCw, Info,
+  UserCheck, Copy, Check, ExternalLink, Shirt, Search,
+  AlertCircle, Loader2, RefreshCw, Info, History,
 } from 'lucide-react';
 import {
   useInstanceAvatarsStore,
   type PlayerAvatar,
   type PerfRank,
-  type AvatarStats,
 } from '../stores/instanceAvatarsStore';
+import { RANK_COLORS, RANK_ORDER } from '../utils/avatarPerformance';
+import { RankBadge, PerformanceStrip } from '../components/AvatarPerformance';
+import AvatarLogPanel from '../components/AvatarLogPanel';
+import { useAvatarHistoryStore } from '../stores/avatarHistoryStore';
 import { useInstanceHistoryStore } from '../stores/instanceHistoryStore';
 import { useAuthStore } from '../stores/authStore';
 import { useVideoPlayerStore } from '../stores/videoPlayerStore';
 import InstanceAvatarModal from '../components/InstanceAvatarModal';
 import api from '../api/vrchat';
-
-const RANK_COLORS: Record<PerfRank, string> = {
-  Excellent: 'text-emerald-300 bg-emerald-500/15 border-emerald-500/30',
-  Good:      'text-green-300   bg-green-500/15   border-green-500/30',
-  Medium:    'text-yellow-300  bg-yellow-500/15  border-yellow-500/30',
-  Poor:      'text-orange-300  bg-orange-500/15  border-orange-500/30',
-  'Very Poor': 'text-rose-300  bg-rose-500/15    border-rose-500/30',
-};
-
-const RANK_ORDER: PerfRank[] = ['Excellent', 'Good', 'Medium', 'Poor', 'Very Poor'];
 
 type SortMode = 'name' | 'rank' | 'recent';
 type FilterMode = 'all' | PerfRank;
@@ -62,6 +57,8 @@ export default function InstanceAvatarsPage() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [view, setView] = useState<'live' | 'log'>('live');
+  const loggedCount = useAvatarHistoryStore(s => s.entries.length);
   // Keyed by player name rather than holding the object, so the modal keeps
   // showing live data as the log updates (new stats, avatar swaps).
   const [selected, setSelected] = useState<string | null>(null);
@@ -198,6 +195,14 @@ export default function InstanceAvatarsPage() {
         </div>
       </div>
 
+      {/* Live / Log */}
+      <div className="flex gap-1 border-b border-surface-800">
+        <TabButton active={view === 'live'} onClick={() => setView('live')} icon={UserCheck} label="Live" count={Object.keys(byPlayer).length} />
+        <TabButton active={view === 'log'} onClick={() => setView('log')} icon={History} label="Log" count={loggedCount} />
+      </div>
+
+      {view === 'log' ? <AvatarLogPanel /> : <>
+
       {showDiagnostics && (
         <div className="glass-panel-solid p-3 text-[11px] space-y-1 font-mono">
           <DiagRow label="Tail" value={tailingActive ? 'connected' : 'not connected'} bad={!tailingActive} />
@@ -304,6 +309,8 @@ export default function InstanceAvatarsPage() {
         </div>
       )}
 
+      </>}
+
       {selectedPlayer && (
         <InstanceAvatarModal
           player={selectedPlayer}
@@ -317,10 +324,35 @@ export default function InstanceAvatarsPage() {
 
       {/* Footer note */}
       <p className="text-[10px] text-surface-600 text-center">
-        Ephemeral · no data is saved · cleared when you switch instances or close the app ·
-        Refresh re-reads VRChat's log from disk
+        {view === 'log'
+          ? 'Saved to this machine only · nothing is uploaded · Delete all logs wipes it for good'
+          : "Live view is ephemeral · cleared when you switch instances or close the app · Refresh re-reads VRChat's log from disk"}
       </p>
     </div>
+  );
+}
+
+function TabButton({ active, onClick, icon: Icon, label, count }: {
+  active: boolean;
+  onClick: () => void;
+  icon: typeof UserCheck;
+  label: string;
+  count: number;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-3 py-2 text-sm font-medium flex items-center gap-1.5 border-b-2 -mb-px transition-colors ${
+        active
+          ? 'border-accent-500 text-accent-300'
+          : 'border-transparent text-surface-500 hover:text-surface-300'
+      }`}
+    >
+      <Icon size={13} /> {label}
+      <span className={`text-[10px] px-1.5 rounded-full ${active ? 'bg-accent-500/20' : 'bg-surface-800'}`}>
+        {count}
+      </span>
+    </button>
   );
 }
 
@@ -367,7 +399,6 @@ function PlayerRow({ player, wearingId, wornId, copiedId, selfImageUrl, onOpen, 
   onCopy: (text: string, id: string) => void;
   onOpenAvtrdb: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const match = player.vrcdbMatch;
   const isWearing = wearingId === player.avatarId;
   const isWorn = wornId === player.avatarId;
@@ -416,7 +447,7 @@ function PlayerRow({ player, wearingId, wornId, copiedId, selfImageUrl, onOpen, 
                 You
               </span>
             )}
-            {player.rank && <RankChip rank={player.rank} />}
+            {player.rank && <RankBadge rank={player.rank} />}
             {player.vrcdbLooking && <Loader2 size={11} className="text-surface-500 animate-spin" />}
           </div>
 
@@ -451,13 +482,7 @@ function PlayerRow({ player, wearingId, wornId, copiedId, selfImageUrl, onOpen, 
             )}
           </div>
 
-          {player.stats && Object.keys(player.stats).length > 0 && (
-            <StatStrip
-              stats={player.stats}
-              expanded={expanded}
-              onToggle={() => setExpanded(!expanded)}
-            />
-          )}
+          <PerformanceStrip stats={player.stats} rank={player.rank} />
         </div>
 
         {/* Actions */}
@@ -489,79 +514,6 @@ function PlayerRow({ player, wearingId, wornId, copiedId, selfImageUrl, onOpen, 
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-function RankChip({ rank }: { rank: PerfRank }) {
-  return (
-    <span className={`inline-flex items-center text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${RANK_COLORS[rank]}`}>
-      {rank}
-    </span>
-  );
-}
-
-function StatStrip({ stats, expanded, onToggle }: {
-  stats: AvatarStats;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  const primary: Array<{ key: keyof AvatarStats; icon: typeof Triangle; label: string; format?: (n: number) => string }> = [
-    { key: 'triangles', icon: Triangle, label: 'tris' },
-    { key: 'materials', icon: Layers, label: 'mats' },
-    { key: 'skinnedMeshes', icon: Sparkles, label: 'sk' },
-    { key: 'drawCalls', icon: Cpu, label: 'draws' },
-  ];
-  const secondary: Array<{ key: keyof AvatarStats; label: string }> = [
-    { key: 'meshes', label: 'Meshes' },
-    { key: 'physBones', label: 'PhysBones' },
-    { key: 'dynamicBones', label: 'Dyn bones' },
-    { key: 'particles', label: 'Particles' },
-    { key: 'audioSources', label: 'Audio src' },
-    { key: 'bones', label: 'Bones' },
-    { key: 'lights', label: 'Lights' },
-    { key: 'animators', label: 'Animators' },
-  ];
-
-  const hasSecondary = secondary.some(s => stats[s.key] != null);
-
-  return (
-    <div className="mt-1.5">
-      <div className="flex items-center gap-2 flex-wrap">
-        {primary.map(({ key, icon: Icon, label }) =>
-          stats[key] != null ? (
-            <span key={key} className="text-[10px] text-surface-400 inline-flex items-center gap-1">
-              <Icon size={9} className="text-surface-500" />
-              {stats[key]!.toLocaleString()} {label}
-            </span>
-          ) : null,
-        )}
-        {hasSecondary && (
-          <button
-            onClick={e => { e.stopPropagation(); onToggle(); }}
-            className="text-[10px] text-surface-500 hover:text-accent-400 underline"
-          >
-            {expanded ? 'Less' : 'More'}
-          </button>
-        )}
-      </div>
-      {expanded && hasSecondary && (
-        <div className="mt-1.5 grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-0.5 text-[10px] text-surface-400">
-          {secondary.map(({ key, label }) =>
-            stats[key] != null ? (
-              <div key={key} className="flex justify-between border-b border-surface-800/40 py-0.5">
-                <span className="text-surface-500">{label}</span>
-                <span className="tabular-nums">{stats[key]!.toLocaleString()}</span>
-              </div>
-            ) : null,
-          )}
-          {stats.audioSources != null && (
-            <div className="flex items-center gap-1 text-surface-500 text-[10px]">
-              <Volume2 size={9} />
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }

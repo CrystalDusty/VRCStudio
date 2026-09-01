@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
 import { useThemeStore, restoreThemeFromDisk } from './stores/themeStore';
 import { useSettingsStore, restoreSettingsFromDisk } from './stores/settingsStore';
+import { restoreAvatarLogFromDisk } from './stores/avatarHistoryStore';
 import { checkForUpdatesOnStartup } from './stores/updateStore';
 import { usePolling } from './hooks/usePolling';
 import { useDiscordRPC } from './hooks/useDiscordRPC';
@@ -179,6 +180,7 @@ export default function App() {
     Promise.all([
       restoreThemeFromDisk(),
       restoreSettingsFromDisk(),
+      restoreAvatarLogFromDisk(),
       useDiscordBotStore.getState().restoreFromDisk(),
     ]).then(() => {
       const { settings } = useSettingsStore.getState();

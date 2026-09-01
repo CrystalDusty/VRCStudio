@@ -13,6 +13,7 @@ import EmptyState from '../components/common/EmptyState';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import type { VRCAvatar } from '../types/vrchat';
 import { useAvatarSwitcherStore } from '../stores/avatarSwitcherStore';
+import { AvatarRankBadge } from '../components/AvatarPerformance';
 
 type AvatarTab = 'own' | 'favorites' | 'vrc_search' | 'vrcdb';
 
@@ -417,8 +418,11 @@ export default function AvatarsPage() {
               return (
                 <div key={avatar.id} className="relative group">
                   <button onClick={() => setSelected(avatar)} className="glass-panel-solid overflow-hidden card-hover group text-left w-full">
-                    <div className="aspect-square overflow-hidden">
+                    <div className="aspect-square overflow-hidden relative">
                       <img src={avatar.thumbnailImageUrl || avatar.imageUrl} alt="" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" loading="lazy" />
+                      <div className="absolute top-2 left-2 drop-shadow">
+                        <AvatarRankBadge avatar={avatar} />
+                      </div>
                     </div>
                     <div className="p-3">
                       <h3 className="text-sm font-semibold truncate">{avatar.name}</h3>

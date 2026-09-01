@@ -15,21 +15,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   X, Copy, Check, ExternalLink, Shirt, Loader2, Lock, Globe, AlertCircle,
-  Triangle, Layers, Sparkles, Cpu, Bone, Lightbulb, Music, Wind, Boxes,
   Monitor, Smartphone, RefreshCw, Search,
 } from 'lucide-react';
 import api, { APIError } from '../api/vrchat';
 import { useAuthStore } from '../stores/authStore';
 import type { VRCAvatar } from '../types/vrchat';
-import type { PlayerAvatar, PerfRank, AvatarStats } from '../stores/instanceAvatarsStore';
-
-const RANK_COLORS: Record<PerfRank, string> = {
-  Excellent: 'text-emerald-300 bg-emerald-500/15 border-emerald-500/30',
-  Good:      'text-green-300   bg-green-500/15   border-green-500/30',
-  Medium:    'text-yellow-300  bg-yellow-500/15  border-yellow-500/30',
-  Poor:      'text-orange-300  bg-orange-500/15  border-orange-500/30',
-  'Very Poor': 'text-rose-300  bg-rose-500/15    border-rose-500/30',
-};
+import type { PlayerAvatar } from '../stores/instanceAvatarsStore';
+import { PerformanceReport } from './AvatarPerformance';
+import { platformRanks } from '../utils/avatarPerformance';
 
 /** What VRChat's API told us about this avatar, and what it means for us. */
 type Availability =
@@ -42,20 +35,6 @@ type Availability =
 // Re-opening the same avatar shouldn't re-hit the API.
 const avatarCache = new Map<string, VRCAvatar>();
 
-const STAT_FIELDS: Array<{ key: keyof AvatarStats; label: string; icon: typeof Triangle }> = [
-  { key: 'triangles',    label: 'Triangles',    icon: Triangle },
-  { key: 'materials',    label: 'Materials',    icon: Layers },
-  { key: 'skinnedMeshes', label: 'Skinned meshes', icon: Sparkles },
-  { key: 'meshes',       label: 'Meshes',       icon: Boxes },
-  { key: 'drawCalls',    label: 'Draw calls',   icon: Cpu },
-  { key: 'bones',        label: 'Bones',        icon: Bone },
-  { key: 'physBones',    label: 'PhysBones',    icon: Wind },
-  { key: 'dynamicBones', label: 'Dynamic bones', icon: Wind },
-  { key: 'particles',    label: 'Particles',    icon: Sparkles },
-  { key: 'lights',       label: 'Lights',       icon: Lightbulb },
-  { key: 'audioSources', label: 'Audio sources', icon: Music },
-  { key: 'animators',    label: 'Animators',    icon: Cpu },
-];
 
 interface Props {
   player: PlayerAvatar;
@@ -168,7 +147,6 @@ export default function InstanceAvatarModal({ player, onClose, onSwitched }: Pro
     ? [...new Set(apiAvatar.unityPackages.map(p => p.platform))]
     : [];
 
-  const hasStats = player.stats && Object.values(player.stats).some(v => v != null);
 
   return (
     <div
@@ -252,40 +230,12 @@ export default function InstanceAvatarModal({ player, onClose, onSwitched }: Pro
 
             {/* Performance */}
             <Section title="Performance">
-              {player.rank ? (
-                <div className="flex items-center gap-2 mb-2">
-                  <span className={`inline-flex items-center text-[10px] font-bold px-2 py-0.5 rounded-full border ${RANK_COLORS[player.rank]}`}>
-                    {player.rank}
-                  </span>
-                  <span className="text-[11px] text-surface-500">rating from VRChat's log</span>
-                </div>
-              ) : (
-                <p className="text-[11px] text-surface-600 mb-2">
-                  No performance rating logged for this avatar yet.
-                </p>
-              )}
-
-              {hasStats ? (
-                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
-                  {STAT_FIELDS.map(({ key, label, icon: Icon }) =>
-                    player.stats?.[key] != null ? (
-                      <div key={key} className="flex items-center justify-between border-b border-surface-800/50 py-1 text-[11px]">
-                        <span className="text-surface-500 flex items-center gap-1.5">
-                          <Icon size={10} className="text-surface-600" /> {label}
-                        </span>
-                        <span className="tabular-nums text-surface-300">
-                          {player.stats[key]!.toLocaleString()}
-                        </span>
-                      </div>
-                    ) : null,
-                  )}
-                </div>
-              ) : (
-                <p className="text-[11px] text-surface-600">
-                  Stats appear once VRChat logs an [AvatarPerformance] block for it —
-                  usually right after the avatar finishes loading.
-                </p>
-              )}
+              <PerformanceReport
+                stats={player.stats}
+                loggedRank={player.rank}
+                platforms={platformRanks(apiAvatar?.unityPackages)}
+                defaultExpanded
+              />
             </Section>
 
             {/* Avatar metadata */}

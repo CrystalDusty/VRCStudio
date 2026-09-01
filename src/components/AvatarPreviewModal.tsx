@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { X, Copy, Check, ExternalLink } from 'lucide-react';
 import type { VRCAvatar } from '../types/vrchat';
+import { PerformanceReport } from './AvatarPerformance';
+import { platformRanks } from '../utils/avatarPerformance';
 
 interface AvatarPreviewModalProps {
   avatar: VRCAvatar;
@@ -9,6 +11,7 @@ interface AvatarPreviewModalProps {
 
 export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewModalProps) {
   const [copied, setCopied] = useState(false);
+  const ranks = platformRanks(avatar.unityPackages);
 
   const handleCopyId = () => {
     navigator.clipboard.writeText(avatar.id);
@@ -59,6 +62,15 @@ export default function AvatarPreviewModal({ avatar, onClose }: AvatarPreviewMod
             <p className="text-xs text-surface-400 line-clamp-3">
               {avatar.description}
             </p>
+          )}
+
+          {/* Performance — the API rates every platform build separately, and
+              this is the only place the user can see all of them at once. */}
+          {ranks.length > 0 && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-surface-500">Performance</label>
+              <PerformanceReport platforms={ranks} />
+            </div>
           )}
 
           {/* Avatar ID */}

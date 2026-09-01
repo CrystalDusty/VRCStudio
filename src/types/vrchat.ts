@@ -80,6 +80,12 @@ export interface VRCUnityPackage {
   assetVersion: number;
   created_at: string;
   unityPackageUrl?: string;
+  /**
+   * VRChat's own rating for this build: "Excellent" … "VeryPoor", or "None"
+   * when the avatar predates the rating system. Rated per platform, so a
+   * single avatar can be Good on PC and Very Poor on Quest.
+   */
+  performanceRating?: string;
 }
 
 export interface VRCAvatar {
@@ -257,6 +263,14 @@ export interface AppSettings {
     nickname: string;
     greetingEnabled: boolean;
     showWeather: boolean;
+  };
+  avatarLog: {
+    /** Keep a record of the avatars other players change into. Off by default. */
+    enabled: boolean;
+    /** How many past avatars to keep per player (1–50). */
+    keepPerPlayer: number;
+    /** Also log your own avatar changes. */
+    includeSelf: boolean;
   };
 }
 
