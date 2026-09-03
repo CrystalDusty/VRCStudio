@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { GAMES, ALL_BUTTONS, frameFits, composeFrame, CHATBOX_MAX_CHARS, CHATBOX_MAX_LINES,
-         BOARD_STYLES, boardStyleById, alignmentTestMessage,
+         BOARD_STYLES, boardStyleById, alignmentTestMessage, glyphTestMessage,
+         DEFAULT_STYLE, KNOWN_MISSING_IN_VRCHAT,
          tetris, snake, g2048, minesweeper } from './build/games.mjs';
 
 let pass = 0;
@@ -109,10 +110,51 @@ console.log('\nglyph safety');
 }
 
 {
-  const test = alignmentTestMessage();
-  assert.ok(test.split('\n').length <= CHATBOX_MAX_LINES, 'font test is too many lines');
-  assert.ok(test.length <= CHATBOX_MAX_CHARS, `font test is ${test.length} chars`);
-  ok('the alignment test itself fits in the chatbox');
+  for (const set of BOARD_STYLES) {
+    const test = alignmentTestMessage(boardStyleById(set.id));
+    assert.ok(test.split('\n').length <= CHATBOX_MAX_LINES, `${set.id} font test is too many lines`);
+    assert.ok(test.length <= CHATBOX_MAX_CHARS, `${set.id} font test is ${test.length} chars`);
+  }
+  const all = glyphTestMessage();
+  assert.ok(all.split('\n').length <= CHATBOX_MAX_LINES,
+    `the all-styles test is ${all.split('\n').length} lines`);
+  assert.ok(all.length <= CHATBOX_MAX_CHARS, `the all-styles test is ${all.length} chars`);
+  ok('both font tests fit in the chatbox, for every style');
+
+  // The point of the all-styles test is that the number in the chatbox is the
+  // number on the button. Off-by-one there sends someone to the wrong style.
+  const rows = glyphTestMessage().split('\n').slice(1);
+  assert.equal(rows.length, BOARD_STYLES.length, 'every style needs a row');
+  BOARD_STYLES.forEach((set, i) => {
+    assert.ok(rows[i].startsWith(`${i + 1} `), `row ${i} is labelled "${rows[i].slice(0, 4)}"`);
+    assert.ok(rows[i].includes(set.filled), `row ${i} doesn't show ${set.id}'s block`);
+  });
+  ok('the numbers in the chatbox match the order of the style buttons');
+}
+
+// ── The default board style has to be one VRChat can actually draw.
+//    Braille was the default for a while: one width by construction and a true
+//    blank, perfect on paper — and absent from VRChat's chatbox font, so every
+//    cell of every board arrived as the missing-glyph circle. A style being
+//    theoretically ideal is worth nothing if the font hasn't got it.
+{
+  assert.ok(!KNOWN_MISSING_IN_VRCHAT.includes(DEFAULT_STYLE.id),
+    `the default style is ${DEFAULT_STYLE.id}, which VRChat can't draw`);
+  assert.equal(BOARD_STYLES[0].id, DEFAULT_STYLE.id, 'the default should be the first choice offered');
+  // Anything flagged as missing must still be a real style, or the picker and
+  // the migration are pointing at nothing.
+  for (const id of KNOWN_MISSING_IN_VRCHAT) {
+    assert.ok(BOARD_STYLES.some(s => s.id === id), `${id} is flagged missing but isn't a style`);
+  }
+  ok('the default is a style VRChat is known to draw');
+
+  for (const set of BOARD_STYLES) {
+    assert.notEqual(set.filled, set.empty, `${set.id}: a filled cell looks like an empty one`);
+    assert.equal([...set.filled].length, 1, `${set.id}: filled must be one character`);
+    assert.equal([...set.empty].length, 1, `${set.id}: empty must be one character`);
+    assert.ok(set.note && set.note.length > 20, `${set.id} needs a note explaining the trade`);
+  }
+  ok('every style is two distinct single characters with the trade-off written down');
 }
 
 // ── Determinism: same seed, same inputs, same game. Without this a bug found

@@ -8,7 +8,7 @@ import {
 } from '../../stores/chatboxGameStore';
 import {
   GAMES, gameById, composeFrame, boardStyleById, BOARD_STYLES,
-  CHATBOX_MAX_CHARS, type Button,
+  KNOWN_MISSING_IN_VRCHAT, CHATBOX_MAX_CHARS, type Button,
 } from '../../games';
 
 const BUTTON_LABEL: Record<Button, string> = {
@@ -20,7 +20,7 @@ export default function GamesPanel({ connected }: { connected: boolean }) {
   const {
     gameId, state, running, frameMs, useGestures, useKeyboard, previewOnly,
     framesSent, gestures, styleId, selectGame, start, stop, press, setFrameMs,
-    setOption, setStyleId, sendAlignmentTest,
+    setOption, setStyleId, sendAlignmentTest, sendGlyphTest,
   } = useChatboxGameStore();
 
   const game = gameById(gameId);
@@ -114,6 +114,69 @@ export default function GamesPanel({ connected }: { connected: boolean }) {
           {status.over ? 'Game over — press Start' : status.label}
           {status.score > 0 && <span className="text-surface-500"> · score {status.score}</span>}
         </p>
+
+        {/* Board style sits here, under the board, because this preview cannot
+            be trusted on its own: it renders in your desktop font, which has
+            glyphs VRChat's chatbox font does not. A board that looks perfect
+            in this box can arrive as a grid of circles — that is exactly what
+            the old Braille default did. The chatbox is the only real preview,
+            hence the two test buttons. */}
+        <div className="mt-3 pt-3 border-t border-surface-800 space-y-2">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-surface-500">
+              Board style
+            </span>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={sendGlyphTest}
+                disabled={!connected}
+                className="text-[11px] px-2 py-1 rounded-lg bg-accent-600/20 text-accent-300 hover:bg-accent-600/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                title={connected ? 'Show all styles in your chatbox at once' : 'Start OSC first'}
+              >
+                Test all in chatbox
+              </button>
+              <button
+                onClick={sendAlignmentTest}
+                disabled={!connected}
+                className="btn-ghost text-[11px] disabled:opacity-40 disabled:cursor-not-allowed"
+                title={connected ? 'Draw a rectangle in the selected style' : 'Start OSC first'}
+              >
+                Test this one
+              </button>
+            </div>
+          </div>
+
+          <div className="flex gap-1.5 flex-wrap">
+            {BOARD_STYLES.map((s, i) => {
+              const missing = KNOWN_MISSING_IN_VRCHAT.includes(s.id);
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => setStyleId(s.id)}
+                  title={s.note}
+                  className={`text-[11px] px-2 py-1 rounded-lg border transition-colors flex items-center gap-1.5 ${
+                    s.id === styleId
+                      ? 'border-accent-500 bg-accent-500/10 text-accent-300'
+                      : 'border-surface-700 text-surface-400 hover:border-surface-600'
+                  }`}
+                >
+                  <span className="text-surface-600 tabular-nums">{i + 1}</span>
+                  {s.name}
+                  <span className="font-mono text-surface-500">{s.filled}{s.empty}</span>
+                  {missing && <span className="text-[9px] text-amber-400/80">n/a</span>}
+                </button>
+              );
+            })}
+          </div>
+
+          <p className="text-[10px] text-surface-600 leading-snug">
+            <span className="text-surface-500">{style.note}</span>{' '}
+            <strong className="text-surface-400">Test all in chatbox</strong> prints one numbered
+            row per style: pick the number whose bar is solid and whose background is flat.
+            Circles or empty boxes mean your VRChat build has no glyph for that style —
+            Braille is marked n/a for exactly that reason.
+          </p>
+        </div>
       </div>
 
       {/* On-screen controller: also the control map, so nobody has to guess. */}
@@ -150,41 +213,6 @@ export default function GamesPanel({ connected }: { connected: boolean }) {
             icon={Monitor} label="Preview only — don't send to VRChat"
             checked={previewOnly} onChange={v => setOption({ previewOnly: v })}
           />
-        </div>
-
-        {/* The chatbox is ordinary text in a proportional font: spaces are
-            narrower than blocks, so a board mixing them drifts, and shade
-            characters that fix the width read as hatching against a white
-            block. Braille avoids both by construction — one width, and a real
-            blank — but only if the font has the range, hence the test. */}
-        <div className="space-y-1.5 pt-2 border-t border-surface-800">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-surface-500">
-              Board style
-            </span>
-            <button onClick={sendAlignmentTest} className="btn-ghost text-[11px]">
-              Send alignment test to chatbox
-            </button>
-          </div>
-          <div className="flex gap-1.5 flex-wrap">
-            {BOARD_STYLES.map(s => (
-              <button
-                key={s.id}
-                onClick={() => setStyleId(s.id)}
-                title={s.note}
-                className={`text-[11px] px-2 py-1 rounded-lg border transition-colors ${
-                  s.id === styleId ? 'border-accent-500 bg-accent-500/10 text-accent-300' : 'border-surface-700 text-surface-400'
-                }`}
-              >
-                {s.name}
-              </button>
-            ))}
-          </div>
-          <p className="text-[10px] text-surface-600">
-            {style.note} The test draws a rectangle: if its sides are straight and the corners
-            square, this style lines up in your font. A wandering edge means it will skew; boxes
-            or circles mean the characters aren't in the font at all.
-          </p>
         </div>
 
         <label className="block">

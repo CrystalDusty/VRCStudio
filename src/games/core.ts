@@ -89,8 +89,8 @@ export function shuffled<T>(items: T[], seed: number): { seed: number; items: T[
 /**
  * How a board of cells is turned into text.
  *
- * Three things about VRChat's chatbox force this design, and I got the first
- * two right before understanding the third:
+ * Four things about VRChat's chatbox force this design, and each one was found
+ * the hard way, in this order:
  *
  *   1. The font is proportional, so a space is much narrower than a block. A
  *      board that mixes them changes width as it changes contents, and the
@@ -101,16 +101,19 @@ export function shuffled<T>(items: T[], seed: number): { seed: number; items: T[
  *      edge to edge vertically, and in the chatbox they cannot — there is a gap
  *      between every line. Packing two board rows into one character therefore
  *      cuts every piece that spans a line boundary in half, which is what made
- *      the shapes unrecognisable.
+ *      the shapes unrecognisable. So: exactly one board row per line of text.
+ *   4. **The font's coverage is narrow.** Braille settles (1) and (2) by
+ *      construction — every glyph in the range is one width and U+2800 is a
+ *      true blank — so it was the default, and it was wrong: VRChat has no
+ *      Braille Patterns block, and every cell of every board came out as the
+ *      missing-glyph circle. A style that is perfect on paper and absent from
+ *      the font renders a board of ○.
  *
- * So: exactly one board row per line of text. The gaps then fall between rows
- * instead of through them, which reads as a grid rather than as damage. It
- * costs board height — nine lines is the hard ceiling — and that is the real
- * price of drawing a game in a text box.
- *
- * Braille is the default because it settles (1) and (2) by construction: every
- * glyph in the range is one width, and U+2800 is a true blank, so the
- * background is dark and the blocks are bright.
+ * Hence the ordering below: styles the chatbox is known to draw come first,
+ * and the default is one of those. Which glyphs a given VRChat build actually
+ * has is not knowable from here, so `glyphTestMessage` puts every style in the
+ * chatbox at once and lets the user pick by looking — one round trip instead
+ * of one per style.
  */
 export interface BoardStyle {
   id: string;
@@ -122,28 +125,44 @@ export interface BoardStyle {
 
 export const BOARD_STYLES: BoardStyle[] = [
   {
-    id: 'braille', name: 'Braille', filled: '\u28FF', empty: '\u2800',
-    note: 'Solid blocks on a dark background, every character the same width by definition.',
-  },
-  {
     id: 'blocks', name: 'Blocks', filled: '\u2588', empty: '\u2591',
-    note: 'Full blocks on light shading. Same width, but the shading can read as noise.',
+    note: 'Full blocks on light shading. Block Elements are one width, and the chatbox draws them.',
   },
   {
     id: 'mid', name: 'Mid shade', filled: '\u2588', empty: '\u2592',
-    note: 'Heavier background if the light shading is too faint to see.',
+    note: 'The same, with a heavier background if the light shading is too faint to see.',
   },
   {
     id: 'space', name: 'Spaces', filled: '\u2588', empty: ' ',
-    note: 'The most contrast, but only lines up where the font is monospaced.',
+    note: 'The most contrast there is, but a space is narrower than a block, so rows drift.',
+  },
+  {
+    // The last resort that can both render and line up: full-width forms are
+    // one width by definition, and CJK coverage is the one thing a chatbox
+    // that supports Japanese is certain to have.
+    id: 'wide', name: 'Full width', filled: '\uFF38', empty: '\u3000',
+    note: 'Full-width characters — certain to line up, but twice as wide, so the board may wrap.',
   },
   {
     id: 'ascii', name: 'ASCII', filled: '#', empty: '.',
-    note: 'Last resort: certain to render anywhere, not certain to line up.',
+    note: 'Certain to render anywhere, not certain to line up. Use it if nothing else draws.',
+  },
+  {
+    id: 'braille', name: 'Braille', filled: '\u28FF', empty: '\u2800',
+    note: 'One width and a true blank — but VRChat has no Braille glyphs, so this draws circles.',
   },
 ];
 
 export const DEFAULT_STYLE = BOARD_STYLES[0];
+
+/**
+ * Styles this app has seen VRChat fail to draw.
+ *
+ * Kept as choices rather than deleted — font coverage is a property of the
+ * build the player is running, not a constant — but never the default, and
+ * flagged in the picker.
+ */
+export const KNOWN_MISSING_IN_VRCHAT = ['braille'];
 
 export function boardStyleById(id: string): BoardStyle {
   return BOARD_STYLES.find(s => s.id === id) ?? DEFAULT_STYLE;
@@ -173,6 +192,22 @@ export function drawBoard(
 }
 
 /**
+ * Put every style in the chatbox at once, numbered.
+ *
+ * This is the first thing to do on a new machine. Whether a glyph exists is a
+ * fact about the player's VRChat build that this app cannot read, and testing
+ * one style per message means a trip to the headset for each. One message with
+ * all of them costs a single look: the row that shows a solid bar against a
+ * flat background is the style to pick, and the numbers match the picker.
+ */
+export function glyphTestMessage(): string {
+  const RUN = 5;
+  const rows = BOARD_STYLES.map((style, i) =>
+    `${i + 1} ${style.filled.repeat(RUN)}${style.empty.repeat(RUN)}`);
+  return ['Pick the number that draws cleanly:', ...rows].join('\n');
+}
+
+/**
  * A message for checking a style against the real chatbox font.
  *
  * It draws a rectangle. Straight sides and square corners mean this style lines
@@ -186,7 +221,8 @@ export function alignmentTestMessage(style: BoardStyle = DEFAULT_STYLE): string 
     cells.push(Array.from({ length: W }, (_, x) =>
       y === 0 || y === H - 1 || x === 0 || x === W - 1));
   }
-  return [`${style.name}: sides straight?`, ...drawBoard(cells, W, H, style)].join('\n');
+  const n = BOARD_STYLES.findIndex(s => s.id === style.id) + 1;
+  return [`${n} ${style.name}: sides straight?`, ...drawBoard(cells, W, H, style)].join('\n');
 }
 
 /** Pad or trim a line to an exact width, so a board never looks ragged. */

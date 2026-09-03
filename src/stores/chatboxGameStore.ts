@@ -11,7 +11,8 @@
 import { create } from 'zustand';
 import { useOSCStore } from './oscStore';
 import {
-  GAMES, gameById, composeFrame, boardStyleById, alignmentTestMessage, DEFAULT_STYLE,
+  GAMES, gameById, composeFrame, boardStyleById, alignmentTestMessage,
+  glyphTestMessage, DEFAULT_STYLE, KNOWN_MISSING_IN_VRCHAT,
   type Button, type ChatboxGame,
 } from '../games';
 
@@ -82,8 +83,22 @@ interface GameState {
   setFrameMs: (ms: number) => void;
   setStyleId: (id: string) => void;
   /** Draw a rectangle in the chatbox: straight sides mean this style lines up. */
+  /** Draw a rectangle in the current style — straight sides mean it lines up. */
   sendAlignmentTest: () => void;
+  /** Put every style in the chatbox at once so the user can pick one by looking. */
+  sendGlyphTest: () => void;
   setOption: (patch: Partial<Pick<GameState, 'useGestures' | 'useKeyboard' | 'previewOnly'>>) => void;
+}
+
+/** One-shot chatbox write that isn't a game frame. Silent when OSC is down. */
+function sendToChatbox(text: string) {
+  const osc = useOSCStore.getState();
+  if (!osc.connected) return;
+  osc.send('/chatbox/input', [
+    { type: 's', value: text },
+    { type: 'T', value: true },
+    { type: 'F', value: false },
+  ]).catch(() => {});
 }
 
 let tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -93,6 +108,24 @@ let heldButton: Button | null = null;
 
 function currentGame(id: string): ChatboxGame<unknown> {
   return gameById(id) as ChatboxGame<unknown>;
+}
+
+const STYLE_KEY = 'vrcstudio_game_style';
+
+/**
+ * The stored board style, minus any style we've since learned VRChat can't draw.
+ *
+ * Braille was the default for a while and it renders as a grid of missing-glyph
+ * circles in the chatbox — "the games are broken" looked exactly like that. A
+ * stored choice normally outranks a new default, but not when the stored choice
+ * cannot draw a board at all; leaving it in place would mean the fix never
+ * reached anyone who had already played once.
+ */
+function loadStyleId(): string {
+  let saved: string | null = null;
+  try { saved = localStorage.getItem(STYLE_KEY); } catch { /* private mode */ }
+  if (!saved || KNOWN_MISSING_IN_VRCHAT.includes(saved)) return DEFAULT_STYLE.id;
+  return boardStyleById(saved).id;
 }
 
 export const useChatboxGameStore = create<GameState>((set, get) => ({
@@ -106,7 +139,7 @@ export const useChatboxGameStore = create<GameState>((set, get) => ({
   lastFrame: '',
   framesSent: 0,
   gestures: { left: 0, right: 0 },
-  styleId: localStorage.getItem('vrcstudio_game_style') ?? DEFAULT_STYLE.id,
+  styleId: loadStyleId(),
 
   selectGame: (id) => {
     const game = currentGame(id);
@@ -148,19 +181,17 @@ export const useChatboxGameStore = create<GameState>((set, get) => ({
   },
 
   setStyleId: (id) => {
-    try { localStorage.setItem('vrcstudio_game_style', id); } catch { /* private mode */ }
+    try { localStorage.setItem(STYLE_KEY, id); } catch { /* private mode */ }
     set({ styleId: id, lastFrame: '' });
     sendFrame(true);
   },
 
   sendAlignmentTest: () => {
-    const osc = useOSCStore.getState();
-    if (!osc.connected) return;
-    osc.send('/chatbox/input', [
-      { type: 's', value: alignmentTestMessage(boardStyleById(useChatboxGameStore.getState().styleId)) },
-      { type: 'T', value: true },
-      { type: 'F', value: false },
-    ]).catch(() => {});
+    sendToChatbox(alignmentTestMessage(boardStyleById(get().styleId)));
+  },
+
+  sendGlyphTest: () => {
+    sendToChatbox(glyphTestMessage());
   },
 
   setOption: (patch) => set(patch),
