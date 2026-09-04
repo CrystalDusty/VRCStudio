@@ -11,12 +11,15 @@
 // delay so a piece can be slid after it lands, and a hold slot.
 
 import {
-  drawBoard, shuffled, DEFAULT_STYLE,
+  drawBoard, statusLine, shuffled, DEFAULT_STYLE,
   type ChatboxGame, type GameStatus, type BoardStyle,
 } from './core';
 
 export const WIDTH = 10;
-export const HEIGHT = 9;
+// Eight rows of playfield, not nine: the ninth line of the chatbox belongs to
+// the status. It used to share the top row, and that made the top row wide
+// enough to wrap.
+export const HEIGHT = 8;
 
 /** Each piece as its four rotations, listed as (x, y) offsets. */
 const PIECES: Record<string, number[][][]> = {
@@ -257,10 +260,17 @@ export const tetris: ChatboxGame<TetrisState> = {
     // Plain ASCII only. A tidy ▸ here rendered as a hollow circle in VRChat —
     // its chatbox font simply doesn't have that character — so the score line
     // read as a random blob followed by a stray letter.
+    //
+    // It has to fit the board's width in characters, so "next" is a bare
+    // letter and the score comes last: if anything is trimmed at an
+    // implausible score, losing a digit beats losing the next piece.
     const hud = state.over
-      ? `game over ${state.score}`
-      : `${state.score} ${state.lines}L next ${state.next}`;
-    return drawBoard(grid, WIDTH, HEIGHT, style, hud);
+      ? `over ${state.score}`
+      : `${state.next} ${state.lines}L ${state.score}`;
+    // Status under the board, matching 2048 and Minesweeper: the board is
+    // then always anchored at the top of the box, and if a line ever does
+    // wrap it is the last one rather than the one everything hangs off.
+    return [...drawBoard(grid, WIDTH, HEIGHT, style), statusLine(hud, WIDTH)];
   },
 
   status(state): GameStatus {

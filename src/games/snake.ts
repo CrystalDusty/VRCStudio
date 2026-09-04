@@ -7,12 +7,13 @@
 // for a four-figure score and the walls flag. The score rides on the top row.
 
 import {
-  drawBoard, randomInt, DEFAULT_STYLE,
+  drawBoard, statusLine, randomInt, DEFAULT_STYLE,
   type ChatboxGame, type GameStatus, type BoardStyle,
 } from './core';
 
 export const WIDTH = 12;
-export const HEIGHT = 9;
+// Eight rows, with the ninth chatbox line kept for the status — see tetris.ts.
+export const HEIGHT = 8;
 
 type Point = { x: number; y: number };
 
@@ -126,9 +127,12 @@ export const snake: ChatboxGame<SnakeState> = {
     if (state.food.x >= 0) grid[state.food.y][state.food.x] = 1;
     for (const s of state.snake) grid[s.y][s.x] = 1;
     const hud = state.over
-      ? `game over ${state.score}`
-      : `${state.score} len ${state.snake.length}${state.wrap ? '' : ' walls'}`;
-    return drawBoard(grid, WIDTH, HEIGHT, style, hud);
+      ? `over ${state.score}`
+      : `${state.score} len ${state.snake.length}${state.wrap ? '' : ' wall'}`;
+    // Status under the board, matching 2048 and Minesweeper: the board is
+    // then always anchored at the top of the box, and if a line ever does
+    // wrap it is the last one rather than the one everything hangs off.
+    return [...drawBoard(grid, WIDTH, HEIGHT, style), statusLine(hud, WIDTH)];
   },
 
   status(state): GameStatus {

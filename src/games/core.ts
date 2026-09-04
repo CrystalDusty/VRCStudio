@@ -169,26 +169,48 @@ export function boardStyleById(id: string): BoardStyle {
 }
 
 /**
- * Draw a grid of cells, one row per line.
+ * Draw a grid of cells, one row per line and nothing else on those lines.
  *
- * `cells[y][x]` is truthy where a cell is filled. `suffix` is appended to the
- * first line, past the board — text to the right of a row can't shift the
- * columns, so that's a free place to put the score without spending a line.
+ * `cells[y][x]` is truthy where a cell is filled.
+ *
+ * The score used to ride along on the end of the first row, on the theory that
+ * text to the right of a board row can't shift its columns and was therefore
+ * free. It isn't free: **the chatbox wraps.** A row of blocks plus a score is
+ * wider than the box, so VRChat broke the line, centred the remainder on a
+ * line of its own, and pushed the whole board down — the board appeared to
+ * start, stop, and restart two lines lower. A board line now carries the board
+ * and nothing else, and the status gets its own line via `statusLine`.
  */
 export function drawBoard(
   cells: ArrayLike<ArrayLike<unknown>>,
   width: number,
   height: number,
   style: BoardStyle = DEFAULT_STYLE,
-  suffix = '',
 ): string[] {
   const lines: string[] = [];
   for (let y = 0; y < height; y++) {
     let line = '';
     for (let x = 0; x < width; x++) line += cells[y]?.[x] ? style.filled : style.empty;
-    lines.push(y === 0 && suffix ? `${line} ${suffix}` : line);
+    lines.push(line);
   }
   return lines;
+}
+
+/**
+ * The status line above a board, clamped so it cannot be the line that wraps.
+ *
+ * The budget is the board's width in *characters*, which is deliberately
+ * pessimistic: the chatbox font is proportional, and a digit or a letter is
+ * appreciably narrower than a block, so a status of `width` characters is
+ * around half the visual width of a board row. That leaves the board as the
+ * only thing that decides how wide the chatbox gets, which is the property
+ * worth having — the box then sizes itself once and never reflows.
+ *
+ * Overflow is trimmed from the right, so games put the field they can most
+ * afford to lose last.
+ */
+export function statusLine(text: string, width: number): string {
+  return text.length <= width ? text : text.slice(0, width).trimEnd();
 }
 
 /**
@@ -204,7 +226,10 @@ export function glyphTestMessage(): string {
   const RUN = 5;
   const rows = BOARD_STYLES.map((style, i) =>
     `${i + 1} ${style.filled.repeat(RUN)}${style.empty.repeat(RUN)}`);
-  return ['Pick the number that draws cleanly:', ...rows].join('\n');
+  // The header has to be shorter than a row or it becomes the line that wraps,
+  // which is the very failure this message exists to help diagnose. The panel
+  // next to the button carries the full explanation; this only has to label.
+  return ['pick one:', ...rows].join('\n');
 }
 
 /**
@@ -221,8 +246,11 @@ export function alignmentTestMessage(style: BoardStyle = DEFAULT_STYLE): string 
     cells.push(Array.from({ length: W }, (_, x) =>
       y === 0 || y === H - 1 || x === 0 || x === W - 1));
   }
+  // Label under the rectangle and no wider than it, for the same reason the
+  // games put their status last: a long line makes the chatbox wrap, and a
+  // wrapped line in an alignment test is indistinguishable from a real fault.
   const n = BOARD_STYLES.findIndex(s => s.id === style.id) + 1;
-  return [`${n} ${style.name}: sides straight?`, ...drawBoard(cells, W, H, style)].join('\n');
+  return [...drawBoard(cells, W, H, style), statusLine(`${n} ${style.name}`, W)].join('\n');
 }
 
 /** Pad or trim a line to an exact width, so a board never looks ragged. */

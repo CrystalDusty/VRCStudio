@@ -88,25 +88,71 @@ console.log('\nglyph safety');
     if (set.id === 'space' || set.id === 'ascii') continue;   // opt-outs, may not align
     const style = boardStyleById(set.id);
     const family = new Set([style.empty, style.filled]);
-    for (const [game, height] of [[tetris, 9], [snake, 9]]) {
+    for (const [game, height] of [[tetris, 8], [snake, 8]]) {
       let state = game.create(7);
       for (let step = 0; step < 200; step++) {
         state = step % 2 === 0 ? game.tick(state) : game.press(state, ALL_BUTTONS[step % 6]);
         const lines = game.render(state, style);
-        if (lines.length !== height) problems.push(`${game.id}/${set.id}: ${lines.length} lines, want ${height}`);
-        // The score rides past the end of the top row, so measure the board
-        // part of that line only.
-        const board = lines.map((l, i) => (i === 0 ? [...l].filter(c => family.has(c)).join('') : l));
+        const board = lines.filter(l => [...l].every(c => family.has(c)));
+        if (board.length !== height) problems.push(`${game.id}/${set.id}: ${board.length} board rows, want ${height}`);
         const widths = new Set(board.map(l => [...l].length));
         if (widths.size !== 1) problems.push(`${game.id}/${set.id}: rows of ${[...widths]} characters`);
-        for (let i = 1; i < board.length; i++) {
-          for (const ch of board[i]) if (!family.has(ch)) problems.push(`${game.id}/${set.id}: stray "${ch}" in the board`);
-        }
       }
     }
   }
   assert.deepEqual(problems.slice(0, 4), [], problems.slice(0, 4).join('\n  '));
   ok('one row per line, every row the same width, nothing but board characters in it');
+}
+
+// ── The status gets its own line, it is always the last one, and it is never
+//    wider than the board.
+//
+//    The score used to ride on the end of the top row, because text to the
+//    right of a board can't shift its columns. It can do something worse: the
+//    chatbox wraps. A row of blocks plus a score was wider than the box, so
+//    VRChat broke the line, centred the remainder on a line of its own, and
+//    pushed the board down — it appeared to start, stop, and restart two lines
+//    lower.
+//
+//    Measuring in characters is deliberately pessimistic. The font is
+//    proportional and a digit is appreciably narrower than a block, so a
+//    status no longer than the board's *character* width is roughly half its
+//    visual width. The board is then the only thing deciding how wide the box
+//    gets, and the box never reflows.
+{
+  const problems = [];
+  const drawn = new Set(['tetris', 'snake']);   // the games that use drawBoard
+  for (const set of BOARD_STYLES) {
+    const style = boardStyleById(set.id);
+    for (const game of GAMES) {
+      for (let seed = 0; seed < 8; seed++) {
+        let state = game.create(seed * 977);
+        for (let step = 0; step < 150; step++) {
+          state = step % 3 === 0 ? game.tick(state) : game.press(state, ALL_BUTTONS[step % ALL_BUTTONS.length]);
+          const lines = game.render(state, style);
+          const board = lines.slice(0, -1);
+          const status = lines[lines.length - 1] ?? '';
+          const boardWidth = Math.max(0, ...board.map(l => [...l].length));
+
+          if ([...status].length > boardWidth) {
+            problems.push(`${game.id}/${set.id}: status "${status}" is ${[...status].length} chars, board is ${boardWidth}`);
+          }
+          if (drawn.has(game.id)) {
+            if (status.includes(style.filled)) {
+              problems.push(`${game.id}/${set.id}: a board block leaked into the status "${status}"`);
+            }
+            for (const row of board) {
+              if ([...row].length !== boardWidth) {
+                problems.push(`${game.id}/${set.id}: row "${row}" is ${[...row].length} of ${boardWidth}`);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  assert.deepEqual(problems.slice(0, 4), [], problems.slice(0, 4).join('\n  '));
+  ok('the status is the last line, on its own, and never wider than the board');
 }
 
 {
@@ -115,6 +161,22 @@ console.log('\nglyph safety');
     assert.ok(test.split('\n').length <= CHATBOX_MAX_LINES, `${set.id} font test is too many lines`);
     assert.ok(test.length <= CHATBOX_MAX_CHARS, `${set.id} font test is ${test.length} chars`);
   }
+  // The test messages live under the same rule as the games: the widest line
+  // must be a board line. A wrapped header in an alignment test reads as the
+  // fault it is supposed to be diagnosing.
+  for (const set of BOARD_STYLES) {
+    const lines = alignmentTestMessage(boardStyleById(set.id)).split('\n');
+    const widest = Math.max(...lines.slice(0, -1).map(l => [...l].length));
+    assert.ok([...lines[lines.length - 1]].length <= widest,
+      `${set.id}: the alignment test's label is wider than the rectangle`);
+  }
+  {
+    const lines = glyphTestMessage().split('\n');
+    const widest = Math.max(...lines.slice(1).map(l => [...l].length));
+    assert.ok([...lines[0]].length <= widest,
+      `the all-styles test header is ${lines[0].length} chars, rows are ${widest}`);
+  }
+
   const all = glyphTestMessage();
   assert.ok(all.split('\n').length <= CHATBOX_MAX_LINES,
     `the all-styles test is ${all.split('\n').length} lines`);
@@ -216,13 +278,17 @@ console.log('\nTetris');
     let st = tetris.create(3);
     // Hand-build a board with one row missing a single cell, then drop into it.
     const board = st.board.map(r => [...r]);
-    for (let x = 0; x < 10; x++) if (x !== 4) board[8][x] = 1;
+    // Read the floor off the board rather than naming it: the playfield lost a
+    // row when the status moved onto a line of its own, and a hardcoded 8 here
+    // failed as a crash rather than as the assertion it was meant to be.
+    const floor = board.length - 1;
+    for (let x = 0; x < board[floor].length; x++) if (x !== 4) board[floor][x] = 1;
     st = { ...st, board, piece: 'I', rotation: 1, x: 2, y: 0, score: 0, lines: 0 };
     // Rotation 1 of I is a vertical bar in column x+2 — drop it into the gap.
     st = drop(st);
     assert.equal(st.lines, 1, `cleared ${st.lines} lines`);
     assert.ok(st.score > 0, 'a line clear should score');
-    assert.ok(st.board[8].some(c => !c), 'the completed row should be gone');
+    assert.ok(st.board[floor].some(c => !c), 'the completed row should be gone');
     ok('completing a row clears it and scores');
   }
 
@@ -252,8 +318,11 @@ console.log('\nTetris');
     let st = tetris.create(2);
     for (let i = 0; i < 200 && !st.over; i++) st = drop(st);
     assert.equal(st.over, true, 'the board never topped out');
-    assert.equal(st.board.length, 9);
-    assert.ok(st.board.every(r => r.length === 10), 'board shape survived');
+    // Shape, not size: the playfield height is a layout decision that has
+    // already changed once, and pinning the number here only breaks the test.
+    const start = tetris.create(2);
+    assert.equal(st.board.length, start.board.length);
+    assert.ok(st.board.every(r => r.length === start.board[0].length), 'board shape survived');
     ok('stacking to the top ends the game with the board intact');
   }
 }
